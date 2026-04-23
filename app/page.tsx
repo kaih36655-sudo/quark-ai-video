@@ -1133,29 +1133,28 @@ export default function Home() {
 
   const renderReferencePreview = (referenceName?: string, compact = false, previewData?: string | null) => {
     const displayImageData = referenceImageData ?? previewData;
-    console.log("[REF_IMAGE_SRC_RAW]", previewData ?? referenceImageData ?? "");
-    console.log("[REF_IMAGE_SRC_FINAL]", displayImageData ?? "");
     if (!displayImageData) return null;
-    if (!displayImageData.startsWith("/uploads") && !displayImageData.startsWith("/api/uploads")) {
-      console.warn("[INVALID_IMAGE_SRC_BLOCKED]", displayImageData);
-      return null;
+    const raw = displayImageData;
+    let finalSrc = raw;
+    if (raw?.startsWith("/uploads/")) {
+      finalSrc = raw.replace("/uploads/", "/api/uploads/");
     }
+    console.log("[FINAL_IMG_SRC_RAW]", raw);
+    console.log("[FINAL_IMG_SRC_FIXED]", finalSrc);
     if (compact) {
-      console.log("[FINAL_IMG_SRC]", displayImageData);
       return (
         <img
-          src={displayImageData}
+          src={finalSrc}
           alt={referenceName || "参考图缩略图"}
           className="h-10 w-14 shrink-0 rounded-lg border border-gray-300/60 object-cover transition duration-200 hover:scale-[1.03] hover:shadow-sm dark:border-gray-700/70"
         />
       );
     }
-    console.log("[FINAL_IMG_SRC]", displayImageData);
     return (
       <div className={isDark ? "rounded-2xl border border-gray-800 bg-[#18181b] p-3" : "rounded-2xl border border-gray-200 bg-gray-50 p-3"}>
         <div className="mb-2 text-xs">{referenceName || "参考图预览"}</div>
         <div className={isDark ? "flex max-h-64 items-center justify-center overflow-hidden rounded-xl border border-gray-700 bg-[#121214] p-2" : "flex max-h-64 items-center justify-center overflow-hidden rounded-xl border border-gray-200 bg-white p-2"}>
-          <img src={displayImageData} alt={referenceName || "参考图预览"} className="max-h-60 w-full rounded-lg object-contain" />
+          <img src={finalSrc} alt={referenceName || "参考图预览"} className="max-h-60 w-full rounded-lg object-contain" />
         </div>
       </div>
     );
