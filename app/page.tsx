@@ -231,10 +231,10 @@ export default function Home() {
       setHasReferenceImage(true);
     }
     if (savedReferenceImageData) {
-      setReferenceImageData(savedReferenceImageData);
+      setReferenceImageData(normalizeDisplayUrl(savedReferenceImageData) ?? savedReferenceImageData);
     }
     if (savedReferenceImageThumbData) {
-      setReferenceImageThumbData(savedReferenceImageThumbData);
+      setReferenceImageThumbData(normalizeDisplayUrl(savedReferenceImageThumbData) ?? savedReferenceImageThumbData);
     }
     if (savedReferenceImageName) {
       setReferenceImageName(savedReferenceImageName);
@@ -255,6 +255,39 @@ export default function Home() {
     localStorage.setItem("quark_theme", nextDark ? "dark" : "light");
   };
 
+  const normalizeDisplayUrl = (raw?: string): string | undefined => {
+    if (!raw || typeof raw !== "string") return undefined;
+    const value = raw.trim();
+    if (!value) return undefined;
+    if (value.startsWith("data:") || value.startsWith("blob:")) return value;
+
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    const withOrigin = (pathLike: string) => {
+      if (!origin) return pathLike;
+      return `${origin}${pathLike.startsWith("/") ? pathLike : `/${pathLike}`}`;
+    };
+
+    if (value.startsWith("/")) return withOrigin(value);
+    if (value.startsWith("uploads/")) return withOrigin(value);
+    if (!value.startsWith("http://") && !value.startsWith("https://")) return value;
+    try {
+      const parsed = new URL(value);
+      const host = parsed.hostname.toLowerCase();
+      if (host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0") {
+        return withOrigin(`${parsed.pathname}${parsed.search}${parsed.hash}`);
+      }
+      return parsed.toString();
+    } catch {
+      return value;
+    }
+  };
+
+  const shouldUseProxyForCover = (url?: string) => {
+    if (!url) return false;
+    const lower = url.toLowerCase();
+    return lower.includes("yunwu.ai") || lower.startsWith("/api/");
+  };
+
   const toTaskStatus = (status: string): TaskStatus => {
     if (status === "waiting" || status === "queued" || status === "running" || status === "success" || status === "failed" || status === "cancelled") {
       return status;
@@ -272,7 +305,7 @@ export default function Home() {
     kind: task.scheduledAt ? "schedule" : "manual",
     hasReferenceImage: Boolean(task.referenceImageUrl),
     referenceImageName: typeof task.referenceImageName === "string" ? task.referenceImageName : undefined,
-    referenceImageThumbData: typeof task.referenceImageUrl === "string" ? task.referenceImageUrl : undefined,
+    referenceImageThumbData: normalizeDisplayUrl(typeof task.referenceImageUrl === "string" ? task.referenceImageUrl : undefined),
     scheduledAt: typeof task.scheduledAt === "string" ? Date.parse(task.scheduledAt) : undefined,
     promptSnapshot: typeof task.prompt === "string" ? task.prompt : undefined,
     countSnapshot: typeof task.count === "number" ? task.count : undefined,
@@ -290,31 +323,34 @@ export default function Home() {
           : undefined;
     const inferredRatio =
       rawSize === "720x1280" ? "9:16" : rawSize === "1280x720" ? "16:9" : video.ratio === "9:16" ? "9:16" : "16:9";
-    const resolvedVideoUrl =
+    const resolvedVideoUrl = normalizeDisplayUrl(
       typeof video.videoUrl === "string" && video.videoUrl
         ? video.videoUrl
         : typeof video.previewImageUrl === "string" && video.previewImageUrl
           ? video.previewImageUrl
           : typeof video.video_url === "string" && video.video_url
             ? video.video_url
-          : undefined;
-    const resolvedCoverUrl =
+            : undefined
+    );
+    const resolvedCoverUrl = normalizeDisplayUrl(
       typeof video.coverUrl === "string" && video.coverUrl
         ? video.coverUrl
         : typeof video.cover_url === "string" && video.cover_url
           ? video.cover_url
-          : undefined;
-    const originalVideoUrl =
+          : undefined
+    );
+    const originalVideoUrl = normalizeDisplayUrl(
       (typeof video.originalVideoUrl === "string" && video.originalVideoUrl) ||
-      (typeof video.previewImageUrl === "string" && video.previewImageUrl) ||
-      (typeof video.videoUrl === "string" && video.videoUrl) ||
-      undefined;
+        (typeof video.previewImageUrl === "string" && video.previewImageUrl) ||
+        (typeof video.videoUrl === "string" && video.videoUrl) ||
+        undefined
+    );
     const originalCoverUrl =
       (typeof video.originalCoverUrl === "string" && video.originalCoverUrl) ||
       resolvedCoverUrl ||
       undefined;
-    const upscaledVideoUrl = typeof video.upscaledVideoUrl === "string" && video.upscaledVideoUrl ? video.upscaledVideoUrl : undefined;
-    const upscaledCoverUrl = typeof video.upscaledCoverUrl === "string" && video.upscaledCoverUrl ? video.upscaledCoverUrl : undefined;
+    const upscaledVideoUrl = normalizeDisplayUrl(typeof video.upscaledVideoUrl === "string" && video.upscaledVideoUrl ? video.upscaledVideoUrl : undefined);
+    const upscaledCoverUrl = normalizeDisplayUrl(typeof video.upscaledCoverUrl === "string" && video.upscaledCoverUrl ? video.upscaledCoverUrl : undefined);
     const effectiveVideoUrl = upscaledVideoUrl || resolvedVideoUrl || originalVideoUrl;
     const effectiveCoverUrl = upscaledCoverUrl || resolvedCoverUrl || originalCoverUrl;
     const playbackId = String(video.id ?? "");
@@ -372,11 +408,14 @@ export default function Home() {
       upscaleErrorMessage: typeof video.upscaleErrorMessage === "string" ? video.upscaleErrorMessage : undefined,
       upscaleConsumeMoney: typeof video.upscaleConsumeMoney === "number" ? video.upscaleConsumeMoney : undefined,
       upscaleTaskCostTime: typeof video.upscaleTaskCostTime === "number" ? video.upscaleTaskCostTime : undefined,
-      coverData: usePlaybackProxy
-        ? effectiveCoverUrl
-          ? `/api/videos/${playbackId}/stream?variant=cover`
-          : undefined
-        : effectiveCoverUrl,
+      coverData:
+        effectiveCoverUrl && !shouldUseProxyForCover(effectiveCoverUrl)
+          ? effectiveCoverUrl
+          : usePlaybackProxy
+            ? effectiveCoverUrl
+              ? `/api/videos/${playbackId}/stream?variant=cover`
+              : undefined
+            : effectiveCoverUrl,
       videoUrl: usePlaybackProxy ? `/api/videos/${playbackId}/stream` : effectiveVideoUrl,
       hasReferenceImage: Boolean(video.referenceImageUrl),
       referenceImageName: typeof video.referenceImageName === "string" ? video.referenceImageName : undefined,
@@ -859,8 +898,9 @@ export default function Home() {
           showToast(json?.message || "上传参考图失败");
           return;
         }
-        setReferenceImageData(String(json.data.url));
-        setReferenceImageThumbData(String(json.data.url));
+        const uploadedUrl = normalizeDisplayUrl(String(json.data.url)) || String(json.data.url);
+        setReferenceImageData(uploadedUrl);
+        setReferenceImageThumbData(uploadedUrl);
         setReferenceImageName(String(json.data.name || file.name));
         setHasReferenceImage(true);
         showToast("参考图已添加");

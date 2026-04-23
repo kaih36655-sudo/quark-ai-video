@@ -45,12 +45,21 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
 
   const contentType =
     upstream.headers.get("content-type") || (variant === "cover" ? "image/jpeg" : "video/mp4");
+  const contentLength = upstream.headers.get("content-length") || "";
+  const cacheControl =
+    variant === "cover"
+      ? "public, max-age=300, s-maxage=600, stale-while-revalidate=86400"
+      : "private, max-age=3600";
+  const headers: Record<string, string> = {
+    "Content-Type": contentType,
+    "Cache-Control": cacheControl,
+  };
+  if (contentLength) {
+    headers["Content-Length"] = contentLength;
+  }
 
   return new NextResponse(upstream.body, {
     status: 200,
-    headers: {
-      "Content-Type": contentType,
-      "Cache-Control": "private, max-age=3600",
-    },
+    headers,
   });
 }

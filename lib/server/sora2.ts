@@ -29,6 +29,7 @@ type SoraDownloadResult = {
 
 const getBaseUrl = () => (process.env.SORA2_BASE_URL || "https://yunwu.ai").replace(/\/$/, "");
 const getCreatePath = () => process.env.SORA2_CREATE_PATH || "/v1/video/create";
+const getImageCreatePath = () => process.env.SORA2_IMAGE_CREATE_PATH || "/v1/video/create";
 const getQueryPath = () => process.env.SORA2_QUERY_PATH || "/v1/video/query";
 const getDownloadPath = (taskId: string) =>
   (process.env.SORA2_DOWNLOAD_PATH_TEMPLATE || "/v1/videos/{id}/content").replace("{id}", encodeURIComponent(taskId));
@@ -209,17 +210,48 @@ export async function createSora2Task(payload: CreateVideoRequest): Promise<{ ta
   const imageFieldMode = (process.env.SORA2_REFERENCE_IMAGE_MODE || "repeat").toLowerCase();
   const inputImage = (payload.images || []).find((item) => typeof item === "string" && item.trim().length > 0);
   const absoluteImageUrl = inputImage ? toAbsoluteReferenceImageUrl(inputImage) : "";
-  const formData = new FormData();
-  formData.append("model", model);
-  formData.append("prompt", payload.prompt);
-  formData.append("seconds", String(seconds));
-  formData.append("size", size);
-  if (absoluteImageUrl) {
-    if (imageFieldMode === "array_json") {
-      formData.append(imageFieldName, JSON.stringify([absoluteImageUrl]));
+  const useImageStructuredRequest = Boolean(absoluteImageUrl);
+  const orientation = payload.orientation || (size === "720x1280" ? "portrait" : "landscape");
+
+  const requestFields: string[] = [];
+  let body: BodyInit;
+  let headers: Record<string, string>;
+  let url = `${getBaseUrl()}${(useImageStructuredRequest ? getImageCreatePath() : getCreatePath()).startsWith("/") ? "" : "/"}${
+    useImageStructuredRequest ? getImageCreatePath() : getCreatePath()
+  }`;
+
+  if (useImageStructuredRequest) {
+    const createBody: Record<string, unknown> = {
+      model,
+      prompt: payload.prompt,
+      orientation,
+      size,
+      duration: seconds,
+      seconds,
+      watermark: false,
+    };
+    if (imageFieldName === "images") {
+      createBody[imageFieldName] = [absoluteImageUrl];
+    } else if (imageFieldMode === "array_json") {
+      createBody[imageFieldName] = [absoluteImageUrl];
     } else {
-      formData.append(imageFieldName, absoluteImageUrl);
+      createBody[imageFieldName] = absoluteImageUrl;
     }
+    requestFields.push(...Object.keys(createBody));
+    body = JSON.stringify(createBody);
+    headers = authHeaders();
+  } else {
+    const formData = new FormData();
+    formData.append("model", model);
+    formData.append("prompt", payload.prompt);
+    formData.append("seconds", String(seconds));
+    formData.append("size", size);
+    requestFields.push("model", "prompt", "seconds", "size");
+    body = formData;
+    headers = {
+      Authorization: authHeaders().Authorization,
+      Accept: "application/json",
+    };
   }
 
   log("CREATE_REQUEST", {
@@ -232,12 +264,10 @@ export async function createSora2Task(payload: CreateVideoRequest): Promise<{ ta
     referenceImageFieldMode: absoluteImageUrl ? imageFieldMode : "",
     referenceImageUrlPreview: absoluteImageUrl ? urlPreview(absoluteImageUrl) : "",
     referenceImageUrlPublic: absoluteImageUrl ? isLikelyPublicUrl(absoluteImageUrl) : false,
+    createPath: useImageStructuredRequest ? getImageCreatePath() : getCreatePath(),
+    requestFields,
   });
-  const url = "https://yunwu.ai/v1/videos";
-  const headers = {
-    Authorization: authHeaders().Authorization,
-    Accept: "application/json",
-  };
+
   log("CREATE_HTTP_REQUEST", {
     url,
     method: "POST",
@@ -253,7 +283,7 @@ export async function createSora2Task(payload: CreateVideoRequest): Promise<{ ta
   const response = await fetch(url, {
     method: "POST",
     headers,
-    body: formData,
+    body,
   });
   const parsed = await parseResponse(response);
   log("CREATE_RESPONSE", {
