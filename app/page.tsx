@@ -1112,6 +1112,8 @@ export default function Home() {
     console.log("[COVER_URL_RAW]", video?.coverData ?? "");
     console.log("[COVER_URL_FINAL]", video?.coverData ?? "");
     console.log("[COVER_IS_PROXY]", Boolean(video?.coverData?.includes("/api/videos")));
+    const finalCoverSrc = normalizeReferenceImageSrc(video?.coverData);
+    console.log("[GLOBAL_IMG_SRC_FIXED]", finalCoverSrc);
     const hasCover = Boolean(video?.coverData);
     const hasVideo = Boolean(video?.videoUrl);
     const isPortrait = video?.ratio === "9:16";
@@ -1126,7 +1128,7 @@ export default function Home() {
         </div>
         <div className={`flex items-center justify-center overflow-hidden rounded-lg ${frameClass}`}>
           {hasCover ? (
-            <img src={video?.coverData ?? ""} alt="视频封面" className="h-full w-full object-contain object-center" />
+            <img src={finalCoverSrc ?? ""} alt="视频封面" className="h-full w-full object-contain object-center" />
           ) : hasVideo ? (
             <video src={video?.videoUrl} muted preload="metadata" className="h-full w-full object-cover object-center" />
           ) : (
@@ -1143,7 +1145,7 @@ export default function Home() {
     const displayImageData = referenceImageData ?? previewData;
     if (!displayImageData) return null;
     const finalSrc = normalizeReferenceImageSrc(displayImageData);
-    console.log("[REF_FINAL_RENDER_SRC]", finalSrc);
+    console.log("[GLOBAL_IMG_SRC_FIXED]", finalSrc);
     if (compact) {
       return (
         <img
@@ -1473,7 +1475,7 @@ export default function Home() {
                 <div className="flex flex-wrap items-center gap-3">
                   {(() => {
                     const finalSrc = normalizeReferenceImageSrc(referenceImageData);
-                    console.log("[REF_FINAL_RENDER_SRC]", finalSrc);
+                    console.log("[GLOBAL_IMG_SRC_FIXED]", finalSrc);
                     return <img src={finalSrc ?? ""} alt="参考图" className="h-14 w-14 rounded-xl object-cover" />;
                   })()}
                   <div className="space-y-1">
@@ -2043,11 +2045,17 @@ export default function Home() {
                             : "overflow-hidden rounded-xl border border-gray-200/80 bg-white/90 shadow-sm transition duration-200 hover:scale-[1.03] hover:brightness-95 hover:shadow-md"
                         }
                       >
+                        {(() => {
+                          const finalSrc = normalizeReferenceImageSrc(taskRefThumbData);
+                          console.log("[GLOBAL_IMG_SRC_FIXED]", finalSrc);
+                          return (
                         <img
-                          src={taskRefThumbData}
+                          src={finalSrc ?? ""}
                           alt={referenceImageName || "参考图缩略图"}
                           className="h-9 w-9 object-cover object-center"
                         />
+                          );
+                        })()}
                       </button>
                     )}
                   </div>
@@ -2623,7 +2631,11 @@ export default function Home() {
                 </button>
               </div>
               <div className={isDark ? "max-h-[72vh] overflow-auto rounded-2xl border border-gray-800 bg-[#18181b] p-2" : "max-h-[72vh] overflow-auto rounded-2xl border border-gray-200 bg-gray-50 p-2"}>
-                <img src={referencePreviewData} alt="参考图大图预览" className="max-h-[68vh] w-full rounded-xl object-contain" />
+                {(() => {
+                  const finalSrc = normalizeReferenceImageSrc(referencePreviewData);
+                  console.log("[GLOBAL_IMG_SRC_FIXED]", finalSrc);
+                  return <img src={finalSrc ?? ""} alt="参考图大图预览" className="max-h-[68vh] w-full rounded-xl object-contain" />;
+                })()}
               </div>
             </div>
           </div>
