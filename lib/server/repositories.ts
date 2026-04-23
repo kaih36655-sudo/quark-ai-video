@@ -97,6 +97,18 @@ export const videosRepository = {
     save();
     return nextVideo;
   },
+  updateCoverFields(id: string, patch: Partial<Pick<Video, "coverUrl" | "originalCoverUrl" | "upscaledCoverUrl">>) {
+    const store = getStore();
+    const index = store.videos.findIndex((video) => video.id === id);
+    if (index < 0) return null;
+    const nextVideo: Video = {
+      ...store.videos[index],
+      ...patch,
+    };
+    store.videos[index] = nextVideo;
+    save();
+    return nextVideo;
+  },
   removeByTaskId(taskId: string) {
     const store = getStore();
     const before = store.videos.length;

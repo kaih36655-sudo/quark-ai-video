@@ -5,6 +5,7 @@ import { generateVideoScript } from "./gpt";
 import { createSora2Task, downloadSora2Video, querySora2Task } from "./sora2";
 import { runRunningHubUpscaleWithPolling } from "./runninghub";
 import { enqueueUpscaleJob } from "./upscale-queue";
+import { extractCoverAt015FromVideoUrl } from "./video-cover-extractor";
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const runnerLog = (stage: string, payload: Record<string, unknown>) => {
@@ -351,6 +352,34 @@ async function executeTask(taskId: string) {
       providerTaskId: soraResult.providerTaskId,
       enqueueUpscale: true,
     });
+    void (async () => {
+      runnerLog("VIDEO_COVER_ASYNC_START", {
+        taskId: task.id,
+        videoId: created.id,
+        stage: "original",
+      });
+      try {
+        const sourceForCover = created.originalVideoUrl || created.videoUrl || created.previewImageUrl;
+        if (sourceForCover) {
+          const extracted = await extractCoverAt015FromVideoUrl({
+            videoId: created.id,
+            sourceVideoUrl: sourceForCover,
+            kind: "original",
+          });
+          videosRepository.updateCoverFields(created.id, {
+            originalCoverUrl: extracted.coverUrl,
+            coverUrl: extracted.coverUrl,
+          });
+        }
+      } catch (error) {
+        runnerLog("VIDEO_COVER_EXTRACT_FAILED", {
+          taskId: task.id,
+          videoId: created.id,
+          stage: "original",
+          errorMessage: error instanceof Error ? error.message : "封面抽帧失败",
+        });
+      }
+    })();
 
     const upscaleJob = enqueueUpscaleJob(task.userId, { videoId: created.id, taskId: task.id }, async () => {
       videosRepository.update(created.id, {
@@ -381,6 +410,31 @@ async function executeTask(taskId: string) {
           coverUrl: upscaleResult.upscaledCoverUrl || created.originalCoverUrl || "",
           previewImageUrl: upscaleResult.upscaledVideoUrl,
         });
+        void (async () => {
+          runnerLog("VIDEO_COVER_ASYNC_START", {
+            taskId: task.id,
+            videoId: created.id,
+            stage: "upscaled",
+          });
+          try {
+            const extracted = await extractCoverAt015FromVideoUrl({
+              videoId: created.id,
+              sourceVideoUrl: upscaleResult.upscaledVideoUrl,
+              kind: "upscaled",
+            });
+            videosRepository.updateCoverFields(created.id, {
+              upscaledCoverUrl: extracted.coverUrl,
+              coverUrl: extracted.coverUrl,
+            });
+          } catch (error) {
+            runnerLog("VIDEO_COVER_EXTRACT_FAILED", {
+              taskId: task.id,
+              videoId: created.id,
+              stage: "upscaled",
+              errorMessage: error instanceof Error ? error.message : "封面抽帧失败",
+            });
+          }
+        })();
         return;
       }
       videosRepository.update(created.id, {
