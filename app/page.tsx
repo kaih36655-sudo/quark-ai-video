@@ -231,10 +231,24 @@ export default function Home() {
       setHasReferenceImage(true);
     }
     if (savedReferenceImageData) {
-      setReferenceImageData(normalizeDisplayUrl(savedReferenceImageData) ?? savedReferenceImageData);
+      const nextReferenceImageData = normalizeDisplayUrl(savedReferenceImageData) ?? savedReferenceImageData;
+      console.log("[REF_STATE_SET]", {
+        from: "init_localStorage_referenceImageData",
+        referenceImageData: nextReferenceImageData,
+        referenceImageThumbData,
+        referencePreviewData,
+      });
+      setReferenceImageData(nextReferenceImageData);
     }
     if (savedReferenceImageThumbData) {
-      setReferenceImageThumbData(normalizeDisplayUrl(savedReferenceImageThumbData) ?? savedReferenceImageThumbData);
+      const nextReferenceImageThumbData = normalizeDisplayUrl(savedReferenceImageThumbData) ?? savedReferenceImageThumbData;
+      console.log("[REF_STATE_SET]", {
+        from: "init_localStorage_referenceImageThumbData",
+        referenceImageData,
+        referenceImageThumbData: nextReferenceImageThumbData,
+        referencePreviewData,
+      });
+      setReferenceImageThumbData(nextReferenceImageThumbData);
     }
     if (savedReferenceImageName) {
       setReferenceImageName(savedReferenceImageName);
@@ -922,6 +936,12 @@ export default function Home() {
           : rawUrl;
         console.log("[UPLOAD_RETURN_URL]", rawUrl);
         console.log("[UPLOAD_NORMALIZED_URL]", normalizedUrl);
+        console.log("[REF_STATE_SET]", {
+          from: "upload_success",
+          referenceImageData: normalizedUrl,
+          referenceImageThumbData: normalizedUrl,
+          referencePreviewData,
+        });
         setReferenceImageData(normalizedUrl);
         setReferenceImageThumbData(normalizedUrl);
         setReferenceImageName(String(json.data.name || file.name));
@@ -934,6 +954,12 @@ export default function Home() {
   };
 
   const handleRemoveReferenceImage = () => {
+    console.log("[REF_STATE_SET]", {
+      from: "remove_reference_image",
+      referenceImageData: null,
+      referenceImageThumbData: null,
+      referencePreviewData,
+    });
     setReferenceImageData(null);
     setReferenceImageThumbData(null);
     setReferenceImageName("");
@@ -1119,6 +1145,7 @@ export default function Home() {
     console.log("[COVER_IS_PROXY]", Boolean(video?.coverData?.includes("/api/videos")));
     const finalCoverSrc = normalizeReferenceImageSrc(video?.coverData);
     console.log("[GLOBAL_IMG_SRC_FIXED]", finalCoverSrc);
+    console.log("[IMG_RENDER_SRC]", finalCoverSrc ?? "");
     const hasCover = Boolean(video?.coverData);
     const hasVideo = Boolean(video?.videoUrl);
     const isPortrait = video?.ratio === "9:16";
@@ -1151,6 +1178,7 @@ export default function Home() {
     if (!displayImageData) return null;
     const finalSrc = normalizeReferenceImageSrc(displayImageData);
     console.log("[GLOBAL_IMG_SRC_FIXED]", finalSrc);
+    console.log("[IMG_RENDER_SRC]", finalSrc ?? "");
     if (compact) {
       return (
         <img
@@ -1481,6 +1509,7 @@ export default function Home() {
                   {(() => {
                     const finalSrc = normalizeReferenceImageSrc(referenceImageData);
                     console.log("[GLOBAL_IMG_SRC_FIXED]", finalSrc);
+                    console.log("[IMG_RENDER_SRC]", finalSrc ?? "");
                     return <img src={finalSrc ?? ""} alt="参考图" className="h-14 w-14 rounded-xl object-cover" />;
                   })()}
                   <div className="space-y-1">
@@ -2040,8 +2069,15 @@ export default function Home() {
                       <button
                         type="button"
                         onClick={() => {
+                          const normalizedPreview = normalizeReferenceImageSrc(taskRefThumbData);
                           setReferencePreviewTitle(referenceImageName || "参考图预览");
-                          setReferencePreviewData(taskRefThumbData);
+                          console.log("[REF_STATE_SET]", {
+                            from: "result_list_set_referencePreviewData",
+                            referenceImageData,
+                            referenceImageThumbData,
+                            referencePreviewData: normalizedPreview,
+                          });
+                          setReferencePreviewData(normalizedPreview);
                           setReferencePreviewOpen(true);
                         }}
                         className={
@@ -2053,6 +2089,7 @@ export default function Home() {
                         {(() => {
                           const finalSrc = normalizeReferenceImageSrc(taskRefThumbData);
                           console.log("[GLOBAL_IMG_SRC_FIXED]", finalSrc);
+                          console.log("[IMG_RENDER_SRC]", finalSrc ?? "");
                           return (
                         <img
                           src={finalSrc ?? ""}
@@ -2616,6 +2653,12 @@ export default function Home() {
             className="fixed inset-0 z-[95] flex items-center justify-center bg-black/60 px-4"
             onClick={() => {
               setReferencePreviewOpen(false);
+              console.log("[REF_STATE_SET]", {
+                from: "reference_preview_overlay_close",
+                referenceImageData,
+                referenceImageThumbData,
+                referencePreviewData: null,
+              });
               setReferencePreviewData(null);
             }}
           >
@@ -2628,6 +2671,12 @@ export default function Home() {
                 <button
                   onClick={() => {
                     setReferencePreviewOpen(false);
+                    console.log("[REF_STATE_SET]", {
+                      from: "reference_preview_close_header",
+                      referenceImageData,
+                      referenceImageThumbData,
+                      referencePreviewData: null,
+                    });
                     setReferencePreviewData(null);
                   }}
                   className={isDark ? "rounded-full bg-gray-800 px-3 py-1.5 text-xs text-gray-100" : "rounded-full bg-gray-100 px-3 py-1.5 text-xs text-gray-700"}
@@ -2639,6 +2688,7 @@ export default function Home() {
                 {(() => {
                   const finalSrc = normalizeReferenceImageSrc(referencePreviewData);
                   console.log("[GLOBAL_IMG_SRC_FIXED]", finalSrc);
+                  console.log("[IMG_RENDER_SRC]", finalSrc ?? "");
                   return <img src={finalSrc ?? ""} alt="参考图大图预览" className="max-h-[68vh] w-full rounded-xl object-contain" />;
                 })()}
               </div>
