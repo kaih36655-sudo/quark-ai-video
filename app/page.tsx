@@ -908,9 +908,9 @@ export default function Home() {
           showToast(json?.message || "上传参考图失败");
           return;
         }
-        const uploadedUrl = normalizeDisplayUrl(String(json.data.url)) || String(json.data.url);
-        setReferenceImageData(uploadedUrl);
-        setReferenceImageThumbData(uploadedUrl);
+        console.log("[UPLOAD_RETURN_URL]", json.data.url);
+        setReferenceImageData(String(json.data.url));
+        setReferenceImageThumbData(String(json.data.url));
         setReferenceImageName(String(json.data.name || file.name));
         setHasReferenceImage(true);
         showToast("参考图已添加");
@@ -1136,7 +1136,12 @@ export default function Home() {
     console.log("[REF_IMAGE_SRC_RAW]", previewData ?? referenceImageData ?? "");
     console.log("[REF_IMAGE_SRC_FINAL]", displayImageData ?? "");
     if (!displayImageData) return null;
+    if (!displayImageData.startsWith("/uploads") && !displayImageData.startsWith("/api/uploads")) {
+      console.warn("[INVALID_IMAGE_SRC_BLOCKED]", displayImageData);
+      return null;
+    }
     if (compact) {
+      console.log("[FINAL_IMG_SRC]", displayImageData);
       return (
         <img
           src={displayImageData}
@@ -1145,6 +1150,7 @@ export default function Home() {
         />
       );
     }
+    console.log("[FINAL_IMG_SRC]", displayImageData);
     return (
       <div className={isDark ? "rounded-2xl border border-gray-800 bg-[#18181b] p-3" : "rounded-2xl border border-gray-200 bg-gray-50 p-3"}>
         <div className="mb-2 text-xs">{referenceName || "参考图预览"}</div>
