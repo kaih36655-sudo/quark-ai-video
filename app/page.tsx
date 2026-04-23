@@ -383,9 +383,11 @@ export default function Home() {
     const upscaledVideoUrl = normalizeDisplayUrl(typeof video.upscaledVideoUrl === "string" && video.upscaledVideoUrl ? video.upscaledVideoUrl : undefined);
     const upscaledCoverUrl = normalizeDisplayUrl(typeof video.upscaledCoverUrl === "string" && video.upscaledCoverUrl ? video.upscaledCoverUrl : undefined);
     const effectiveVideoUrl = upscaledVideoUrl || resolvedVideoUrl || originalVideoUrl;
-    const effectiveCoverUrl = upscaledCoverUrl || resolvedCoverUrl || originalCoverUrl;
+    const preferredCoverUrl = upscaledCoverUrl || resolvedCoverUrl || originalCoverUrl;
     const playbackId = String(video.id ?? "");
     const usePlaybackProxy = String(video.status ?? "") !== "failed" && playbackId.length > 0;
+    const needProtectedCoverProxy = Boolean(preferredCoverUrl && shouldUseProxyForCover(preferredCoverUrl) && playbackId.length > 0);
+    const effectiveCoverUrl = needProtectedCoverProxy ? `/api/videos/${playbackId}/stream?variant=cover` : preferredCoverUrl;
     const upscaleStatus = (() => {
       const raw = String(video.upscaleStatus ?? "").toLowerCase();
       if (
@@ -439,14 +441,7 @@ export default function Home() {
       upscaleErrorMessage: typeof video.upscaleErrorMessage === "string" ? video.upscaleErrorMessage : undefined,
       upscaleConsumeMoney: typeof video.upscaleConsumeMoney === "number" ? video.upscaleConsumeMoney : undefined,
       upscaleTaskCostTime: typeof video.upscaleTaskCostTime === "number" ? video.upscaleTaskCostTime : undefined,
-      coverData:
-        effectiveCoverUrl && !shouldUseProxyForCover(effectiveCoverUrl)
-          ? effectiveCoverUrl
-          : usePlaybackProxy
-            ? effectiveCoverUrl
-              ? `/api/videos/${playbackId}/stream?variant=cover`
-              : undefined
-            : effectiveCoverUrl,
+      coverData: effectiveCoverUrl,
       videoUrl: usePlaybackProxy ? `/api/videos/${playbackId}/stream` : effectiveVideoUrl,
       hasReferenceImage: Boolean(video.referenceImageUrl),
       referenceImageName: typeof video.referenceImageName === "string" ? video.referenceImageName : undefined,
@@ -1136,15 +1131,26 @@ export default function Home() {
     return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
   };
 
-  const renderVideoCover = (video: { coverData?: string; videoUrl?: string; ratio?: "9:16" | "16:9"; seconds?: number; duration?: string } | null) => {
-    console.log("[COVER_URL_RAW]", video?.coverData ?? "");
-    console.log("[COVER_URL_FINAL]", video?.coverData ?? "");
-    console.log("[COVER_IS_PROXY]", Boolean(video?.coverData?.includes("/api/videos")));
+  const renderVideoCover = (video: { id?: number; coverData?: string; coverUrl?: string; previewImageUrl?: string; videoUrl?: string; ratio?: "9:16" | "16:9"; seconds?: number; duration?: string } | null) => {
     const finalCoverSrc = normalizeReferenceImageSrc(video?.coverData);
     console.log("[GLOBAL_IMG_SRC_FIXED]", finalCoverSrc);
     console.log("[IMG_RENDER_SRC]", finalCoverSrc ?? "");
+    console.log("[VIDEO_COVER_RENDER]", {
+      videoId: video?.id,
+      coverData: video?.coverData,
+      coverUrl: video?.coverUrl,
+      previewImageUrl: video?.previewImageUrl,
+      finalCoverSrc: finalCoverSrc ?? "",
+    });
     const hasCover = Boolean(video?.coverData);
     const hasVideo = Boolean(video?.videoUrl);
+    if (!hasCover) {
+      console.log("[VIDEO_COVER_FALLBACK]", {
+        videoId: video?.id,
+        reason: hasVideo ? "coverData为空，fallback到video标签" : "coverData和videoUrl都为空，fallback到占位符",
+        fallbackSrc: hasVideo ? video?.videoUrl ?? "" : "",
+      });
+    }
     const isPortrait = video?.ratio === "9:16";
     const outerClass = isDark
       ? "relative flex h-14 w-24 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-gray-700/90 bg-gradient-to-br from-[#1d1d22] via-[#23232a] to-[#101014]"
@@ -1888,7 +1894,7 @@ export default function Home() {
               >
                 <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
                   <div className="flex items-start gap-3">
-                    {renderVideoCover({ coverData, videoUrl, ratio: videoRatio, seconds, duration: videoDuration })}
+                    {renderVideoCover({ id, coverData, videoUrl, ratio: videoRatio, seconds, duration: videoDuration })}
 
                     <div className="min-w-0 space-y-2.5">
                       <div className="flex flex-wrap items-center gap-1.5">
@@ -2785,7 +2791,7 @@ export default function Home() {
                                   }}
                                   className="shrink-0"
                                 >
-                                  {renderVideoCover({ coverData: video.coverData, videoUrl: video.videoUrl, ratio: video.ratio, seconds: video.seconds, duration: video.duration })}
+                                  {renderVideoCover({ id: video.id, coverData: video.coverData, videoUrl: video.videoUrl, ratio: video.ratio, seconds: video.seconds, duration: video.duration })}
                                 </button>
                                 <div className="min-w-0 flex-1">
                                   <div className="mb-1 flex flex-wrap items-center gap-2">
