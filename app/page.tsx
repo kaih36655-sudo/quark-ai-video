@@ -298,6 +298,14 @@ export default function Home() {
     return lower.includes("yunwu.ai") || lower.startsWith("/api/");
   };
 
+  function normalizeReferenceImageSrc(src?: string | null) {
+    if (!src) return null;
+    if (src.startsWith("/uploads/")) {
+      return src.replace("/uploads/", "/api/uploads/");
+    }
+    return src;
+  }
+
   const toTaskStatus = (status: string): TaskStatus => {
     if (status === "waiting" || status === "queued" || status === "running" || status === "success" || status === "failed" || status === "cancelled") {
       return status;
@@ -1134,17 +1142,12 @@ export default function Home() {
   const renderReferencePreview = (referenceName?: string, compact = false, previewData?: string | null) => {
     const displayImageData = referenceImageData ?? previewData;
     if (!displayImageData) return null;
-    const raw = displayImageData;
-    let finalSrc = raw;
-    if (raw?.startsWith("/uploads/")) {
-      finalSrc = raw.replace("/uploads/", "/api/uploads/");
-    }
-    console.log("[FINAL_IMG_SRC_RAW]", raw);
-    console.log("[FINAL_IMG_SRC_FIXED]", finalSrc);
+    const finalSrc = normalizeReferenceImageSrc(displayImageData);
+    console.log("[REF_FINAL_RENDER_SRC]", finalSrc);
     if (compact) {
       return (
         <img
-          src={finalSrc}
+          src={finalSrc ?? ""}
           alt={referenceName || "参考图缩略图"}
           className="h-10 w-14 shrink-0 rounded-lg border border-gray-300/60 object-cover transition duration-200 hover:scale-[1.03] hover:shadow-sm dark:border-gray-700/70"
         />
@@ -1154,7 +1157,7 @@ export default function Home() {
       <div className={isDark ? "rounded-2xl border border-gray-800 bg-[#18181b] p-3" : "rounded-2xl border border-gray-200 bg-gray-50 p-3"}>
         <div className="mb-2 text-xs">{referenceName || "参考图预览"}</div>
         <div className={isDark ? "flex max-h-64 items-center justify-center overflow-hidden rounded-xl border border-gray-700 bg-[#121214] p-2" : "flex max-h-64 items-center justify-center overflow-hidden rounded-xl border border-gray-200 bg-white p-2"}>
-          <img src={finalSrc} alt={referenceName || "参考图预览"} className="max-h-60 w-full rounded-lg object-contain" />
+          <img src={finalSrc ?? ""} alt={referenceName || "参考图预览"} className="max-h-60 w-full rounded-lg object-contain" />
         </div>
       </div>
     );
@@ -1468,7 +1471,11 @@ export default function Home() {
             {hasReferenceImage && referenceImageData && (
               <div className={isDark ? "rounded-2xl border border-gray-800 bg-[#18181b] p-3" : "rounded-2xl border border-gray-200 bg-gray-50 p-3"}>
                 <div className="flex flex-wrap items-center gap-3">
-                  <img src={referenceImageData} alt="参考图" className="h-14 w-14 rounded-xl object-cover" />
+                  {(() => {
+                    const finalSrc = normalizeReferenceImageSrc(referenceImageData);
+                    console.log("[REF_FINAL_RENDER_SRC]", finalSrc);
+                    return <img src={finalSrc ?? ""} alt="参考图" className="h-14 w-14 rounded-xl object-cover" />;
+                  })()}
                   <div className="space-y-1">
                     <div className="text-xs font-medium">{referenceImageName || "已上传参考图"}</div>
                     <div className={isDark ? "text-xs text-gray-400" : "text-xs text-gray-500"}>参考图：已添加</div>
