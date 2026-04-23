@@ -916,9 +916,14 @@ export default function Home() {
           showToast(json?.message || "上传参考图失败");
           return;
         }
-        console.log("[UPLOAD_RETURN_URL]", json.data.url);
-        setReferenceImageData(String(json.data.url));
-        setReferenceImageThumbData(String(json.data.url));
+        const rawUrl = String(json.data.url);
+        const normalizedUrl = rawUrl.startsWith("/uploads/")
+          ? rawUrl.replace("/uploads/", "/api/uploads/")
+          : rawUrl;
+        console.log("[UPLOAD_RETURN_URL]", rawUrl);
+        console.log("[UPLOAD_NORMALIZED_URL]", normalizedUrl);
+        setReferenceImageData(normalizedUrl);
+        setReferenceImageThumbData(normalizedUrl);
         setReferenceImageName(String(json.data.name || file.name));
         setHasReferenceImage(true);
         showToast("参考图已添加");
