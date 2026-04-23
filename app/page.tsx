@@ -388,6 +388,16 @@ export default function Home() {
     const usePlaybackProxy = String(video.status ?? "") !== "failed" && playbackId.length > 0;
     const needProtectedCoverProxy = Boolean(preferredCoverUrl && shouldUseProxyForCover(preferredCoverUrl) && playbackId.length > 0);
     const effectiveCoverUrl = needProtectedCoverProxy ? `/api/videos/${playbackId}/stream?variant=cover` : preferredCoverUrl;
+    console.log("[VIDEO_COVER_SOURCE]", {
+      videoId: video.id,
+      upscaledCoverUrl: typeof video.upscaledCoverUrl === "string" ? video.upscaledCoverUrl : "",
+      coverUrl: typeof video.coverUrl === "string" ? video.coverUrl : "",
+      originalCoverUrl: typeof video.originalCoverUrl === "string" ? video.originalCoverUrl : "",
+      previewImageUrl: typeof video.previewImageUrl === "string" ? video.previewImageUrl : "",
+      upscaledVideoUrl: typeof video.upscaledVideoUrl === "string" ? video.upscaledVideoUrl : "",
+      originalVideoUrl: typeof video.originalVideoUrl === "string" ? video.originalVideoUrl : "",
+      finalCoverData: effectiveCoverUrl || "",
+    });
     const upscaleStatus = (() => {
       const raw = String(video.upscaleStatus ?? "").toLowerCase();
       if (
@@ -458,6 +468,15 @@ export default function Home() {
     const videoPayload = Array.isArray(listJson.data.videos) ? (listJson.data.videos as Record<string, unknown>[]) : [];
     const nextTasks = taskPayload.map(mapApiTaskToLocal);
     const nextVideos = videoPayload.map(mapApiVideoToLocal);
+    const noRealCoverCount = nextVideos.filter((video) => !video.coverData).length;
+    const coverProxyCount = nextVideos.filter((video) => typeof video.coverData === "string" && video.coverData.includes("/api/videos/") && video.coverData.includes("variant=cover")).length;
+    const fallbackToVideoCount = nextVideos.filter((video) => !video.coverData && Boolean(video.videoUrl)).length;
+    console.log("[VIDEO_COVER_STATS]", {
+      total: nextVideos.length,
+      noRealCoverCount,
+      coverProxyCount,
+      fallbackToVideoCount,
+    });
     setTasks(nextTasks);
     setVideos(nextVideos);
     return { tasks: nextTasks, videos: nextVideos };
