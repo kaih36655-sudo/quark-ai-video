@@ -231,24 +231,26 @@ export default function Home() {
       setHasReferenceImage(true);
     }
     if (savedReferenceImageData) {
-      const nextReferenceImageData = normalizeDisplayUrl(savedReferenceImageData) ?? savedReferenceImageData;
+      const restoredImageData = normalizeReferenceImageSrc(savedReferenceImageData);
+      console.log("[REF_RESTORE_IMAGE_DATA]", restoredImageData);
       console.log("[REF_STATE_SET]", {
         from: "init_localStorage_referenceImageData",
-        referenceImageData: nextReferenceImageData,
+        referenceImageData: restoredImageData,
         referenceImageThumbData,
         referencePreviewData,
       });
-      setReferenceImageData(nextReferenceImageData);
+      setReferenceImageData(restoredImageData);
     }
     if (savedReferenceImageThumbData) {
-      const nextReferenceImageThumbData = normalizeDisplayUrl(savedReferenceImageThumbData) ?? savedReferenceImageThumbData;
+      const restoredThumbData = normalizeReferenceImageSrc(savedReferenceImageThumbData);
+      console.log("[REF_RESTORE_THUMB_DATA]", restoredThumbData);
       console.log("[REF_STATE_SET]", {
         from: "init_localStorage_referenceImageThumbData",
         referenceImageData,
-        referenceImageThumbData: nextReferenceImageThumbData,
+        referenceImageThumbData: restoredThumbData,
         referencePreviewData,
       });
-      setReferenceImageThumbData(nextReferenceImageThumbData);
+      setReferenceImageThumbData(restoredThumbData);
     }
     if (savedReferenceImageName) {
       setReferenceImageName(savedReferenceImageName);
