@@ -1091,6 +1091,9 @@ export default function Home() {
   };
 
   const renderVideoCover = (video: { coverData?: string; videoUrl?: string; ratio?: "9:16" | "16:9"; seconds?: number; duration?: string } | null) => {
+    console.log("[COVER_URL_RAW]", video?.coverData ?? "");
+    console.log("[COVER_URL_FINAL]", video?.coverData ?? "");
+    console.log("[COVER_IS_PROXY]", Boolean(video?.coverData?.includes("/api/videos")));
     const hasCover = Boolean(video?.coverData);
     const hasVideo = Boolean(video?.videoUrl);
     const isPortrait = video?.ratio === "9:16";
@@ -1119,7 +1122,9 @@ export default function Home() {
   };
 
   const renderReferencePreview = (referenceName?: string, compact = false, previewData?: string | null) => {
-    const displayImageData = previewData ?? referenceImageData;
+    const displayImageData = referenceImageData ?? previewData;
+    console.log("[REF_IMAGE_SRC_RAW]", previewData ?? referenceImageData ?? "");
+    console.log("[REF_IMAGE_SRC_FINAL]", displayImageData ?? "");
     if (!displayImageData) return null;
     if (compact) {
       return (
