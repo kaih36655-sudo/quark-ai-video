@@ -316,9 +316,6 @@ export default function Home() {
 
   function normalizeReferenceImageSrc(src?: string | null) {
     if (!src) return null;
-    if (src.startsWith("/uploads/")) {
-      return src.replace("/uploads/", "/api/uploads/");
-    }
     return src;
   }
 
@@ -933,9 +930,7 @@ export default function Home() {
           return;
         }
         const rawUrl = String(json.data.url);
-        const normalizedUrl = rawUrl.startsWith("/uploads/")
-          ? rawUrl.replace("/uploads/", "/api/uploads/")
-          : rawUrl;
+        const normalizedUrl = rawUrl;
         console.log("[UPLOAD_RETURN_URL]", rawUrl);
         console.log("[UPLOAD_NORMALIZED_URL]", normalizedUrl);
         console.log("[REF_STATE_SET]", {
