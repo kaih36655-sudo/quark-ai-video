@@ -1818,7 +1818,6 @@ export default function Home() {
               <div>
                 <div className={isDark ? "text-sm font-medium text-gray-200" : "text-sm font-medium text-gray-700"}>
                   作品管理区
-                  <span className="ml-2 rounded bg-red-500 px-2 py-1 text-xs text-white">CLIENT_VERSION_20260424_COVER_TEST</span>
                 </div>
                 <div className={isDark ? "mt-1 text-sm text-gray-400" : "mt-1 text-sm text-gray-500"}>
                   当前显示 {pagedVisibleResults.length} / 筛选后 {visibleResults.length} / 总计 {videos.length} 条作品，当前收藏 {visibleFavoriteCount} 条，模式：{mode === "agent" ? "智能体批量视频" : mode === "normal" ? "通用视频" : "通用图片"}，参考图：{hasReferenceImage ? "已添加" : "未添加"}
