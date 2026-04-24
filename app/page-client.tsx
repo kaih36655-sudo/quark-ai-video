@@ -1927,12 +1927,13 @@ export default function Home() {
                       onClick={(event) => {
                         event.stopPropagation();
                         alert("COVER_CLICK_HIT_" + id);
-                        const video = videoRecords.find((v) => Number(v.id) === Number(id));
-                        if (video) {
-                          setPreviewVideo(video);
-                        } else {
-                          console.log("❌ 没找到 video", id, videoRecords.map((v) => v.id));
-                        }
+                        setPreviewVideo({
+                          id,
+                          videoUrl,
+                          ratio: videoRatio,
+                          seconds,
+                          duration: videoDuration,
+                        });
                       }}
                       className={`group shrink-0 cursor-pointer overflow-hidden rounded-2xl ring-4 ring-red-500 bg-yellow-200 ${videoRatio === "9:16" ? "h-20 w-14" : "h-16 w-28"}`}
                     >
@@ -2038,12 +2039,13 @@ export default function Home() {
                     <div className="grid w-full grid-cols-3 gap-2.5">
                       <button
                         onClick={() => {
-                          const video = videoRecords.find((v) => Number(v.id) === Number(id));
-                          if (video) {
-                            setPreviewVideo(video);
-                          } else {
-                            console.log("❌ 没找到 video", id, videoRecords.map((v) => v.id));
-                          }
+                          setPreviewVideo({
+                            id,
+                            videoUrl,
+                            ratio: videoRatio,
+                            seconds,
+                            duration: videoDuration,
+                          });
                         }}
                         className={
                           isDark
@@ -2858,12 +2860,7 @@ export default function Home() {
                                   type="button"
                                   onClick={(event) => {
                                     event.stopPropagation();
-                                    const target = videoRecords.find((v) => Number(v.id) === Number(video.id));
-                                    if (target) {
-                                      setPreviewVideo(target);
-                                    } else {
-                                      console.log("❌ 没找到 video", video.id, videoRecords.map((v) => v.id));
-                                    }
+                                    setPreviewVideo(video);
                                   }}
                                   className={`group shrink-0 cursor-pointer overflow-hidden rounded-2xl ${video.ratio === "9:16" ? "h-20 w-14" : "h-16 w-28"}`}
                                 >
@@ -2932,7 +2929,7 @@ export default function Home() {
                                     </div>
                                   )}
                                   <div className="flex flex-wrap items-center gap-1.5">
-                                    <button onClick={(e) => { e.stopPropagation(); const target = videoRecords.find((v) => Number(v.id) === Number(video.id)); if (target) { setPreviewVideo(target); } else { console.log("❌ 没找到 video", video.id, videoRecords.map((v) => v.id)); } }} className={isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>预览</button>
+                                    <button onClick={(e) => { e.stopPropagation(); setPreviewVideo(video); }} className={isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>预览</button>
                                     <button onClick={(e) => { e.stopPropagation(); handleCopy(video.item, video.id); }} className={isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>复制</button>
                                     <button onClick={(e) => { e.stopPropagation(); void handleDownload(video); }} className={isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>下载</button>
                                     <button onClick={(e) => { e.stopPropagation(); handleToggleFavorite(video.id); }} className={favorites.includes(video.id) ? "rounded-full bg-yellow-400 px-3 py-1 text-xs text-black" : isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>{favorites.includes(video.id) ? "已收藏" : "收藏"}</button>
