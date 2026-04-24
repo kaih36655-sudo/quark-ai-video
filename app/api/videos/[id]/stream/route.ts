@@ -52,8 +52,15 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       }
     })();
     if (isLocalUploadsCover) {
-      const redirectUrl = source.startsWith("http://") || source.startsWith("https://") ? source : new URL(source, req.nextUrl.origin).toString();
-      return NextResponse.redirect(redirectUrl, 302);
+      if (source.startsWith("http://") || source.startsWith("https://")) {
+        return NextResponse.redirect(source, 302);
+      }
+      return new NextResponse(null, {
+        status: 302,
+        headers: {
+          Location: source,
+        },
+      });
     }
   }
 
