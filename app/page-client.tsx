@@ -122,7 +122,7 @@ export default function Home() {
   const [generateProgress, setGenerateProgress] = useState(0);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [videos, setVideos] = useState<Video[]>([]);
-  const [previewText, setPreviewText] = useState<number | null>(null);
+  const [previewText, setPreviewText] = useState<number | undefined>(undefined);
   const [referencePreviewOpen, setReferencePreviewOpen] = useState(false);
   const [referencePreviewTitle, setReferencePreviewTitle] = useState("");
   const [referencePreviewData, setReferencePreviewData] = useState<string | null>(null);
@@ -702,8 +702,8 @@ export default function Home() {
     if (taskDetailId === taskId) {
       setTaskDetailId(null);
     }
-    if (previewText && relatedVideoIds.includes(previewText)) {
-      setPreviewText(null);
+    if (previewText !== undefined && relatedVideoIds.includes(previewText)) {
+      setPreviewText(undefined);
     }
   };
 
@@ -770,7 +770,7 @@ export default function Home() {
     if (!confirmed) return;
     setTasks([]);
     setVideos([]);
-    setPreviewText(null);
+    setPreviewText(undefined);
     setCopiedTaskId(null);
     setIsPreviewCopied(false);
     setFavorites([]);
@@ -782,7 +782,7 @@ export default function Home() {
   };
 
   const handleRegenerate = (taskId: number) => {
-    setPreviewText(null);
+    setPreviewText(undefined);
     showToast(`已重新生成 ${makeTaskId(taskId)}`);
   };
 
@@ -812,7 +812,7 @@ export default function Home() {
       return;
     }
     setIsTaskDrawerOpen(false);
-    setPreviewText(taskVideos[0].id);
+    setPreviewText(Number(taskVideos[0].id));
   };
 
   const handleToggleFavorite = (taskId: number) => {
@@ -1097,7 +1097,14 @@ export default function Home() {
       };
     });
 
-  const previewTask = previewText ? videoRecords.find((video) => video.id === previewText) ?? null : null;
+  const previewTask =
+    previewText !== undefined ? videoRecords.find((video) => Number(video.id) === Number(previewText)) ?? null : null;
+  console.log("[PREVIEW_TRIGGER]", previewText);
+  console.log(
+    "[PREVIEW_MATCH]",
+    previewText,
+    videoRecords.map((v) => v.id)
+  );
   const detailTask = taskDetailId ? taskRecords.find((task) => task.id === taskDetailId) ?? null : null;
   const detailVideos = detailTask ? videoRecords.filter((video) => video.taskId === detailTask.id) : [];
   const activeDetailVideo = detailVideos.find((video) => video.id === detailVideoId) ?? detailVideos[0] ?? null;
@@ -1926,7 +1933,7 @@ export default function Home() {
                       type="button"
                       onClick={(event) => {
                         event.stopPropagation();
-                        setPreviewText(id);
+                        setPreviewText(Number(id));
                       }}
                       className={`group shrink-0 cursor-pointer overflow-hidden rounded-2xl ${videoRatio === "9:16" ? "h-20 w-14" : "h-16 w-28"}`}
                     >
@@ -2562,10 +2569,10 @@ export default function Home() {
             </div>
           </div>
         )}
-        {previewTask && (
+        {previewText !== undefined && (
           <div
             className="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 px-4"
-            onClick={() => setPreviewText(null)}
+            onClick={() => setPreviewText(undefined)}
           >
             <div
               onClick={(e) => e.stopPropagation()}
@@ -2575,6 +2582,25 @@ export default function Home() {
                   : "w-full max-w-lg rounded-3xl border border-gray-200 bg-white p-6 shadow-xl"
               }
             >
+              {!previewTask ? (
+                <div className="space-y-4">
+                  <div className="text-lg font-semibold">视频预览</div>
+                  <div className={isDark ? "text-sm text-gray-300" : "text-sm text-gray-600"}>未找到对应视频数据，请稍后重试。</div>
+                  <div className="flex justify-end">
+                    <button
+                      onClick={() => setPreviewText(undefined)}
+                      className={
+                        isDark
+                          ? "rounded-full bg-gray-800 px-3 py-1 text-sm text-gray-100"
+                          : "rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-700"
+                      }
+                    >
+                      关闭
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
               <div className="mb-4 flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <div className="text-lg font-semibold">视频预览</div>
@@ -2589,7 +2615,7 @@ export default function Home() {
                   </span>
                 </div>
                 <button
-                  onClick={() => setPreviewText(null)}
+                  onClick={() => setPreviewText(undefined)}
                   className={
                     isDark
                       ? "rounded-full bg-gray-800 px-3 py-1 text-sm text-gray-100"
@@ -2684,6 +2710,8 @@ export default function Home() {
                   </button>
                 </div>
               </div>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -2824,7 +2852,7 @@ export default function Home() {
                                   type="button"
                                   onClick={(event) => {
                                     event.stopPropagation();
-                                    setPreviewText(video.id);
+                                    setPreviewText(Number(video.id));
                                   }}
                                   className={`group shrink-0 cursor-pointer overflow-hidden rounded-2xl ${video.ratio === "9:16" ? "h-20 w-14" : "h-16 w-28"}`}
                                 >
@@ -2893,7 +2921,7 @@ export default function Home() {
                                     </div>
                                   )}
                                   <div className="flex flex-wrap items-center gap-1.5">
-                                    <button onClick={(e) => { e.stopPropagation(); setPreviewText(video.id); }} className={isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>预览</button>
+                                    <button onClick={(e) => { e.stopPropagation(); setPreviewText(Number(video.id)); }} className={isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>预览</button>
                                     <button onClick={(e) => { e.stopPropagation(); handleCopy(video.item, video.id); }} className={isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>复制</button>
                                     <button onClick={(e) => { e.stopPropagation(); void handleDownload(video); }} className={isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>下载</button>
                                     <button onClick={(e) => { e.stopPropagation(); handleToggleFavorite(video.id); }} className={favorites.includes(video.id) ? "rounded-full bg-yellow-400 px-3 py-1 text-xs text-black" : isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>{favorites.includes(video.id) ? "已收藏" : "收藏"}</button>
