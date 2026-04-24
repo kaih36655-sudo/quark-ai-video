@@ -1927,38 +1927,32 @@ export default function Home() {
               >
                 <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
                   <div className="flex items-start gap-3">
-                    <div className={`relative group shrink-0 overflow-hidden rounded-2xl ${videoRatio === "9:16" ? "h-20 w-14" : "h-16 w-28"}`}>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setPreviewVideo({
+                          id,
+                          item,
+                          taskId,
+                          title,
+                          videoUrl,
+                          status,
+                          ratio: videoRatio,
+                          size: videoSize,
+                          seconds,
+                          duration: videoDuration,
+                          cost,
+                          upscaleStatus,
+                          upscaleErrorMessage,
+                          hasReferenceImage: taskHasRef,
+                          referenceImageName,
+                        });
+                      }}
+                      className={`group shrink-0 cursor-pointer overflow-hidden rounded-2xl ${videoRatio === "9:16" ? "h-20 w-14" : "h-16 w-28"}`}
+                    >
                       {renderVideoCover({ id, coverData, videoUrl, ratio: videoRatio, seconds, duration: videoDuration })}
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          setPreviewVideo({
-                            id,
-                            item,
-                            taskId,
-                            title,
-                            videoUrl,
-                            status,
-                            ratio: videoRatio,
-                            size: videoSize,
-                            seconds,
-                            duration: videoDuration,
-                            cost,
-                            upscaleStatus,
-                            upscaleErrorMessage,
-                            hasReferenceImage: taskHasRef,
-                            referenceImageName,
-                          });
-                        }}
-                        className="absolute inset-0 z-20 flex items-center justify-center"
-                        aria-label="预览视频"
-                      >
-                        <span className="flex h-9 w-9 items-center justify-center rounded-full bg-black/55 text-white transition-transform duration-200 group-hover:scale-110">
-                          ▶
-                        </span>
-                      </button>
-                    </div>
+                    </button>
 
                     <div className="min-w-0 space-y-2.5">
                       <div className="flex flex-wrap items-center gap-1.5">
