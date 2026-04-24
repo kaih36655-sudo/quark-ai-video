@@ -113,6 +113,15 @@ export default function Home() {
   console.log("[PAGE_CLIENT_BUILD_MARK]", PAGE_CLIENT_BUILD_MARK);
   const router = useRouter();
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (!url.searchParams.get("v")) {
+      url.searchParams.set("v", "999");
+      window.location.replace(url.toString());
+    }
+  }, []);
+
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [userId, setUserId] = useState("10293");
   const [balance] = useState("23.6");
