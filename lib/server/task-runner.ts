@@ -6,11 +6,196 @@ import { createSora2Task, downloadSora2Video, querySora2Task } from "./sora2";
 import { runRunningHubUpscaleWithPolling } from "./runninghub";
 import { enqueueUpscaleJob } from "./upscale-queue";
 import { extractCoverAt015FromVideoUrl } from "./video-cover-extractor";
+import {
+  PIPELINE_RETRY_BACKOFF_MS,
+  PIPELINE_RETRY_MAX_ATTEMPTS,
+  extractHttpStatusFromText,
+  isSora2GenerationNonRetryable,
+  isSora2GenerationRetryable,
+  isUpscaleNonRetryable,
+  isUpscaleRetryable,
+  pickLogCode,
+} from "./provider-retry-policy";
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const runnerLog = (stage: string, payload: Record<string, unknown>) => {
   console.log(`[TASK_RUNNER][${stage}]`, JSON.stringify(payload));
 };
+
+const sora2PipelineLog = (stage: "CREATE_RETRY" | "CREATE_FINAL_FAILED", payload: Record<string, unknown>) => {
+  console.log(`[SORA2][${stage}]`, JSON.stringify(payload));
+};
+
+const upscalePipelineLog = (stage: "RETRY" | "FINAL_FAILED", payload: Record<string, unknown>) => {
+  console.log(`[UPSCALE][${stage}]`, JSON.stringify(payload));
+};
+
+function resolveSoraSeconds(duration: string): number {
+  if (duration === "4s") return 4;
+  if (duration === "8s") return 8;
+  if (duration === "12s") return 12;
+  const numeric = Number(String(duration).replace(/[^\d]/g, ""));
+  if (numeric === 4 || numeric === 8 || numeric === 12) return numeric;
+  return 4;
+}
+
+type Sora2WaitResult = Awaited<ReturnType<typeof runSora2AndWait>>;
+type UpscalePollResult = Awaited<ReturnType<typeof runRunningHubUpscaleWithPolling>>;
+
+async function runSora2GenerationWithRetry(
+  prompt: string,
+  duration: string,
+  ratio: string,
+  imageUrl?: string
+): Promise<Sora2WaitResult> {
+  const max = PIPELINE_RETRY_MAX_ATTEMPTS;
+  let last: Sora2WaitResult = {
+    success: false,
+    providerTaskId: "",
+    errorMessage: "视频生成失败",
+    seconds: resolveSoraSeconds(duration),
+  };
+  for (let attempt = 1; attempt <= max; attempt += 1) {
+    try {
+      const r = await runSora2AndWait(prompt, duration, ratio, imageUrl);
+      if (r.success) return r;
+      last = r;
+      const msg = r.errorMessage || "视频生成失败";
+      if (isSora2GenerationNonRetryable(msg) || !isSora2GenerationRetryable(msg)) {
+        sora2PipelineLog("CREATE_FINAL_FAILED", {
+          attempt,
+          maxAttempts: max,
+          delayMs: 0,
+          status: String(extractHttpStatusFromText(msg) ?? "non_retryable"),
+          code: pickLogCode(msg),
+          message: msg,
+        });
+        return { ...r, errorMessage: msg };
+      }
+      if (attempt === max) break;
+      const delayMs = PIPELINE_RETRY_BACKOFF_MS[attempt - 1];
+      sora2PipelineLog("CREATE_RETRY", {
+        attempt,
+        maxAttempts: max,
+        delayMs,
+        status: String(extractHttpStatusFromText(msg) ?? "retryable"),
+        code: pickLogCode(msg),
+        message: msg,
+      });
+      await delay(delayMs);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      last = {
+        success: false as const,
+        providerTaskId: "",
+        errorMessage: msg,
+        seconds: resolveSoraSeconds(duration),
+      };
+      if (isSora2GenerationNonRetryable(msg) || !isSora2GenerationRetryable(msg, error)) {
+        sora2PipelineLog("CREATE_FINAL_FAILED", {
+          attempt,
+          maxAttempts: max,
+          delayMs: 0,
+          status: String(extractHttpStatusFromText(msg) ?? "non_retryable"),
+          code: pickLogCode(msg),
+          message: msg,
+        });
+        return last;
+      }
+      if (attempt === max) break;
+      const delayMs = PIPELINE_RETRY_BACKOFF_MS[attempt - 1];
+      sora2PipelineLog("CREATE_RETRY", {
+        attempt,
+        maxAttempts: max,
+        delayMs,
+        status: String(extractHttpStatusFromText(msg) ?? "retryable"),
+        code: pickLogCode(msg),
+        message: msg,
+      });
+      await delay(delayMs);
+    }
+  }
+  const msg = last.errorMessage || "视频生成失败";
+  sora2PipelineLog("CREATE_FINAL_FAILED", {
+    attempt: max,
+    maxAttempts: max,
+    delayMs: 0,
+    status: String(extractHttpStatusFromText(msg) ?? "exhausted"),
+    code: pickLogCode(msg),
+    message: msg,
+  });
+  return last;
+}
+
+async function runUpscaleWithRetries(originalVideoUrl: string): Promise<UpscalePollResult> {
+  const max = PIPELINE_RETRY_MAX_ATTEMPTS;
+  let last = { success: false as const, errorMessage: "超分失败" } as UpscalePollResult;
+  for (let attempt = 1; attempt <= max; attempt += 1) {
+    try {
+      const r = await runRunningHubUpscaleWithPolling(originalVideoUrl);
+      if (r.success) return r;
+      last = r;
+      const msg = r.errorMessage || "超分失败";
+      if (isUpscaleNonRetryable(msg) || !isUpscaleRetryable(msg)) {
+        upscalePipelineLog("FINAL_FAILED", {
+          attempt,
+          maxAttempts: max,
+          delayMs: 0,
+          status: String(extractHttpStatusFromText(msg) ?? "non_retryable"),
+          code: pickLogCode(msg),
+          message: msg,
+        });
+        return { ...r, errorMessage: msg };
+      }
+      if (attempt === max) break;
+      const delayMs = PIPELINE_RETRY_BACKOFF_MS[attempt - 1];
+      upscalePipelineLog("RETRY", {
+        attempt,
+        maxAttempts: max,
+        delayMs,
+        status: String(extractHttpStatusFromText(msg) ?? "retryable"),
+        code: pickLogCode(msg),
+        message: msg,
+      });
+      await delay(delayMs);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      last = { success: false as const, errorMessage: msg } as UpscalePollResult;
+      if (isUpscaleNonRetryable(msg) || !isUpscaleRetryable(msg, error)) {
+        upscalePipelineLog("FINAL_FAILED", {
+          attempt,
+          maxAttempts: max,
+          delayMs: 0,
+          status: String(extractHttpStatusFromText(msg) ?? "non_retryable"),
+          code: pickLogCode(msg),
+          message: msg,
+        });
+        return last;
+      }
+      if (attempt === max) break;
+      const delayMs = PIPELINE_RETRY_BACKOFF_MS[attempt - 1];
+      upscalePipelineLog("RETRY", {
+        attempt,
+        maxAttempts: max,
+        delayMs,
+        status: String(extractHttpStatusFromText(msg) ?? "retryable"),
+        code: pickLogCode(msg),
+        message: msg,
+      });
+      await delay(delayMs);
+    }
+  }
+  const msg = last.errorMessage || "超分失败";
+  upscalePipelineLog("FINAL_FAILED", {
+    attempt: max,
+    maxAttempts: max,
+    delayMs: 0,
+    status: String(extractHttpStatusFromText(msg) ?? "exhausted"),
+    code: pickLogCode(msg),
+    message: msg,
+  });
+  return last;
+}
 
 async function runSora2AndWait(prompt: string, duration: string, ratio: string, imageUrl?: string) {
   const seconds = (() => {
@@ -249,40 +434,230 @@ async function executeTask(taskId: string) {
   let failedCount = 0;
   const upscaleJobs: Promise<void>[] = [];
   for (let index = 0; index < task.count; index += 1) {
-    const scriptResult = await generateVideoScript({
-      theme: task.prompt,
-      duration: task.duration,
-      agentName: task.agentName,
-      agentDescription: agent?.description,
-      hasReferenceImage: Boolean(task.referenceImageUrl),
-      referenceImageName: task.referenceImageName,
-      index,
-    });
-    runnerLog("SCRIPT_READY", {
-      taskId: task.id,
-      index: index + 1,
-      title: scriptResult.title,
-      promptPreview: scriptResult.prompt.slice(0, 120),
-      scenesCount: scriptResult.scenes.length,
-    });
-    const latestTask = tasksRepository.getById(taskId);
-    if (!latestTask || latestTask.status === "cancelled") {
-      runnerLog("TASK_ABORTED", { taskId, reason: "task removed or cancelled during execution" });
-      return;
-    }
     const targetSize = task.ratio === "9:16" ? "720x1280" : "1280x720";
     const targetRatio = task.ratio === "9:16" ? "9:16" : "16:9";
-    const soraResult = await runSora2AndWait(scriptResult.prompt, task.duration, task.ratio, task.referenceImageUrl);
-    if (!soraResult.success) {
-      failedCount += 1;
-      videosRepository.createMany([
+    let scriptResult: Awaited<ReturnType<typeof generateVideoScript>> | null = null;
+    try {
+      scriptResult = await generateVideoScript({
+        theme: task.prompt,
+        duration: task.duration,
+        agentName: task.agentName,
+        agentDescription: agent?.description,
+        hasReferenceImage: Boolean(task.referenceImageUrl),
+        referenceImageName: task.referenceImageName,
+        index,
+      });
+      runnerLog("SCRIPT_READY", {
+        taskId: task.id,
+        index: index + 1,
+        title: scriptResult.title,
+        promptPreview: scriptResult.prompt.slice(0, 120),
+        scenesCount: scriptResult.scenes.length,
+      });
+      const latestTask = tasksRepository.getById(taskId);
+      if (!latestTask || latestTask.status === "cancelled") {
+        runnerLog("TASK_ABORTED", { taskId, reason: "task removed or cancelled during execution" });
+        return;
+      }
+      const soraResult = await runSora2GenerationWithRetry(scriptResult.prompt, task.duration, task.ratio, task.referenceImageUrl);
+      if (!soraResult.success) {
+        failedCount += 1;
+        videosRepository.createMany([
+          {
+            taskId: task.id,
+            providerTaskId: soraResult.providerTaskId,
+            title: `${scriptResult.title}（失败）`,
+            content: `视频${index + 1}：生成失败｜${soraResult.errorMessage || "未知错误"}`,
+            script: scriptResult.scenes,
+            prompt: scriptResult.prompt,
+            status: "failed" as const,
+            originalCoverUrl: "",
+            originalVideoUrl: "",
+            upscaledVideoUrl: "",
+            upscaledCoverUrl: "",
+            upscaleStatus: "idle" as const,
+            upscaleTaskId: "",
+            upscaleErrorMessage: "",
+            upscaleConsumeMoney: 0,
+            upscaleTaskCostTime: 0,
+            coverUrl: "",
+            previewImageUrl: "",
+            errorMessage: soraResult.errorMessage || "生成失败",
+            referenceImageUrl: task.referenceImageUrl,
+            referenceImageName: task.referenceImageName,
+            cost: 0,
+            seconds: soraResult.seconds,
+            duration: task.duration,
+            ratio: targetRatio,
+            size: targetSize,
+          },
+        ]);
+        runnerLog("VIDEO_FAILED_WRITE", {
+          taskId: task.id,
+          index: index + 1,
+          providerTaskId: soraResult.providerTaskId,
+          finalReason: soraResult.errorMessage || "生成失败",
+        });
+        continue;
+      }
+      successCount += 1;
+      const created = videosRepository.createMany([
         {
           taskId: task.id,
           providerTaskId: soraResult.providerTaskId,
-          title: `${scriptResult.title}（失败）`,
-          content: `视频${index + 1}：生成失败｜${soraResult.errorMessage || "未知错误"}`,
+          title: scriptResult.title,
+          content: `视频${index + 1}：${task.prompt}｜灵感参考：${scriptResult.scenes.join("｜")}${task.agentName ? `｜智能体：${task.agentName}` : ""}`,
           script: scriptResult.scenes,
           prompt: scriptResult.prompt,
+          status: "success" as const,
+          originalCoverUrl: soraResult.coverUrl || "",
+          originalVideoUrl: soraResult.videoUrl || "",
+          upscaledVideoUrl: "",
+          upscaledCoverUrl: "",
+          upscaleStatus: "queued" as const,
+          upscaleTaskId: "",
+          upscaleErrorMessage: "",
+          upscaleConsumeMoney: 0,
+          upscaleTaskCostTime: 0,
+          coverUrl: soraResult.coverUrl || "",
+          videoUrl: soraResult.videoUrl || "",
+          previewImageUrl: soraResult.videoUrl || "",
+          referenceImageUrl: task.referenceImageUrl,
+          referenceImageName: task.referenceImageName,
+          cost: 0.8,
+          seconds: soraResult.seconds,
+          duration: task.duration,
+          ratio: soraResult.ratio || targetRatio,
+          size: soraResult.size || targetSize,
+        },
+      ])[0];
+
+      runnerLog("VIDEO_SUCCESS_WRITE", {
+        taskId: task.id,
+        videoId: created.id,
+        index: index + 1,
+        providerTaskId: soraResult.providerTaskId,
+        enqueueUpscale: true,
+      });
+      void (async () => {
+        runnerLog("VIDEO_COVER_ASYNC_START", {
+          taskId: task.id,
+          videoId: created.id,
+          stage: "original",
+        });
+        try {
+          const sourceForCover = created.originalVideoUrl || created.videoUrl || created.previewImageUrl;
+          if (sourceForCover) {
+            const extracted = await extractCoverAt015FromVideoUrl({
+              videoId: created.id,
+              sourceVideoUrl: sourceForCover,
+              kind: "original",
+            });
+            videosRepository.updateCoverFields(created.id, {
+              originalCoverUrl: extracted.coverUrl,
+              coverUrl: extracted.coverUrl,
+            });
+          }
+        } catch (error) {
+          runnerLog("VIDEO_COVER_EXTRACT_FAILED", {
+            taskId: task.id,
+            videoId: created.id,
+            stage: "original",
+            errorMessage: error instanceof Error ? error.message : "封面抽帧失败",
+          });
+        }
+      })();
+
+      const upscaleJob = enqueueUpscaleJob(task.userId, { videoId: created.id, taskId: task.id }, async () => {
+        videosRepository.update(created.id, {
+          upscaleStatus: "processing",
+          upscaleErrorMessage: "",
+        });
+        let upscaleResult: UpscalePollResult;
+        try {
+          upscaleResult = await runUpscaleWithRetries(created.originalVideoUrl!);
+        } catch (error) {
+          upscaleResult = {
+            success: false as const,
+            errorMessage: error instanceof Error ? error.message : "超分任务异常",
+          } as UpscalePollResult;
+        }
+        if (upscaleResult.success) {
+          videosRepository.update(created.id, {
+            upscaledVideoUrl: upscaleResult.upscaledVideoUrl,
+            upscaledCoverUrl: upscaleResult.upscaledCoverUrl,
+            upscaleStatus: "success",
+            upscaleTaskId: upscaleResult.taskId,
+            upscaleErrorMessage: "",
+            upscaleConsumeMoney: upscaleResult.consumeMoney ?? 0,
+            upscaleTaskCostTime: upscaleResult.taskCostTime ?? 0,
+            videoUrl: upscaleResult.upscaledVideoUrl,
+            coverUrl: upscaleResult.upscaledCoverUrl || created.originalCoverUrl || "",
+            previewImageUrl: upscaleResult.upscaledVideoUrl,
+          });
+          void (async () => {
+            runnerLog("VIDEO_COVER_ASYNC_START", {
+              taskId: task.id,
+              videoId: created.id,
+              stage: "upscaled",
+            });
+            try {
+              const extracted = await extractCoverAt015FromVideoUrl({
+                videoId: created.id,
+                sourceVideoUrl: upscaleResult.upscaledVideoUrl,
+                kind: "upscaled",
+              });
+              videosRepository.updateCoverFields(created.id, {
+                upscaledCoverUrl: extracted.coverUrl,
+                coverUrl: extracted.coverUrl,
+              });
+            } catch (error) {
+              runnerLog("VIDEO_COVER_EXTRACT_FAILED", {
+                taskId: task.id,
+                videoId: created.id,
+                stage: "upscaled",
+                errorMessage: error instanceof Error ? error.message : "封面抽帧失败",
+              });
+            }
+          })();
+          return;
+        }
+        videosRepository.update(created.id, {
+          upscaleStatus: "failed",
+          upscaleTaskId: upscaleResult.taskId,
+          upscaleErrorMessage: upscaleResult.errorMessage,
+          upscaleConsumeMoney: upscaleResult.consumeMoney ?? 0,
+          upscaleTaskCostTime: upscaleResult.taskCostTime ?? 0,
+          videoUrl: created.originalVideoUrl,
+          coverUrl: created.originalCoverUrl || "",
+          previewImageUrl: created.originalVideoUrl,
+        });
+      }).then(
+        () => undefined,
+        (error) => {
+          runnerLog("UPSCALE_JOB_ERROR", {
+            taskId: task.id,
+            videoId: created.id,
+            errorMessage: error instanceof Error ? error.message : "超分队列任务异常",
+          });
+        }
+      );
+      upscaleJobs.push(upscaleJob);
+    } catch (error) {
+      failedCount += 1;
+      const errMsg = error instanceof Error ? error.message : String(error);
+      const sr = scriptResult;
+      const titleBase = sr?.title ?? `视频${index + 1}`;
+      const scenes = sr?.scenes ?? [];
+      const promptText = sr?.prompt ?? "";
+      videosRepository.createMany([
+        {
+          taskId: task.id,
+          providerTaskId: "",
+          title: `${titleBase}（失败）`,
+          content: `视频${index + 1}：生成异常｜${errMsg}`,
+          script: scenes,
+          prompt: promptText,
           status: "failed" as const,
           originalCoverUrl: "",
           originalVideoUrl: "",
@@ -295,11 +670,11 @@ async function executeTask(taskId: string) {
           upscaleTaskCostTime: 0,
           coverUrl: "",
           previewImageUrl: "",
-          errorMessage: soraResult.errorMessage || "生成失败",
+          errorMessage: errMsg,
           referenceImageUrl: task.referenceImageUrl,
           referenceImageName: task.referenceImageName,
           cost: 0,
-          seconds: soraResult.seconds,
+          seconds: resolveSoraSeconds(task.duration),
           duration: task.duration,
           ratio: targetRatio,
           size: targetSize,
@@ -308,156 +683,10 @@ async function executeTask(taskId: string) {
       runnerLog("VIDEO_FAILED_WRITE", {
         taskId: task.id,
         index: index + 1,
-        providerTaskId: soraResult.providerTaskId,
-        finalReason: soraResult.errorMessage || "生成失败",
+        providerTaskId: "",
+        finalReason: errMsg,
       });
-      continue;
     }
-    successCount += 1;
-    const created = videosRepository.createMany([
-      {
-        taskId: task.id,
-        providerTaskId: soraResult.providerTaskId,
-        title: scriptResult.title,
-        content: `视频${index + 1}：${task.prompt}｜灵感参考：${scriptResult.scenes.join("｜")}${task.agentName ? `｜智能体：${task.agentName}` : ""}`,
-        script: scriptResult.scenes,
-        prompt: scriptResult.prompt,
-        status: "success" as const,
-        originalCoverUrl: soraResult.coverUrl || "",
-        originalVideoUrl: soraResult.videoUrl || "",
-        upscaledVideoUrl: "",
-        upscaledCoverUrl: "",
-        upscaleStatus: "queued" as const,
-        upscaleTaskId: "",
-        upscaleErrorMessage: "",
-        upscaleConsumeMoney: 0,
-        upscaleTaskCostTime: 0,
-        coverUrl: soraResult.coverUrl || "",
-        videoUrl: soraResult.videoUrl || "",
-        previewImageUrl: soraResult.videoUrl || "",
-        referenceImageUrl: task.referenceImageUrl,
-        referenceImageName: task.referenceImageName,
-        cost: 0.8,
-        seconds: soraResult.seconds,
-        duration: task.duration,
-        ratio: soraResult.ratio || targetRatio,
-        size: soraResult.size || targetSize,
-      },
-    ])[0];
-
-    runnerLog("VIDEO_SUCCESS_WRITE", {
-      taskId: task.id,
-      videoId: created.id,
-      index: index + 1,
-      providerTaskId: soraResult.providerTaskId,
-      enqueueUpscale: true,
-    });
-    void (async () => {
-      runnerLog("VIDEO_COVER_ASYNC_START", {
-        taskId: task.id,
-        videoId: created.id,
-        stage: "original",
-      });
-      try {
-        const sourceForCover = created.originalVideoUrl || created.videoUrl || created.previewImageUrl;
-        if (sourceForCover) {
-          const extracted = await extractCoverAt015FromVideoUrl({
-            videoId: created.id,
-            sourceVideoUrl: sourceForCover,
-            kind: "original",
-          });
-          videosRepository.updateCoverFields(created.id, {
-            originalCoverUrl: extracted.coverUrl,
-            coverUrl: extracted.coverUrl,
-          });
-        }
-      } catch (error) {
-        runnerLog("VIDEO_COVER_EXTRACT_FAILED", {
-          taskId: task.id,
-          videoId: created.id,
-          stage: "original",
-          errorMessage: error instanceof Error ? error.message : "封面抽帧失败",
-        });
-      }
-    })();
-
-    const upscaleJob = enqueueUpscaleJob(task.userId, { videoId: created.id, taskId: task.id }, async () => {
-      videosRepository.update(created.id, {
-        upscaleStatus: "processing",
-        upscaleErrorMessage: "",
-      });
-      let upscaleResult:
-        | Awaited<ReturnType<typeof runRunningHubUpscaleWithPolling>>
-        | { success: false; taskId?: string; errorMessage: string; consumeMoney?: number; taskCostTime?: number };
-      try {
-        upscaleResult = await runRunningHubUpscaleWithPolling(created.originalVideoUrl!);
-      } catch (error) {
-        upscaleResult = {
-          success: false as const,
-          errorMessage: error instanceof Error ? error.message : "超分任务异常",
-        };
-      }
-      if (upscaleResult.success) {
-        videosRepository.update(created.id, {
-          upscaledVideoUrl: upscaleResult.upscaledVideoUrl,
-          upscaledCoverUrl: upscaleResult.upscaledCoverUrl,
-          upscaleStatus: "success",
-          upscaleTaskId: upscaleResult.taskId,
-          upscaleErrorMessage: "",
-          upscaleConsumeMoney: upscaleResult.consumeMoney ?? 0,
-          upscaleTaskCostTime: upscaleResult.taskCostTime ?? 0,
-          videoUrl: upscaleResult.upscaledVideoUrl,
-          coverUrl: upscaleResult.upscaledCoverUrl || created.originalCoverUrl || "",
-          previewImageUrl: upscaleResult.upscaledVideoUrl,
-        });
-        void (async () => {
-          runnerLog("VIDEO_COVER_ASYNC_START", {
-            taskId: task.id,
-            videoId: created.id,
-            stage: "upscaled",
-          });
-          try {
-            const extracted = await extractCoverAt015FromVideoUrl({
-              videoId: created.id,
-              sourceVideoUrl: upscaleResult.upscaledVideoUrl,
-              kind: "upscaled",
-            });
-            videosRepository.updateCoverFields(created.id, {
-              upscaledCoverUrl: extracted.coverUrl,
-              coverUrl: extracted.coverUrl,
-            });
-          } catch (error) {
-            runnerLog("VIDEO_COVER_EXTRACT_FAILED", {
-              taskId: task.id,
-              videoId: created.id,
-              stage: "upscaled",
-              errorMessage: error instanceof Error ? error.message : "封面抽帧失败",
-            });
-          }
-        })();
-        return;
-      }
-      videosRepository.update(created.id, {
-        upscaleStatus: "failed",
-        upscaleTaskId: upscaleResult.taskId,
-        upscaleErrorMessage: upscaleResult.errorMessage,
-        upscaleConsumeMoney: upscaleResult.consumeMoney ?? 0,
-        upscaleTaskCostTime: upscaleResult.taskCostTime ?? 0,
-        videoUrl: created.originalVideoUrl,
-        coverUrl: created.originalCoverUrl || "",
-        previewImageUrl: created.originalVideoUrl,
-      });
-    }).then(
-      () => undefined,
-      (error) => {
-        runnerLog("UPSCALE_JOB_ERROR", {
-          taskId: task.id,
-          videoId: created.id,
-          errorMessage: error instanceof Error ? error.message : "超分队列任务异常",
-        });
-      }
-    );
-    upscaleJobs.push(upscaleJob);
   }
 
   const latestTaskAfterLoop = tasksRepository.getById(taskId);
@@ -467,12 +696,23 @@ async function executeTask(taskId: string) {
   }
 
   void Promise.allSettled(upscaleJobs);
-  tasksRepository.update(taskId, { status: successCount > 0 ? "success" : "failed" });
-  runnerLog("TASK_FINISH", {
+
+  const taskVideos = videosRepository.listByTaskId(taskId);
+  const upscaleSuccessCount = taskVideos.filter((v) => v.status === "success" && v.upscaleStatus === "success").length;
+  const upscaleFailedCount = taskVideos.filter((v) => v.status === "success" && v.upscaleStatus === "failed").length;
+
+  const finalStatus = successCount > 0 ? "success" : "failed";
+  tasksRepository.update(taskId, { status: finalStatus });
+
+  runnerLog("TASK_SUMMARY", {
     taskId: task.id,
+    phase: "generation_complete",
+    total: task.count,
     successCount,
     failedCount,
-    finalStatus: successCount > 0 ? "success" : "failed",
+    upscaleSuccessCount,
+    upscaleFailedCount,
+    finalStatus,
   });
 }
 
