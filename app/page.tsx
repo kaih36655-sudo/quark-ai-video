@@ -1,6 +1,6 @@
 "use client";
 
-import { type ChangeEvent, useEffect, useRef, useState } from "react";
+import { type ChangeEvent, type MouseEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 type TaskStatus = "waiting" | "queued" | "running" | "success" | "failed" | "cancelled";
@@ -815,6 +815,12 @@ export default function Home() {
     setPreviewText(taskVideos[0].id);
   };
 
+  const openVideoPreview = (videoId?: number, event?: MouseEvent) => {
+    if (event) event.stopPropagation();
+    if (!videoId) return;
+    setPreviewText(videoId);
+  };
+
   const handleToggleFavorite = (taskId: number) => {
     setFavorites((prev) =>
       prev.includes(taskId)
@@ -1162,7 +1168,10 @@ export default function Home() {
     return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
   };
 
-  const renderVideoCover = (video: { id?: number; coverData?: string; coverUrl?: string; previewImageUrl?: string; videoUrl?: string; ratio?: "9:16" | "16:9"; seconds?: number; duration?: string } | null) => {
+  const renderVideoCover = (
+    video: { id?: number; coverData?: string; coverUrl?: string; previewImageUrl?: string; videoUrl?: string; ratio?: "9:16" | "16:9"; seconds?: number; duration?: string } | null,
+    onClick?: (event: MouseEvent) => void
+  ) => {
     const finalCoverSrc = normalizeReferenceImageSrc(video?.coverData);
     console.log("[GLOBAL_IMG_SRC_FIXED]", finalCoverSrc);
     console.log("[IMG_RENDER_SRC]", finalCoverSrc ?? "");
@@ -1182,24 +1191,23 @@ export default function Home() {
     }
     const isPortrait = video?.ratio === "9:16";
     const outerClass = isDark
-      ? "relative flex h-14 w-24 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-gray-700/90 bg-gradient-to-br from-[#1d1d22] via-[#23232a] to-[#101014]"
-      : "relative flex h-14 w-24 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-gray-200 bg-gradient-to-br from-gray-100 via-white to-gray-200";
-    const frameClass = isPortrait ? "h-[92%] w-[42%]" : "h-[62%] w-[92%]";
+      ? `group relative flex shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-gray-700/90 bg-gradient-to-br from-[#1d1d22] via-[#23232a] to-[#101014] transition-all duration-200 hover:-translate-y-0.5 hover:border-gray-500/80 hover:shadow-[0_10px_20px_rgba(0,0,0,0.28)] ${isPortrait ? "h-20 w-14" : "h-16 w-28"}`
+      : `group relative flex shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-gray-200 bg-gradient-to-br from-gray-100 via-white to-gray-200 transition-all duration-200 hover:-translate-y-0.5 hover:border-gray-300 hover:shadow-[0_10px_18px_rgba(15,23,42,0.12)] ${isPortrait ? "h-20 w-14" : "h-16 w-28"}`;
     return (
-      <div className={outerClass}>
+      <button type="button" onClick={onClick} className={outerClass}>
         <div className="absolute right-1.5 top-1.5 z-10 rounded-full bg-black/60 px-1.5 py-0.5 text-[9px] text-white">
           {getDurationLabel(video?.seconds, video?.duration)}
         </div>
-        <div className={`flex items-center justify-center overflow-hidden rounded-lg ${frameClass}`}>
+        <div className="h-full w-full overflow-hidden rounded-2xl">
           {hasCover ? (
-            <img src={finalCoverSrc ?? ""} alt="视频封面" className="h-full w-full object-contain object-center" />
+            <img src={finalCoverSrc ?? ""} alt="视频封面" className="h-full w-full object-cover object-center" />
           ) : (
             <div className={isDark ? "flex h-full w-full items-center justify-center bg-black/35 text-[10px] text-gray-300" : "flex h-full w-full items-center justify-center bg-white/70 text-[10px] text-gray-600"}>
               视频封面
             </div>
           )}
         </div>
-      </div>
+      </button>
     );
   };
 
@@ -1921,7 +1929,7 @@ export default function Home() {
               >
                 <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
                   <div className="flex items-start gap-3">
-                    {renderVideoCover({ id, coverData, videoUrl, ratio: videoRatio, seconds, duration: videoDuration })}
+                    {renderVideoCover({ id, coverData, videoUrl, ratio: videoRatio, seconds, duration: videoDuration }, (event) => openVideoPreview(id, event))}
 
                     <div className="min-w-0 space-y-2.5">
                       <div className="flex flex-wrap items-center gap-1.5">
@@ -2021,7 +2029,7 @@ export default function Home() {
                     <div className={isDark ? "w-full rounded-2xl border border-gray-800/90 bg-[#151519] p-2 shadow-inner shadow-black/15" : "w-full rounded-2xl border border-gray-200 bg-gray-50/80 p-2 shadow-inner shadow-gray-200/60"}>
                     <div className="grid w-full grid-cols-3 gap-2.5">
                       <button
-                        onClick={() => setPreviewText(id)}
+                        onClick={(event) => openVideoPreview(id, event)}
                         className={
                           isDark
                             ? "w-full whitespace-nowrap rounded-full border border-gray-700 bg-gray-800 px-3 py-1.5 text-center text-xs font-medium text-gray-100 transition-all duration-200 hover:bg-gray-700 hover:shadow-sm"
@@ -2810,16 +2818,10 @@ export default function Home() {
                               className={isDark ? `cursor-pointer rounded-2xl border p-2.5 transition-all duration-200 ${detailVideoId === video.id ? "border-indigo-400/70 bg-[#1a1a20] shadow-[0_8px_18px_rgba(79,70,229,0.16)]" : "border-gray-700 hover:-translate-y-0.5 hover:border-gray-600 hover:bg-[#1d1d23] hover:shadow-[0_8px_16px_rgba(0,0,0,0.2)]"}` : `cursor-pointer rounded-2xl border p-2.5 transition-all duration-200 ${detailVideoId === video.id ? "border-indigo-300 bg-indigo-50/40 shadow-[0_8px_16px_rgba(99,102,241,0.1)]" : "border-gray-200 bg-white hover:-translate-y-0.5 hover:border-gray-300 hover:shadow-[0_8px_16px_rgba(15,23,42,0.08)]"}`}
                             >
                               <div className="flex items-start gap-2">
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setPreviewText(video.id);
-                                  }}
-                                  className="shrink-0"
-                                >
-                                  {renderVideoCover({ id: video.id, coverData: video.coverData, videoUrl: video.videoUrl, ratio: video.ratio, seconds: video.seconds, duration: video.duration })}
-                                </button>
+                                {renderVideoCover(
+                                  { id: video.id, coverData: video.coverData, videoUrl: video.videoUrl, ratio: video.ratio, seconds: video.seconds, duration: video.duration },
+                                  (event) => openVideoPreview(video.id, event)
+                                )}
                                 <div className="min-w-0 flex-1">
                                   <div className="mb-1 flex flex-wrap items-center gap-2">
                                     <span className={isDark ? "rounded-full bg-gray-700 px-2 py-0.5 text-xs font-medium text-gray-200" : "rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600"}>
@@ -2883,7 +2885,7 @@ export default function Home() {
                                     </div>
                                   )}
                                   <div className="flex flex-wrap items-center gap-1.5">
-                                    <button onClick={(e) => { e.stopPropagation(); setPreviewText(video.id); }} className={isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>预览</button>
+                                    <button onClick={(e) => openVideoPreview(video.id, e)} className={isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>预览</button>
                                     <button onClick={(e) => { e.stopPropagation(); handleCopy(video.item, video.id); }} className={isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>复制</button>
                                     <button onClick={(e) => { e.stopPropagation(); void handleDownload(video); }} className={isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>下载</button>
                                     <button onClick={(e) => { e.stopPropagation(); handleToggleFavorite(video.id); }} className={favorites.includes(video.id) ? "rounded-full bg-yellow-400 px-3 py-1 text-xs text-black" : isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>{favorites.includes(video.id) ? "已收藏" : "收藏"}</button>
