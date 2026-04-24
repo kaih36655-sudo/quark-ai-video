@@ -1950,7 +1950,7 @@ export default function Home() {
                             referenceImageName,
                           });
                         }}
-                        className="absolute inset-0 z-30 flex items-center justify-center"
+                        className="absolute inset-0 z-30 flex items-center justify-center play-preview-btn"
                         aria-label="预览视频"
                       >
                         <span aria-label="预览视频" className="flex h-9 w-9 items-center justify-center rounded-full bg-black/60 text-white shadow-lg transition-transform duration-200 group-hover:scale-110">
