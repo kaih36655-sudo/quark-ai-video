@@ -5,6 +5,11 @@ import { resolvePlaybackSource, type PlaybackVariant } from "@/lib/server/video-
 
 export const runtime = "nodejs";
 
+const getAbsoluteUrl = (url: string, req: Request) => {
+  if (url.startsWith("http")) return url;
+  return new URL(url, req.url).toString();
+};
+
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   const variantParam = req.nextUrl.searchParams.get("variant");
@@ -45,7 +50,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       const lower = source.toLowerCase();
       if (lower.startsWith("/api/uploads/")) return true;
       try {
-        const parsed = new URL(source);
+        const parsed = new URL(getAbsoluteUrl(source, req));
         return parsed.pathname.toLowerCase().startsWith("/api/uploads/");
       } catch {
         return false;
@@ -64,7 +69,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     }
   }
 
-  const upstream = await fetchProviderVideo(playbackSource.url);
+  const finalUrl = getAbsoluteUrl(playbackSource.url, req);
+  const upstream = await fetchProviderVideo(finalUrl);
   if (!upstream.ok || !upstream.body) {
     return new NextResponse(`Upstream failed: ${upstream.status}`, { status: 502 });
   }
