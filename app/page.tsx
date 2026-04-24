@@ -1183,6 +1183,12 @@ export default function Home() {
       finalCoverSrc: finalCoverSrc ?? "",
     });
     const hasCover = Boolean(finalCoverSrc);
+    console.log("[REAL_COVER_RENDER_HIT]", {
+      videoId: video?.id,
+      hasCover,
+      ratio: video?.ratio,
+      clickEnabled: Boolean(onClick),
+    });
     if (!hasCover) {
       console.log("[VIDEO_COVER_FALLBACK]", {
         videoId: video?.id,
@@ -1191,8 +1197,8 @@ export default function Home() {
     }
     const isPortrait = video?.ratio === "9:16";
     const outerClass = isDark
-      ? `group relative flex shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-gray-700/90 bg-gradient-to-br from-[#1d1d22] via-[#23232a] to-[#101014] transition-all duration-200 hover:-translate-y-0.5 hover:border-gray-500/80 hover:shadow-[0_10px_20px_rgba(0,0,0,0.28)] ${isPortrait ? "h-20 w-14" : "h-16 w-28"}`
-      : `group relative flex shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-gray-200 bg-gradient-to-br from-gray-100 via-white to-gray-200 transition-all duration-200 hover:-translate-y-0.5 hover:border-gray-300 hover:shadow-[0_10px_18px_rgba(15,23,42,0.12)] ${isPortrait ? "h-20 w-14" : "h-16 w-28"}`;
+      ? `group relative flex shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-gray-700/90 ring-4 ring-red-500 bg-gradient-to-br from-[#1d1d22] via-[#23232a] to-[#101014] transition-all duration-200 hover:-translate-y-0.5 hover:border-gray-500/80 hover:shadow-[0_10px_20px_rgba(0,0,0,0.28)] ${isPortrait ? "h-24 w-16" : "h-20 w-32"}`
+      : `group relative flex shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-gray-200 ring-4 ring-red-500 bg-gradient-to-br from-gray-100 via-white to-gray-200 transition-all duration-200 hover:-translate-y-0.5 hover:border-gray-300 hover:shadow-[0_10px_18px_rgba(15,23,42,0.12)] ${isPortrait ? "h-24 w-16" : "h-20 w-32"}`;
     return (
       <button type="button" onClick={onClick} className={outerClass}>
         <div className="absolute right-1.5 top-1.5 z-10 rounded-full bg-black/60 px-1.5 py-0.5 text-[9px] text-white">
