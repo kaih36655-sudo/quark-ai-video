@@ -1191,7 +1191,7 @@ export default function Home() {
         <div className="absolute right-1.5 top-1.5 z-10 rounded-full bg-black/60 px-1.5 py-0.5 text-[9px] text-white">
           {getDurationLabel(video?.seconds, video?.duration)}
         </div>
-        <div className={`h-full w-full overflow-hidden rounded-2xl ${isPortrait ? "aspect-[9/16]" : "aspect-video"}`}>
+        <div className="h-full w-full overflow-hidden rounded-2xl">
           {hasCover ? (
             <img src={finalCoverSrc ?? ""} alt="视频封面" className="h-full w-full object-cover object-center" draggable={false} />
           ) : (
