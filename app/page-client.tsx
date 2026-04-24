@@ -3,6 +3,8 @@
 import { type ChangeEvent, type MouseEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
+const isClient = typeof window !== "undefined";
+
 type TaskStatus = "waiting" | "queued" | "running" | "success" | "failed" | "cancelled";
 
 type Task = {
@@ -273,6 +275,7 @@ export default function Home() {
 
   const normalizeDisplayUrl = (raw?: string): string | undefined => {
     if (!raw || typeof raw !== "string") return undefined;
+    if (!isClient) return raw;
     const value = raw.trim();
     if (!value) return undefined;
     if (value.startsWith("data:") || value.startsWith("blob:")) return value;
@@ -304,6 +307,7 @@ export default function Home() {
 
   const isLocalUploadsApiPath = (url?: string) => {
     if (!url) return false;
+    if (!isClient) return url.toLowerCase().startsWith("/api/uploads/");
     const lower = url.toLowerCase();
     if (lower.startsWith("/api/uploads/")) return true;
     try {
@@ -323,6 +327,7 @@ export default function Home() {
 
   function normalizeReferenceImageSrc(src?: string | null) {
     if (!src) return null;
+    if (!isClient) return src;
     return src;
   }
 
