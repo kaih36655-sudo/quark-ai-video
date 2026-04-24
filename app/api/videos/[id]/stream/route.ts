@@ -43,30 +43,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     })
   );
 
-  if (variant === "cover") {
-    const source = playbackSource.url;
-    const isLocalUploadsCover = (() => {
-      if (!source) return false;
-      const lower = source.toLowerCase();
-      if (lower.startsWith("/api/uploads/")) return true;
-      try {
-        const parsed = new URL(getAbsoluteUrl(source, req));
-        return parsed.pathname.toLowerCase().startsWith("/api/uploads/");
-      } catch {
-        return false;
-      }
-    })();
-    if (isLocalUploadsCover) {
-      if (source.startsWith("http://") || source.startsWith("https://")) {
-        return NextResponse.redirect(source, 302);
-      }
-      return new NextResponse(null, {
-        status: 302,
-        headers: {
-          Location: source,
-        },
-      });
-    }
+  if (variant === "cover" && playbackSource.url.toLowerCase().startsWith("/api/uploads/")) {
+    return NextResponse.redirect(playbackSource.url, 302);
   }
 
   const finalUrl = getAbsoluteUrl(playbackSource.url, req);
