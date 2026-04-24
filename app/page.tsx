@@ -308,8 +308,14 @@ export default function Home() {
     }
   };
 
+  const isLocalUploadsApiPath = (url?: string) => {
+    if (!url) return false;
+    return url.toLowerCase().startsWith("/api/uploads/");
+  };
+
   const shouldUseProxyForCover = (url?: string) => {
     if (!url) return false;
+    if (isLocalUploadsApiPath(url)) return false;
     const lower = url.toLowerCase();
     return lower.includes("yunwu.ai") || lower.startsWith("/api/");
   };
@@ -386,7 +392,12 @@ export default function Home() {
     const preferredCoverUrl = upscaledCoverUrl || resolvedCoverUrl || originalCoverUrl;
     const playbackId = String(video.id ?? "");
     const usePlaybackProxy = String(video.status ?? "") !== "failed" && playbackId.length > 0;
-    const needProtectedCoverProxy = Boolean(preferredCoverUrl && shouldUseProxyForCover(preferredCoverUrl) && playbackId.length > 0);
+    const needProtectedCoverProxy = Boolean(
+      preferredCoverUrl &&
+        !isLocalUploadsApiPath(preferredCoverUrl) &&
+        shouldUseProxyForCover(preferredCoverUrl) &&
+        playbackId.length > 0
+    );
     const effectiveCoverUrl = needProtectedCoverProxy ? `/api/videos/${playbackId}/stream?variant=cover` : preferredCoverUrl;
     console.log("[VIDEO_COVER_SOURCE]", {
       videoId: video.id,
@@ -1161,13 +1172,11 @@ export default function Home() {
       previewImageUrl: video?.previewImageUrl,
       finalCoverSrc: finalCoverSrc ?? "",
     });
-    const hasCover = Boolean(video?.coverData);
-    const hasVideo = Boolean(video?.videoUrl);
+    const hasCover = Boolean(finalCoverSrc);
     if (!hasCover) {
       console.log("[VIDEO_COVER_FALLBACK]", {
         videoId: video?.id,
-        reason: hasVideo ? "coverData为空，fallback到video标签" : "coverData和videoUrl都为空，fallback到占位符",
-        fallbackSrc: hasVideo ? video?.videoUrl ?? "" : "",
+        reason: "coverData为空，fallback到占位符",
       });
     }
     const isPortrait = video?.ratio === "9:16";
@@ -1183,8 +1192,6 @@ export default function Home() {
         <div className={`flex items-center justify-center overflow-hidden rounded-lg ${frameClass}`}>
           {hasCover ? (
             <img src={finalCoverSrc ?? ""} alt="视频封面" className="h-full w-full object-contain object-center" />
-          ) : hasVideo ? (
-            <video src={video?.videoUrl} muted preload="metadata" className="h-full w-full object-cover object-center" />
           ) : (
             <div className={isDark ? "flex h-full w-full items-center justify-center bg-black/35 text-[10px] text-gray-300" : "flex h-full w-full items-center justify-center bg-white/70 text-[10px] text-gray-600"}>
               视频封面
