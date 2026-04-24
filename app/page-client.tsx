@@ -3,6 +3,8 @@
 import { type ChangeEvent, type MouseEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
+export const __FORCE_BUILD_HASH__ = "force-build-20260424-v3";
+
 const isClient = typeof window !== "undefined";
 const PAGE_CLIENT_BUILD_MARK = "cover-preview-20260424-v2";
 
@@ -107,6 +109,7 @@ const AGENT_PROFILES: AgentProfile[] = [
 ];
 
 export default function Home() {
+  console.log("__FORCE_BUILD_HASH__", __FORCE_BUILD_HASH__);
   console.log("[PAGE_CLIENT_BUILD_MARK]", PAGE_CLIENT_BUILD_MARK);
   const router = useRouter();
 
