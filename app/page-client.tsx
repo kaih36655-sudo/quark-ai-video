@@ -122,7 +122,7 @@ export default function Home() {
   const [generateProgress, setGenerateProgress] = useState(0);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [videos, setVideos] = useState<Video[]>([]);
-  const [previewText, setPreviewText] = useState<number | undefined>(undefined);
+  const [previewVideo, setPreviewVideo] = useState<any>(null);
   const [referencePreviewOpen, setReferencePreviewOpen] = useState(false);
   const [referencePreviewTitle, setReferencePreviewTitle] = useState("");
   const [referencePreviewData, setReferencePreviewData] = useState<string | null>(null);
@@ -702,8 +702,8 @@ export default function Home() {
     if (taskDetailId === taskId) {
       setTaskDetailId(null);
     }
-    if (previewText !== undefined && relatedVideoIds.includes(previewText)) {
-      setPreviewText(undefined);
+    if (previewVideo && relatedVideoIds.includes(previewVideo.id)) {
+      setPreviewVideo(null);
     }
   };
 
@@ -770,7 +770,7 @@ export default function Home() {
     if (!confirmed) return;
     setTasks([]);
     setVideos([]);
-    setPreviewText(undefined);
+    setPreviewVideo(null);
     setCopiedTaskId(null);
     setIsPreviewCopied(false);
     setFavorites([]);
@@ -782,7 +782,7 @@ export default function Home() {
   };
 
   const handleRegenerate = (taskId: number) => {
-    setPreviewText(undefined);
+    setPreviewVideo(null);
     showToast(`已重新生成 ${makeTaskId(taskId)}`);
   };
 
@@ -812,7 +812,7 @@ export default function Home() {
       return;
     }
     setIsTaskDrawerOpen(false);
-    setPreviewText(Number(taskVideos[0].id));
+    setPreviewVideo(taskVideos[0]);
   };
 
   const handleToggleFavorite = (taskId: number) => {
@@ -1097,14 +1097,6 @@ export default function Home() {
       };
     });
 
-  const previewTask =
-    previewText !== undefined ? videoRecords.find((video) => Number(video.id) === Number(previewText)) ?? null : null;
-  console.log("[PREVIEW_TRIGGER]", previewText);
-  console.log(
-    "[PREVIEW_MATCH]",
-    previewText,
-    videoRecords.map((v) => v.id)
-  );
   const detailTask = taskDetailId ? taskRecords.find((task) => task.id === taskDetailId) ?? null : null;
   const detailVideos = detailTask ? videoRecords.filter((video) => video.taskId === detailTask.id) : [];
   const activeDetailVideo = detailVideos.find((video) => video.id === detailVideoId) ?? detailVideos[0] ?? null;
@@ -1935,7 +1927,12 @@ export default function Home() {
                       onClick={(event) => {
                         event.stopPropagation();
                         alert("COVER_CLICK_HIT_" + id);
-                        setPreviewText(Number(id));
+                        const video = videoRecords.find((v) => Number(v.id) === Number(id));
+                        if (video) {
+                          setPreviewVideo(video);
+                        } else {
+                          console.log("❌ 没找到 video", id, videoRecords.map((v) => v.id));
+                        }
                       }}
                       className={`group shrink-0 cursor-pointer overflow-hidden rounded-2xl ring-4 ring-red-500 bg-yellow-200 ${videoRatio === "9:16" ? "h-20 w-14" : "h-16 w-28"}`}
                     >
@@ -2040,7 +2037,14 @@ export default function Home() {
                     <div className={isDark ? "w-full rounded-2xl border border-gray-800/90 bg-[#151519] p-2 shadow-inner shadow-black/15" : "w-full rounded-2xl border border-gray-200 bg-gray-50/80 p-2 shadow-inner shadow-gray-200/60"}>
                     <div className="grid w-full grid-cols-3 gap-2.5">
                       <button
-                        onClick={() => setPreviewText(id)}
+                        onClick={() => {
+                          const video = videoRecords.find((v) => Number(v.id) === Number(id));
+                          if (video) {
+                            setPreviewVideo(video);
+                          } else {
+                            console.log("❌ 没找到 video", id, videoRecords.map((v) => v.id));
+                          }
+                        }}
                         className={
                           isDark
                             ? "w-full whitespace-nowrap rounded-full border border-gray-700 bg-gray-800 px-3 py-1.5 text-center text-xs font-medium text-gray-100 transition-all duration-200 hover:bg-gray-700 hover:shadow-sm"
@@ -2571,10 +2575,10 @@ export default function Home() {
             </div>
           </div>
         )}
-        {previewText !== undefined && (
+        {previewVideo && (
           <div
             className="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 px-4"
-            onClick={() => setPreviewText(undefined)}
+            onClick={() => setPreviewVideo(null)}
           >
             <div
               onClick={(e) => e.stopPropagation()}
@@ -2584,13 +2588,13 @@ export default function Home() {
                   : "w-full max-w-lg rounded-3xl border border-gray-200 bg-white p-6 shadow-xl"
               }
             >
-              {!previewTask ? (
+              {!previewVideo ? (
                 <div className="space-y-4">
                   <div className="text-lg font-semibold">视频预览</div>
                   <div className={isDark ? "text-sm text-gray-300" : "text-sm text-gray-600"}>未找到对应视频数据，请稍后重试。</div>
                   <div className="flex justify-end">
                     <button
-                      onClick={() => setPreviewText(undefined)}
+                      onClick={() => setPreviewVideo(null)}
                       className={
                         isDark
                           ? "rounded-full bg-gray-800 px-3 py-1 text-sm text-gray-100"
@@ -2607,17 +2611,17 @@ export default function Home() {
                 <div className="flex items-center gap-2">
                   <div className="text-lg font-semibold">视频预览</div>
                   <span className={isDark ? "rounded-full bg-gray-800 px-2 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-2 py-1 text-xs text-gray-600"}>
-                    {makeTaskId(previewTask.taskId)}
+                    {makeTaskId(previewVideo.taskId)}
                   </span>
-                  <span className={getStatusClass(previewTask.status)}>
-                    {statusLabelMap[previewTask.status]}
+                  <span className={getStatusClass(previewVideo.status as TaskStatus)}>
+                    {statusLabelMap[previewVideo.status as TaskStatus]}
                   </span>
-                  <span className={previewTask.upscaleStatus === "success" ? "rounded-full border border-emerald-400/70 bg-emerald-500/90 px-2 py-1 text-xs font-medium text-white" : previewTask.upscaleStatus === "failed" ? "rounded-full border border-rose-400/70 bg-rose-500/90 px-2 py-1 text-xs font-medium text-white" : previewTask.upscaleStatus === "processing" || previewTask.upscaleStatus === "pending" || previewTask.upscaleStatus === "queued" ? "rounded-full border border-amber-400/70 bg-amber-500/90 px-2 py-1 text-xs font-medium text-white" : isDark ? "rounded-full border border-gray-700/70 bg-gray-800/90 px-2 py-1 text-xs font-medium text-gray-300" : "rounded-full border border-gray-200 bg-gray-100 px-2 py-1 text-xs font-medium text-gray-600"}>
-                    {getUpscaleStatusLabel(previewTask.upscaleStatus)}
+                  <span className={previewVideo.upscaleStatus === "success" ? "rounded-full border border-emerald-400/70 bg-emerald-500/90 px-2 py-1 text-xs font-medium text-white" : previewVideo.upscaleStatus === "failed" ? "rounded-full border border-rose-400/70 bg-rose-500/90 px-2 py-1 text-xs font-medium text-white" : previewVideo.upscaleStatus === "processing" || previewVideo.upscaleStatus === "pending" || previewVideo.upscaleStatus === "queued" ? "rounded-full border border-amber-400/70 bg-amber-500/90 px-2 py-1 text-xs font-medium text-white" : isDark ? "rounded-full border border-gray-700/70 bg-gray-800/90 px-2 py-1 text-xs font-medium text-gray-300" : "rounded-full border border-gray-200 bg-gray-100 px-2 py-1 text-xs font-medium text-gray-600"}>
+                    {getUpscaleStatusLabel(previewVideo.upscaleStatus)}
                   </span>
                 </div>
                 <button
-                  onClick={() => setPreviewText(undefined)}
+                  onClick={() => setPreviewVideo(null)}
                   className={
                     isDark
                       ? "rounded-full bg-gray-800 px-3 py-1 text-sm text-gray-100"
@@ -2636,8 +2640,8 @@ export default function Home() {
                       : "relative h-52 overflow-hidden rounded-2xl border border-gray-200 bg-gray-50"
                   }
                 >
-                  {previewTask.videoUrl ? (
-                    <video src={previewTask.videoUrl} controls className="h-full w-full object-contain" />
+                  {previewVideo.videoUrl ? (
+                    <video src={previewVideo.videoUrl} controls className="h-full w-full object-contain" />
                   ) : (
                     <>
                       <div className={isDark ? "absolute inset-0 animate-pulse bg-gradient-to-r from-[#1f1f22] via-[#2a2a31] to-[#1f1f22]" : "absolute inset-0 animate-pulse bg-gradient-to-r from-gray-100 via-gray-200 to-gray-100"} />
@@ -2656,21 +2660,21 @@ export default function Home() {
                       预览状态：可查看
                     </span>
                     <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
-                      消耗：¥{previewTask.cost.toFixed(1)}
+                      消耗：¥{previewVideo.cost.toFixed(1)}
                     </span>
                     <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
-                      时长：{getDurationLabel(previewTask.seconds, previewTask.duration)}
+                      时长：{getDurationLabel(previewVideo.seconds, previewVideo.duration)}
                     </span>
                     <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
-                      比例：{getRatioLabel(previewTask.ratio, previewTask.size)}
+                      比例：{getRatioLabel(previewVideo.ratio, previewVideo.size)}
                     </span>
                     <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
-                      参考图：{previewTask.hasReferenceImage ? `已添加${previewTask.referenceImageName ? `（${previewTask.referenceImageName}）` : ""}` : "未添加"}
+                      参考图：{previewVideo.hasReferenceImage ? `已添加${previewVideo.referenceImageName ? `（${previewVideo.referenceImageName}）` : ""}` : "未添加"}
                     </span>
-                    {previewTask.upscaleStatus === "failed" && (
+                    {previewVideo.upscaleStatus === "failed" && (
                       <button
-                        onClick={() => handleRetryUpscale(previewTask.id)}
-                        title={previewTask.upscaleErrorMessage || "仅重试超分"}
+                        onClick={() => handleRetryUpscale(previewVideo.id)}
+                        title={previewVideo.upscaleErrorMessage || "仅重试超分"}
                         className="rounded-full bg-emerald-500 px-3 py-1 text-xs font-medium text-white transition hover:brightness-110"
                       >
                         重试超分
@@ -2685,13 +2689,13 @@ export default function Home() {
                         : "rounded-2xl border border-gray-200 bg-gray-50 p-4 text-sm leading-6 text-gray-700"
                     }
                   >
-                    {previewTask.item}
+                    {previewVideo.item}
                   </div>
                 </div>
 
                 <div className="flex flex-wrap items-center justify-end gap-2">
                   <button
-                    onClick={() => void handleDownload(previewTask)}
+                    onClick={() => void handleDownload(previewVideo)}
                     className={
                       isDark
                         ? "rounded-full bg-gray-800 px-4 py-2 text-sm font-medium text-gray-100"
@@ -2701,7 +2705,7 @@ export default function Home() {
                     下载
                   </button>
                   <button
-                    onClick={() => handleCopy(previewTask.item)}
+                    onClick={() => handleCopy(previewVideo.item)}
                     className={
                       isDark
                         ? "rounded-full bg-white px-4 py-2 text-sm font-medium text-black"
@@ -2854,7 +2858,12 @@ export default function Home() {
                                   type="button"
                                   onClick={(event) => {
                                     event.stopPropagation();
-                                    setPreviewText(Number(video.id));
+                                    const target = videoRecords.find((v) => Number(v.id) === Number(video.id));
+                                    if (target) {
+                                      setPreviewVideo(target);
+                                    } else {
+                                      console.log("❌ 没找到 video", video.id, videoRecords.map((v) => v.id));
+                                    }
                                   }}
                                   className={`group shrink-0 cursor-pointer overflow-hidden rounded-2xl ${video.ratio === "9:16" ? "h-20 w-14" : "h-16 w-28"}`}
                                 >
@@ -2923,7 +2932,7 @@ export default function Home() {
                                     </div>
                                   )}
                                   <div className="flex flex-wrap items-center gap-1.5">
-                                    <button onClick={(e) => { e.stopPropagation(); setPreviewText(Number(video.id)); }} className={isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>预览</button>
+                                    <button onClick={(e) => { e.stopPropagation(); const target = videoRecords.find((v) => Number(v.id) === Number(video.id)); if (target) { setPreviewVideo(target); } else { console.log("❌ 没找到 video", video.id, videoRecords.map((v) => v.id)); } }} className={isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>预览</button>
                                     <button onClick={(e) => { e.stopPropagation(); handleCopy(video.item, video.id); }} className={isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>复制</button>
                                     <button onClick={(e) => { e.stopPropagation(); void handleDownload(video); }} className={isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>下载</button>
                                     <button onClick={(e) => { e.stopPropagation(); handleToggleFavorite(video.id); }} className={favorites.includes(video.id) ? "rounded-full bg-yellow-400 px-3 py-1 text-xs text-black" : isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>{favorites.includes(video.id) ? "已收藏" : "收藏"}</button>
