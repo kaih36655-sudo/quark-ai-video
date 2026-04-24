@@ -1931,13 +1931,22 @@ export default function Home() {
                       type="button"
                       onClick={(event) => {
                         event.stopPropagation();
-                        alert("COVER_CLICK_HIT_" + id);
                         setPreviewVideo({
                           id,
+                          item,
+                          taskId,
+                          title,
                           videoUrl,
+                          status,
                           ratio: videoRatio,
+                          size: videoSize,
                           seconds,
                           duration: videoDuration,
+                          cost,
+                          upscaleStatus,
+                          upscaleErrorMessage,
+                          hasReferenceImage: taskHasRef,
+                          referenceImageName,
                         });
                       }}
                       className={`group shrink-0 cursor-pointer overflow-hidden rounded-2xl ring-4 ring-red-500 bg-yellow-200 ${videoRatio === "9:16" ? "h-20 w-14" : "h-16 w-28"}`}
@@ -2046,10 +2055,20 @@ export default function Home() {
                         onClick={() => {
                           setPreviewVideo({
                             id,
+                            item,
+                            taskId,
+                            title,
                             videoUrl,
+                            status,
                             ratio: videoRatio,
+                            size: videoSize,
                             seconds,
                             duration: videoDuration,
+                            cost,
+                            upscaleStatus,
+                            upscaleErrorMessage,
+                            hasReferenceImage: taskHasRef,
+                            referenceImageName,
                           });
                         }}
                         className={
