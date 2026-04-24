@@ -1821,6 +1821,7 @@ export default function Home() {
               <div>
                 <div className={isDark ? "text-sm font-medium text-gray-200" : "text-sm font-medium text-gray-700"}>
                   作品管理区
+                  <span className="ml-2 rounded bg-red-500 px-2 py-1 text-xs text-white">CLIENT_VERSION_20260424_COVER_TEST</span>
                 </div>
                 <div className={isDark ? "mt-1 text-sm text-gray-400" : "mt-1 text-sm text-gray-500"}>
                   当前显示 {pagedVisibleResults.length} / 筛选后 {visibleResults.length} / 总计 {videos.length} 条作品，当前收藏 {visibleFavoriteCount} 条，模式：{mode === "agent" ? "智能体批量视频" : mode === "normal" ? "通用视频" : "通用图片"}，参考图：{hasReferenceImage ? "已添加" : "未添加"}
@@ -1933,9 +1934,10 @@ export default function Home() {
                       type="button"
                       onClick={(event) => {
                         event.stopPropagation();
+                        alert("COVER_CLICK_HIT_" + id);
                         setPreviewText(Number(id));
                       }}
-                      className={`group shrink-0 cursor-pointer overflow-hidden rounded-2xl ${videoRatio === "9:16" ? "h-20 w-14" : "h-16 w-28"}`}
+                      className={`group shrink-0 cursor-pointer overflow-hidden rounded-2xl ring-4 ring-red-500 bg-yellow-200 ${videoRatio === "9:16" ? "h-20 w-14" : "h-16 w-28"}`}
                     >
                       {renderVideoCover({ id, coverData, videoUrl, ratio: videoRatio, seconds, duration: videoDuration })}
                     </button>
