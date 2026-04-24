@@ -4,6 +4,7 @@ import { type ChangeEvent, type MouseEvent, useEffect, useRef, useState } from "
 import { useRouter } from "next/navigation";
 
 const isClient = typeof window !== "undefined";
+const PAGE_CLIENT_BUILD_MARK = "cover-preview-20260424-v2";
 
 type TaskStatus = "waiting" | "queued" | "running" | "success" | "failed" | "cancelled";
 
@@ -106,6 +107,7 @@ const AGENT_PROFILES: AgentProfile[] = [
 ];
 
 export default function Home() {
+  console.log("[PAGE_CLIENT_BUILD_MARK]", PAGE_CLIENT_BUILD_MARK);
   const router = useRouter();
 
   const [isLoggedIn, setIsLoggedIn] = useState(false);
