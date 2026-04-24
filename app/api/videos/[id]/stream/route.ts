@@ -38,6 +38,25 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     })
   );
 
+  if (variant === "cover") {
+    const source = playbackSource.url;
+    const isLocalUploadsCover = (() => {
+      if (!source) return false;
+      const lower = source.toLowerCase();
+      if (lower.startsWith("/api/uploads/")) return true;
+      try {
+        const parsed = new URL(source);
+        return parsed.pathname.toLowerCase().startsWith("/api/uploads/");
+      } catch {
+        return false;
+      }
+    })();
+    if (isLocalUploadsCover) {
+      const redirectUrl = source.startsWith("http://") || source.startsWith("https://") ? source : new URL(source, req.nextUrl.origin).toString();
+      return NextResponse.redirect(redirectUrl, 302);
+    }
+  }
+
   const upstream = await fetchProviderVideo(playbackSource.url);
   if (!upstream.ok || !upstream.body) {
     return new NextResponse(`Upstream failed: ${upstream.status}`, { status: 502 });

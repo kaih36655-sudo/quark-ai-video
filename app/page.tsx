@@ -310,7 +310,14 @@ export default function Home() {
 
   const isLocalUploadsApiPath = (url?: string) => {
     if (!url) return false;
-    return url.toLowerCase().startsWith("/api/uploads/");
+    const lower = url.toLowerCase();
+    if (lower.startsWith("/api/uploads/")) return true;
+    try {
+      const parsed = new URL(url);
+      return parsed.pathname.toLowerCase().startsWith("/api/uploads/");
+    } catch {
+      return false;
+    }
   };
 
   const shouldUseProxyForCover = (url?: string) => {
