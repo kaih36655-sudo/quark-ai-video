@@ -277,21 +277,15 @@ export default function Home() {
     if (!value) return undefined;
     if (value.startsWith("data:") || value.startsWith("blob:")) return value;
 
-    const origin = typeof window !== "undefined" ? window.location.origin : "";
-    const withOrigin = (pathLike: string) => {
-      if (!origin) return pathLike;
-      return `${origin}${pathLike.startsWith("/") ? pathLike : `/${pathLike}`}`;
-    };
+    const toRelativePath = (pathLike: string) => (pathLike.startsWith("/") ? pathLike : `/${pathLike}`);
     const toApiUploadProxy = (pathLike: string) => {
       const clean = pathLike.split("?")[0].split("#")[0];
-      const filename = clean.split("/").pop();
-      if (!filename) return pathLike;
-      return `/api/uploads/${encodeURIComponent(filename)}`;
+      return clean.startsWith("/uploads/") ? `/api${clean}` : pathLike;
     };
 
     if (value.startsWith("/uploads/")) return toApiUploadProxy(value);
     if (value.startsWith("uploads/")) return toApiUploadProxy(`/${value}`);
-    if (value.startsWith("/")) return withOrigin(value);
+    if (value.startsWith("/")) return value;
     if (!value.startsWith("http://") && !value.startsWith("https://")) return value;
     try {
       const parsed = new URL(value);
@@ -300,7 +294,7 @@ export default function Home() {
       }
       const host = parsed.hostname.toLowerCase();
       if (host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0") {
-        return withOrigin(`${parsed.pathname}${parsed.search}${parsed.hash}`);
+        return toRelativePath(`${parsed.pathname}${parsed.search}${parsed.hash}`);
       }
       return parsed.toString();
     } catch {
