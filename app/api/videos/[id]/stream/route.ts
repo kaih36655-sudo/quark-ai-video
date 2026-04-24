@@ -44,7 +44,12 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   );
 
   if (variant === "cover" && playbackSource.url.toLowerCase().startsWith("/api/uploads/")) {
-    return NextResponse.redirect(playbackSource.url, 302);
+    return new NextResponse(null, {
+      status: 302,
+      headers: {
+        Location: playbackSource.url,
+      },
+    });
   }
 
   const finalUrl = getAbsoluteUrl(playbackSource.url, req);
