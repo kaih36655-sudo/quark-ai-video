@@ -23,6 +23,17 @@ const runnerLog = (stage: string, payload: Record<string, unknown>) => {
   console.log(`[TASK_RUNNER][${stage}]`, JSON.stringify(payload));
 };
 
+const stringifyUnknownError = (value: unknown): string => {
+  if (value instanceof Error) return value.message;
+  if (typeof value === "string") return value;
+  if (value === null || typeof value === "undefined") return "未知错误";
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
+
 const sora2PipelineLog = (stage: "CREATE_RETRY" | "CREATE_FINAL_FAILED", payload: Record<string, unknown>) => {
   console.log(`[SORA2][${stage}]`, JSON.stringify(payload));
 };
@@ -487,11 +498,12 @@ async function executeTask(taskId: string) {
           index: index + 1,
           providerTaskId: result.providerTaskId || "",
           model: result.model,
+          endpoint: result.endpoint,
           imageUrl: result.imageUrl,
         });
       } catch (error) {
         failedCount += 1;
-        const errorMessage = error instanceof Error ? error.message : "图片生成异常";
+        const errorMessage = stringifyUnknownError(error) || "图片生成异常";
         videosRepository.createMany([
           {
             kind: "image" as const,

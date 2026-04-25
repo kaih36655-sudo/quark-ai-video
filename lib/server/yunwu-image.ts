@@ -13,6 +13,7 @@ type GenerateYunwuImageResult = {
   imageUrl: string;
   providerTaskId?: string;
   model: string;
+  endpoint: string;
 };
 
 const UPLOADS_DIR = "/www/wwwroot/quark-video-git/public/uploads";
@@ -20,10 +21,12 @@ const IMAGE_UPLOAD_DIR = path.join(UPLOADS_DIR, "images");
 
 const getYunwuApiKey = () => process.env.YUNWU_API_KEY || process.env.SORA2_API_KEY || process.env.SORA_API_KEY || "";
 const getBaseUrl = () => (process.env.YUNWU_BASE_URL || process.env.SORA2_BASE_URL || "https://yunwu.ai").replace(/\/$/, "");
-const getTextToImagePath = () => process.env.YUNWU_TEXT_TO_IMAGE_PATH || "/v1/images/generations";
-const getImageToImagePath = () => process.env.YUNWU_IMAGE_TO_IMAGE_PATH || "/v1/images/edits";
 const getTextToImageModel = () => process.env.YUNWU_TEXT_TO_IMAGE_MODEL || "gemini-2.5-flash-image";
 const getImageToImageModel = () => process.env.YUNWU_IMAGE_TO_IMAGE_MODEL || "gemini-3-pro-image-preview";
+const getTextToImagePath = (model: string) =>
+  process.env.YUNWU_TEXT_TO_IMAGE_PATH || `/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+const getImageToImagePath = (model: string) =>
+  process.env.YUNWU_IMAGE_TO_IMAGE_PATH || `/v1beta/models/${encodeURIComponent(model)}:generateContent`;
 
 const log = (stage: string, payload: Record<string, unknown>) => {
   console.log(`[YUNWU_IMAGE][${stage}]`, JSON.stringify(payload));
@@ -43,6 +46,17 @@ const imageSizeForRatio = (ratio?: string) => (ratio === "9:16" ? "1024x1792" : 
 
 const joinUrl = (base: string, urlPath: string) => `${base}${urlPath.startsWith("/") ? "" : "/"}${urlPath}`;
 
+const stringifyUnknown = (value: unknown): string => {
+  if (value instanceof Error) return value.message;
+  if (typeof value === "string") return value;
+  if (value === null || typeof value === "undefined") return "";
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
+
 const contentTypeFromExt = (filePath: string) => {
   const ext = path.extname(filePath).toLowerCase();
   if (ext === ".png") return "image/png";
@@ -59,16 +73,51 @@ const localUploadPathFromUrl = (url: string) => {
   return path.join(UPLOADS_DIR, relative);
 };
 
-async function resolveReferenceImageInput(referenceImageUrl?: string) {
+async function resolveReferenceImageInlineData(referenceImageUrl?: string) {
   if (!referenceImageUrl) return undefined;
+  if (referenceImageUrl.startsWith("data:image/")) {
+    const [meta, encoded] = referenceImageUrl.split(",", 2);
+    const mimeType = meta.match(/^data:([^;]+);base64$/)?.[1] || "image/png";
+    return { mimeType, data: encoded || "" };
+  }
   const localPath = localUploadPathFromUrl(referenceImageUrl);
-  if (!localPath) return referenceImageUrl;
-  const bytes = await readFile(localPath);
-  return `data:${contentTypeFromExt(localPath)};base64,${Buffer.from(bytes).toString("base64")}`;
+  if (localPath) {
+    const bytes = await readFile(localPath);
+    return { mimeType: contentTypeFromExt(localPath), data: Buffer.from(bytes).toString("base64") };
+  }
+  if (/^https?:\/\//i.test(referenceImageUrl)) {
+    const response = await fetch(referenceImageUrl);
+    if (!response.ok) {
+      throw new Error(`参考图读取失败 status=${response.status}`);
+    }
+    const contentType = response.headers.get("content-type") || "image/png";
+    const bytes = Buffer.from(await response.arrayBuffer());
+    return { mimeType: contentType, data: bytes.toString("base64") };
+  }
+  throw new Error(`无法解析参考图地址：${referenceImageUrl}`);
 }
 
 const extractImageCandidate = (payload: Record<string, unknown> | null): string | undefined => {
   if (!payload) return undefined;
+  const candidates = payload.candidates;
+  if (Array.isArray(candidates)) {
+    for (const candidate of candidates) {
+      const content = asObject(asObject(candidate)?.content);
+      const parts = content?.parts;
+      if (!Array.isArray(parts)) continue;
+      for (const part of parts) {
+        const obj = asObject(part);
+        const inlineData = asObject(obj?.inlineData) || asObject(obj?.inline_data);
+        const imageData = pickString(inlineData?.data);
+        if (imageData) {
+          const mimeType = pickString(inlineData?.mimeType) || pickString(inlineData?.mime_type) || "image/png";
+          return `data:${mimeType};base64,${imageData}`;
+        }
+        const direct = pickString(obj?.url) || pickString(obj?.b64_json);
+        if (direct) return direct;
+      }
+    }
+  }
   const data = payload.data;
   if (Array.isArray(data)) {
     for (const item of data) {
@@ -138,18 +187,36 @@ export async function generateYunwuImage(params: GenerateYunwuImageParams): Prom
   }
   const mode: YunwuImageMode = params.referenceImageUrl ? "image-to-image" : "text-to-image";
   const model = mode === "image-to-image" ? getImageToImageModel() : getTextToImageModel();
-  const endpoint = joinUrl(getBaseUrl(), mode === "image-to-image" ? getImageToImagePath() : getTextToImagePath());
-  const body: Record<string, unknown> = {
-    model,
-    prompt: params.prompt,
-    size: imageSizeForRatio(params.ratio),
-    response_format: "url",
-  };
-  const referenceImageInput = await resolveReferenceImageInput(params.referenceImageUrl);
-  if (referenceImageInput) {
-    body.image = referenceImageInput;
-    body.images = [referenceImageInput];
+  const endpoint = joinUrl(getBaseUrl(), mode === "image-to-image" ? getImageToImagePath(model) : getTextToImagePath(model));
+  const parts: Record<string, unknown>[] = [
+    {
+      text: `${params.prompt}\n\nGenerate one image. Aspect ratio: ${params.ratio === "9:16" ? "9:16 vertical" : "16:9 horizontal"}.`,
+    },
+  ];
+  const referenceImageInlineData = await resolveReferenceImageInlineData(params.referenceImageUrl);
+  if (referenceImageInlineData) {
+    parts.push({
+      inline_data: {
+        mime_type: referenceImageInlineData.mimeType,
+        data: referenceImageInlineData.data,
+      },
+    });
   }
+  const body: Record<string, unknown> = {
+    contents: [
+      {
+        role: "user",
+        parts,
+      },
+    ],
+    generationConfig: {
+      responseModalities: ["IMAGE"],
+      imageConfig: {
+        aspectRatio: params.ratio === "9:16" ? "9:16" : "16:9",
+        size: imageSizeForRatio(params.ratio),
+      },
+    },
+  };
 
   log("REQUEST", {
     mode,
@@ -169,18 +236,31 @@ export async function generateYunwuImage(params: GenerateYunwuImageParams): Prom
     body: JSON.stringify(body),
   });
   const rawText = await response.text();
+  const contentType = response.headers.get("content-type") || "";
   let json: Record<string, unknown> | null = null;
   try {
     json = JSON.parse(rawText) as Record<string, unknown>;
   } catch {
     json = null;
   }
+  log("RESPONSE", {
+    status: response.status,
+    ok: response.ok,
+    contentType,
+    rawPreview: rawText.slice(0, 1200),
+    parsedJson: json,
+  });
   if (!response.ok || !json) {
-    throw new Error(String(json?.message || json?.error || `图片生成失败 status=${response.status} preview=${rawText.slice(0, 160)}`));
+    const parsedError = json?.error || json?.message;
+    throw new Error(
+      parsedError
+        ? `图片生成失败 status=${response.status} error=${stringifyUnknown(parsedError)}`
+        : `图片生成失败 status=${response.status} preview=${rawText.slice(0, 300)}`
+    );
   }
   const candidate = extractImageCandidate(json);
   if (!candidate) {
-    throw new Error("图片生成成功但未返回图片地址或 base64");
+    throw new Error(`图片生成成功但未返回图片地址或 base64 response=${stringifyUnknown(json)}`);
   }
   const imageUrl = await persistImage(candidate, apiKey);
   log("SUCCESS", {
@@ -193,5 +273,6 @@ export async function generateYunwuImage(params: GenerateYunwuImageParams): Prom
     imageUrl,
     providerTaskId: typeof json.id === "string" ? json.id : undefined,
     model,
+    endpoint,
   };
 }
