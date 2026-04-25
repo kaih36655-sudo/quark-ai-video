@@ -3,10 +3,7 @@
 import { type ChangeEvent, type MouseEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
-export const __FORCE_BUILD_HASH__ = "force-build-20260424-v3";
-
 const isClient = typeof window !== "undefined";
-const PAGE_CLIENT_BUILD_MARK = "cover-preview-20260424-v2";
 
 type TaskStatus = "waiting" | "queued" | "running" | "success" | "failed" | "cancelled";
 
@@ -31,6 +28,7 @@ type Task = {
 type Video = {
   id: number;
   taskId: number;
+  mediaType: "video" | "image";
   title?: string;
   content: string;
   script?: string[];
@@ -109,18 +107,7 @@ const AGENT_PROFILES: AgentProfile[] = [
 ];
 
 export default function Home() {
-  console.log("__FORCE_BUILD_HASH__", __FORCE_BUILD_HASH__);
-  console.log("[PAGE_CLIENT_BUILD_MARK]", PAGE_CLIENT_BUILD_MARK);
   const router = useRouter();
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const url = new URL(window.location.href);
-    if (!url.searchParams.get("v")) {
-      url.searchParams.set("v", "999");
-      window.location.replace(url.toString());
-    }
-  }, []);
 
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [userId, setUserId] = useState("10293");
@@ -248,24 +235,10 @@ export default function Home() {
     }
     if (savedReferenceImageData) {
       const restoredImageData = normalizeReferenceImageSrc(savedReferenceImageData);
-      console.log("[REF_RESTORE_IMAGE_DATA]", restoredImageData);
-      console.log("[REF_STATE_SET]", {
-        from: "init_localStorage_referenceImageData",
-        referenceImageData: restoredImageData,
-        referenceImageThumbData,
-        referencePreviewData,
-      });
       setReferenceImageData(restoredImageData);
     }
     if (savedReferenceImageThumbData) {
       const restoredThumbData = normalizeReferenceImageSrc(savedReferenceImageThumbData);
-      console.log("[REF_RESTORE_THUMB_DATA]", restoredThumbData);
-      console.log("[REF_STATE_SET]", {
-        from: "init_localStorage_referenceImageThumbData",
-        referenceImageData,
-        referenceImageThumbData: restoredThumbData,
-        referencePreviewData,
-      });
       setReferenceImageThumbData(restoredThumbData);
     }
     if (savedReferenceImageName) {
@@ -372,6 +345,7 @@ export default function Home() {
   });
 
   const mapApiVideoToLocal = (video: Record<string, unknown>): Video => {
+    const mediaType = video.kind === "image" || video.type === "image" ? "image" : "video";
     const rawSize =
       typeof video.size === "string"
         ? video.size
@@ -411,7 +385,7 @@ export default function Home() {
     const effectiveVideoUrl = upscaledVideoUrl || resolvedVideoUrl || originalVideoUrl;
     const preferredCoverUrl = upscaledCoverUrl || resolvedCoverUrl || originalCoverUrl;
     const playbackId = String(video.id ?? "");
-    const usePlaybackProxy = String(video.status ?? "") !== "failed" && playbackId.length > 0;
+    const usePlaybackProxy = mediaType === "video" && String(video.status ?? "") !== "failed" && playbackId.length > 0;
     const needProtectedCoverProxy = Boolean(
       preferredCoverUrl &&
         !isLocalUploadsApiPath(preferredCoverUrl) &&
@@ -419,16 +393,6 @@ export default function Home() {
         playbackId.length > 0
     );
     const effectiveCoverUrl = needProtectedCoverProxy ? `/api/videos/${playbackId}/stream?variant=cover` : preferredCoverUrl;
-    console.log("[VIDEO_COVER_SOURCE]", {
-      videoId: video.id,
-      upscaledCoverUrl: typeof video.upscaledCoverUrl === "string" ? video.upscaledCoverUrl : "",
-      coverUrl: typeof video.coverUrl === "string" ? video.coverUrl : "",
-      originalCoverUrl: typeof video.originalCoverUrl === "string" ? video.originalCoverUrl : "",
-      previewImageUrl: typeof video.previewImageUrl === "string" ? video.previewImageUrl : "",
-      upscaledVideoUrl: typeof video.upscaledVideoUrl === "string" ? video.upscaledVideoUrl : "",
-      originalVideoUrl: typeof video.originalVideoUrl === "string" ? video.originalVideoUrl : "",
-      finalCoverData: effectiveCoverUrl || "",
-    });
     const upscaleStatus = (() => {
       const raw = String(video.upscaleStatus ?? "").toLowerCase();
       if (
@@ -462,6 +426,7 @@ export default function Home() {
     return {
       id: Number(video.id ?? 0),
       taskId: Number(video.taskId ?? 0),
+      mediaType,
       title: typeof video.title === "string" ? video.title : undefined,
       content: String(video.content ?? ""),
       script: Array.isArray(video.script) ? (video.script as unknown[]).filter((v): v is string => typeof v === "string") : undefined,
@@ -483,7 +448,7 @@ export default function Home() {
       upscaleConsumeMoney: typeof video.upscaleConsumeMoney === "number" ? video.upscaleConsumeMoney : undefined,
       upscaleTaskCostTime: typeof video.upscaleTaskCostTime === "number" ? video.upscaleTaskCostTime : undefined,
       coverData: effectiveCoverUrl,
-      videoUrl: usePlaybackProxy ? `/api/videos/${playbackId}/stream` : effectiveVideoUrl,
+      videoUrl: mediaType === "image" ? effectiveVideoUrl : usePlaybackProxy ? `/api/videos/${playbackId}/stream` : effectiveVideoUrl,
       hasReferenceImage: Boolean(video.referenceImageUrl),
       referenceImageName: typeof video.referenceImageName === "string" ? video.referenceImageName : undefined,
     };
@@ -499,15 +464,6 @@ export default function Home() {
     const videoPayload = Array.isArray(listJson.data.videos) ? (listJson.data.videos as Record<string, unknown>[]) : [];
     const nextTasks = taskPayload.map(mapApiTaskToLocal);
     const nextVideos = videoPayload.map(mapApiVideoToLocal);
-    const noRealCoverCount = nextVideos.filter((video) => !video.coverData).length;
-    const coverProxyCount = nextVideos.filter((video) => typeof video.coverData === "string" && video.coverData.includes("/api/videos/") && video.coverData.includes("variant=cover")).length;
-    const fallbackToVideoCount = nextVideos.filter((video) => !video.coverData && Boolean(video.videoUrl)).length;
-    console.log("[VIDEO_COVER_STATS]", {
-      total: nextVideos.length,
-      noRealCoverCount,
-      coverProxyCount,
-      fallbackToVideoCount,
-    });
     setTasks(nextTasks);
     setVideos(nextVideos);
     return { tasks: nextTasks, videos: nextVideos };
@@ -592,7 +548,7 @@ export default function Home() {
           }, 200);
           if (taskStatus === "success") {
             const videosCount = snapshot.videos.filter((video) => String(video.taskId) === createdTaskId).length;
-            showToast(`已生成${videosCount}条视频`);
+            showToast(mode === "image" ? `已生成${videosCount}张图片` : `已生成${videosCount}条视频`);
           } else if (taskStatus === "failed") {
             showToast("任务执行失败");
           } else {
@@ -741,6 +697,7 @@ export default function Home() {
     taskId: number;
     videoUrl?: string;
     status?: "success" | "failed";
+    mediaType?: "video" | "image";
   }) => {
     const safeName = (video.title || `task-${video.taskId}`)
       .replace(/[\\/:*?"<>|]/g, "")
@@ -751,9 +708,9 @@ export default function Home() {
         const link = document.createElement("a");
         link.href = `/api/videos/${video.id}/download`;
         link.rel = "noopener noreferrer";
-        link.download = `${safeName || "video-task"}.mp4`;
+        link.download = video.mediaType === "image" ? `${safeName || "image-task"}.jpg` : `${safeName || "video-task"}.mp4`;
         link.click();
-        showToast("已开始下载视频");
+        showToast(video.mediaType === "image" ? "已开始下载图片" : "已开始下载视频");
         return;
       } catch {
         showToast("视频下载失败，已回退文本下载");
@@ -976,14 +933,6 @@ export default function Home() {
         }
         const rawUrl = String(json.data.url);
         const normalizedUrl = rawUrl;
-        console.log("[UPLOAD_RETURN_URL]", rawUrl);
-        console.log("[UPLOAD_NORMALIZED_URL]", normalizedUrl);
-        console.log("[REF_STATE_SET]", {
-          from: "upload_success",
-          referenceImageData: normalizedUrl,
-          referenceImageThumbData: normalizedUrl,
-          referencePreviewData,
-        });
         setReferenceImageData(normalizedUrl);
         setReferenceImageThumbData(normalizedUrl);
         setReferenceImageName(String(json.data.name || file.name));
@@ -996,12 +945,6 @@ export default function Home() {
   };
 
   const handleRemoveReferenceImage = () => {
-    console.log("[REF_STATE_SET]", {
-      from: "remove_reference_image",
-      referenceImageData: null,
-      referenceImageThumbData: null,
-      referencePreviewData,
-    });
     setReferenceImageData(null);
     setReferenceImageThumbData(null);
     setReferenceImageName("");
@@ -1088,6 +1031,7 @@ export default function Home() {
       return {
         id: video.id,
         taskId: video.taskId,
+        mediaType: video.mediaType,
         title: video.title,
         item: video.content,
         script: video.script,
@@ -1184,22 +1128,7 @@ export default function Home() {
     video: { id?: number; coverData?: string; coverUrl?: string; previewImageUrl?: string; videoUrl?: string; ratio?: "9:16" | "16:9"; seconds?: number; duration?: string } | null
   ) => {
     const finalCoverSrc = normalizeReferenceImageSrc(video?.coverData);
-    console.log("[GLOBAL_IMG_SRC_FIXED]", finalCoverSrc);
-    console.log("[IMG_RENDER_SRC]", finalCoverSrc ?? "");
-    console.log("[VIDEO_COVER_RENDER]", {
-      videoId: video?.id,
-      coverData: video?.coverData,
-      coverUrl: video?.coverUrl,
-      previewImageUrl: video?.previewImageUrl,
-      finalCoverSrc: finalCoverSrc ?? "",
-    });
     const hasCover = Boolean(finalCoverSrc);
-    if (!hasCover) {
-      console.log("[VIDEO_COVER_FALLBACK]", {
-        videoId: video?.id,
-        reason: "coverData为空，fallback到占位符",
-      });
-    }
     const isPortrait = video?.ratio === "9:16";
     const outerClass = isDark
       ? `relative flex h-full w-full items-center justify-center overflow-hidden rounded-2xl border border-gray-700/90 bg-gradient-to-br from-[#1d1d22] via-[#23232a] to-[#101014]`
@@ -1226,8 +1155,6 @@ export default function Home() {
     const displayImageData = referenceImageData ?? previewData;
     if (!displayImageData) return null;
     const finalSrc = normalizeReferenceImageSrc(displayImageData);
-    console.log("[GLOBAL_IMG_SRC_FIXED]", finalSrc);
-    console.log("[IMG_RENDER_SRC]", finalSrc ?? "");
     if (compact) {
       return (
         <img
@@ -1557,8 +1484,6 @@ export default function Home() {
                 <div className="flex flex-wrap items-center gap-3">
                   {(() => {
                     const finalSrc = normalizeReferenceImageSrc(referenceImageData);
-                    console.log("[GLOBAL_IMG_SRC_FIXED]", finalSrc);
-                    console.log("[IMG_RENDER_SRC]", finalSrc ?? "");
                     return <img src={finalSrc ?? ""} alt="参考图" className="h-14 w-14 rounded-xl object-cover" />;
                   })()}
                   <div className="space-y-1">
@@ -1929,7 +1854,7 @@ export default function Home() {
                       ? "暂无失败任务"
                       : "暂无任务记录"}
               </div>
-            ) : pagedVisibleResults.map(({ item, id, taskId, title, prompt: fromTaskPrompt, isFavorite, status, isLatestDone, cost, seconds, duration: videoDuration, upscaleStatus, upscaleErrorMessage, hasReferenceImage: taskHasRef, referenceImageName, referenceImageThumbData: taskRefThumbData, coverData, videoUrl, ratio: videoRatio, size: videoSize, kind, scheduledAt, createdAt, taskStatus, agentName }) => (
+            ) : pagedVisibleResults.map(({ item, id, taskId, mediaType, title, prompt: fromTaskPrompt, isFavorite, status, isLatestDone, cost, seconds, duration: videoDuration, upscaleStatus, upscaleErrorMessage, hasReferenceImage: taskHasRef, referenceImageName, referenceImageThumbData: taskRefThumbData, coverData, videoUrl, ratio: videoRatio, size: videoSize, kind, scheduledAt, createdAt, taskStatus, agentName }) => (
               <div
                 key={id}
                 className={
@@ -1951,6 +1876,7 @@ export default function Home() {
                             item,
                             taskId,
                             title,
+                            mediaType,
                             videoUrl,
                             status,
                             ratio: videoRatio,
@@ -1965,9 +1891,9 @@ export default function Home() {
                           });
                         }}
                         className="absolute inset-0 z-30 flex items-center justify-center play-preview-btn"
-                        aria-label="预览视频"
+                        aria-label={mediaType === "image" ? "预览图片" : "预览视频"}
                       >
-                        <span aria-label="预览视频" className="flex h-9 w-9 items-center justify-center rounded-full bg-black/60 text-white shadow-lg transition-transform duration-200 group-hover:scale-110">
+                        <span className="flex h-9 w-9 items-center justify-center rounded-full bg-black/60 text-white shadow-lg transition-transform duration-200 group-hover:scale-110">
                           ▶
                         </span>
                       </button>
@@ -1982,12 +1908,14 @@ export default function Home() {
                           消耗：¥{cost.toFixed(1)}
                         </span>
                         <span className={getStatusClass(status)}>
-                          状态：{statusLabelMap[status]}
+                          {statusLabelMap[status]}
                         </span>
-                        <span className={upscaleStatus === "success" ? "rounded-full border border-emerald-400/70 bg-emerald-500/90 px-2.5 py-1 text-[11px] font-medium text-white" : upscaleStatus === "failed" ? "rounded-full border border-rose-400/70 bg-rose-500/90 px-2.5 py-1 text-[11px] font-medium text-white" : upscaleStatus === "processing" || upscaleStatus === "pending" || upscaleStatus === "queued" ? "rounded-full border border-amber-400/70 bg-amber-500/90 px-2.5 py-1 text-[11px] font-medium text-white" : isDark ? "rounded-full border border-gray-700/70 bg-gray-800/90 px-2.5 py-1 text-[11px] font-medium text-gray-300" : "rounded-full border border-gray-200 bg-gray-100 px-2.5 py-1 text-[11px] font-medium text-gray-600"}>
-                          {getUpscaleStatusLabel(upscaleStatus)}
-                        </span>
-                        {upscaleStatus === "failed" && (
+                        {mediaType === "video" && (
+                          <span className={upscaleStatus === "success" ? "rounded-full border border-emerald-400/70 bg-emerald-500/90 px-2.5 py-1 text-[11px] font-medium text-white" : upscaleStatus === "failed" ? "rounded-full border border-rose-400/70 bg-rose-500/90 px-2.5 py-1 text-[11px] font-medium text-white" : upscaleStatus === "processing" || upscaleStatus === "pending" || upscaleStatus === "queued" ? "rounded-full border border-amber-400/70 bg-amber-500/90 px-2.5 py-1 text-[11px] font-medium text-white" : isDark ? "rounded-full border border-gray-700/70 bg-gray-800/90 px-2.5 py-1 text-[11px] font-medium text-gray-300" : "rounded-full border border-gray-200 bg-gray-100 px-2.5 py-1 text-[11px] font-medium text-gray-600"}>
+                            {getUpscaleStatusLabel(upscaleStatus)}
+                          </span>
+                        )}
+                        {mediaType === "video" && upscaleStatus === "failed" && (
                           <button
                             onClick={() => handleRetryUpscale(id)}
                             title={upscaleErrorMessage || "仅重试超分"}
@@ -2077,6 +2005,7 @@ export default function Home() {
                             item,
                             taskId,
                             title,
+                            mediaType,
                             videoUrl,
                             status,
                             ratio: videoRatio,
@@ -2111,11 +2040,11 @@ export default function Home() {
                       </button>
 
                       <button
-                        onClick={() => void handleDownload({ id, item, title, taskId, videoUrl, status })}
+                        onClick={() => void handleDownload({ id, item, title, taskId, mediaType, videoUrl, status })}
                         className={
                           isDark
-                            ? "w-full whitespace-nowrap rounded-full border border-gray-700 bg-gray-800 px-3 py-1.5 text-center text-xs font-medium text-gray-100 transition-all duration-200 hover:bg-gray-700 hover:shadow-sm"
-                            : "w-full whitespace-nowrap rounded-full border border-gray-200 bg-gray-100 px-3 py-1.5 text-center text-xs font-medium text-gray-700 transition-all duration-200 hover:bg-white hover:shadow-sm"
+                            ? "w-full whitespace-nowrap rounded-full border border-white/15 bg-white px-3 py-1.5 text-center text-xs font-semibold text-black transition-all duration-200 hover:bg-gray-100 hover:shadow-sm"
+                            : "w-full whitespace-nowrap rounded-full bg-black px-3 py-1.5 text-center text-xs font-semibold text-white transition-all duration-200 hover:bg-gray-900 hover:shadow-sm"
                         }
                       >
                         下载
@@ -2125,8 +2054,8 @@ export default function Home() {
                         onClick={() => handleCopy(item, id)}
                         className={
                           isDark
-                            ? "w-full whitespace-nowrap rounded-full bg-white px-3 py-1.5 text-center text-xs font-semibold text-black transition duration-200 hover:brightness-110 hover:shadow-sm"
-                            : "w-full whitespace-nowrap rounded-full bg-black/90 px-3 py-1.5 text-center text-xs font-semibold text-white transition duration-200 hover:bg-black hover:shadow-sm"
+                            ? "w-full whitespace-nowrap rounded-full border border-gray-700 bg-gray-800 px-3 py-1.5 text-center text-xs font-medium text-gray-100 transition duration-200 hover:bg-gray-700 hover:shadow-sm"
+                            : "w-full whitespace-nowrap rounded-full border border-gray-200 bg-gray-100 px-3 py-1.5 text-center text-xs font-medium text-gray-700 transition duration-200 hover:bg-white hover:shadow-sm"
                         }
                       >
                         {copiedTaskId === id ? "已复制✓" : "复制文案"}
@@ -2147,7 +2076,11 @@ export default function Home() {
 
                       <button
                         onClick={() => handleDeleteResult(id)}
-                        className="w-full whitespace-nowrap rounded-full bg-red-500 px-3 py-1.5 text-center text-xs font-medium text-white transition duration-200 hover:bg-red-600 hover:shadow-sm"
+                        className={
+                          isDark
+                            ? "w-full whitespace-nowrap rounded-full border border-gray-700 bg-gray-800 px-3 py-1.5 text-center text-xs font-medium text-gray-100 transition duration-200 hover:bg-gray-700 hover:shadow-sm"
+                            : "w-full whitespace-nowrap rounded-full border border-gray-200 bg-gray-100 px-3 py-1.5 text-center text-xs font-medium text-gray-700 transition duration-200 hover:bg-white hover:shadow-sm"
+                        }
                       >
                         删除
                       </button>
@@ -2169,12 +2102,6 @@ export default function Home() {
                         onClick={() => {
                           const normalizedPreview = normalizeReferenceImageSrc(taskRefThumbData);
                           setReferencePreviewTitle(referenceImageName || "参考图预览");
-                          console.log("[REF_STATE_SET]", {
-                            from: "result_list_set_referencePreviewData",
-                            referenceImageData,
-                            referenceImageThumbData,
-                            referencePreviewData: normalizedPreview,
-                          });
                           setReferencePreviewData(normalizedPreview);
                           setReferencePreviewOpen(true);
                         }}
@@ -2186,8 +2113,6 @@ export default function Home() {
                       >
                         {(() => {
                           const finalSrc = normalizeReferenceImageSrc(taskRefThumbData);
-                          console.log("[GLOBAL_IMG_SRC_FIXED]", finalSrc);
-                          console.log("[IMG_RENDER_SRC]", finalSrc ?? "");
                           return (
                         <img
                           src={finalSrc ?? ""}
@@ -2411,7 +2336,7 @@ export default function Home() {
                   </span>
                   <button
                     onClick={handleBatchDelete}
-                    className="rounded-full bg-red-500 px-3 py-1.5 text-xs font-medium text-white transition hover:brightness-110"
+                    className={isDark ? "rounded-full border border-gray-700 bg-gray-800 px-3 py-1.5 text-xs font-medium text-gray-100 transition hover:bg-gray-700" : "rounded-full border border-gray-200 bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-white"}
                   >
                     批量删除
                   </button>
@@ -2572,7 +2497,7 @@ export default function Home() {
                                 e.stopPropagation();
                                 handleDeleteTask(id);
                               }}
-                              className="rounded-full bg-red-500 px-3 py-1.5 text-xs font-medium text-white transition hover:brightness-110"
+                              className={isDark ? "rounded-full border border-gray-700 bg-gray-800 px-3 py-1.5 text-xs font-medium text-gray-100 transition hover:bg-gray-700" : "rounded-full border border-gray-200 bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-white"}
                             >
                               删除
                             </button>
@@ -2635,7 +2560,7 @@ export default function Home() {
             >
               {!previewVideo ? (
                 <div className="space-y-4">
-                  <div className="text-lg font-semibold">视频预览</div>
+                  <div className="text-lg font-semibold">{previewVideo.mediaType === "image" ? "图片预览" : "视频预览"}</div>
                   <div className={isDark ? "text-sm text-gray-300" : "text-sm text-gray-600"}>未找到对应视频数据，请稍后重试。</div>
                   <div className="flex justify-end">
                     <button
@@ -2661,9 +2586,11 @@ export default function Home() {
                   <span className={getStatusClass(previewVideo.status as TaskStatus)}>
                     {statusLabelMap[previewVideo.status as TaskStatus]}
                   </span>
-                  <span className={previewVideo.upscaleStatus === "success" ? "rounded-full border border-emerald-400/70 bg-emerald-500/90 px-2 py-1 text-xs font-medium text-white" : previewVideo.upscaleStatus === "failed" ? "rounded-full border border-rose-400/70 bg-rose-500/90 px-2 py-1 text-xs font-medium text-white" : previewVideo.upscaleStatus === "processing" || previewVideo.upscaleStatus === "pending" || previewVideo.upscaleStatus === "queued" ? "rounded-full border border-amber-400/70 bg-amber-500/90 px-2 py-1 text-xs font-medium text-white" : isDark ? "rounded-full border border-gray-700/70 bg-gray-800/90 px-2 py-1 text-xs font-medium text-gray-300" : "rounded-full border border-gray-200 bg-gray-100 px-2 py-1 text-xs font-medium text-gray-600"}>
-                    {getUpscaleStatusLabel(previewVideo.upscaleStatus)}
-                  </span>
+                  {previewVideo.mediaType !== "image" && (
+                    <span className={previewVideo.upscaleStatus === "success" ? "rounded-full border border-emerald-400/70 bg-emerald-500/90 px-2 py-1 text-xs font-medium text-white" : previewVideo.upscaleStatus === "failed" ? "rounded-full border border-rose-400/70 bg-rose-500/90 px-2 py-1 text-xs font-medium text-white" : previewVideo.upscaleStatus === "processing" || previewVideo.upscaleStatus === "pending" || previewVideo.upscaleStatus === "queued" ? "rounded-full border border-amber-400/70 bg-amber-500/90 px-2 py-1 text-xs font-medium text-white" : isDark ? "rounded-full border border-gray-700/70 bg-gray-800/90 px-2 py-1 text-xs font-medium text-gray-300" : "rounded-full border border-gray-200 bg-gray-100 px-2 py-1 text-xs font-medium text-gray-600"}>
+                      {getUpscaleStatusLabel(previewVideo.upscaleStatus)}
+                    </span>
+                  )}
                 </div>
                 <button
                   onClick={() => setPreviewVideo(null)}
@@ -2686,13 +2613,17 @@ export default function Home() {
                   }
                 >
                   {previewVideo.videoUrl ? (
-                    <video src={previewVideo.videoUrl} controls className="h-full w-full object-contain" />
+                    previewVideo.mediaType === "image" ? (
+                      <img src={previewVideo.videoUrl} alt={previewVideo.title || "生成图片"} className="h-full w-full object-contain" />
+                    ) : (
+                      <video src={previewVideo.videoUrl} controls className="h-full w-full object-contain" />
+                    )
                   ) : (
                     <>
                       <div className={isDark ? "absolute inset-0 animate-pulse bg-gradient-to-r from-[#1f1f22] via-[#2a2a31] to-[#1f1f22]" : "absolute inset-0 animate-pulse bg-gradient-to-r from-gray-100 via-gray-200 to-gray-100"} />
                       <div className="relative z-10 flex h-full items-center justify-center text-sm">
                         <div className={isDark ? "rounded-full bg-black/50 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-white/80 px-3 py-1 text-xs text-gray-600"}>
-                          视频资源加载中...
+                          {previewVideo.mediaType === "image" ? "图片资源加载中..." : "视频资源加载中..."}
                         </div>
                       </div>
                     </>
@@ -2716,7 +2647,7 @@ export default function Home() {
                     <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
                       参考图：{previewVideo.hasReferenceImage ? `已添加${previewVideo.referenceImageName ? `（${previewVideo.referenceImageName}）` : ""}` : "未添加"}
                     </span>
-                    {previewVideo.upscaleStatus === "failed" && (
+                    {previewVideo.mediaType !== "image" && previewVideo.upscaleStatus === "failed" && (
                       <button
                         onClick={() => handleRetryUpscale(previewVideo.id)}
                         title={previewVideo.upscaleErrorMessage || "仅重试超分"}
@@ -2743,8 +2674,8 @@ export default function Home() {
                     onClick={() => void handleDownload(previewVideo)}
                     className={
                       isDark
-                        ? "rounded-full bg-gray-800 px-4 py-2 text-sm font-medium text-gray-100"
-                        : "rounded-full bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700"
+                        ? "rounded-full border border-white/15 bg-white px-4 py-2 text-sm font-semibold text-black"
+                        : "rounded-full bg-black px-4 py-2 text-sm font-semibold text-white"
                     }
                   >
                     下载
@@ -2753,8 +2684,8 @@ export default function Home() {
                     onClick={() => handleCopy(previewVideo.item)}
                     className={
                       isDark
-                        ? "rounded-full bg-white px-4 py-2 text-sm font-medium text-black"
-                        : "rounded-full bg-black px-4 py-2 text-sm font-medium text-white"
+                        ? "rounded-full border border-gray-700 bg-gray-800 px-4 py-2 text-sm font-medium text-gray-100"
+                        : "rounded-full border border-gray-200 bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700"
                     }
                   >
                     {isPreviewCopied ? "已复制✓" : "复制文案"}
@@ -2772,12 +2703,6 @@ export default function Home() {
             className="fixed inset-0 z-[95] flex items-center justify-center bg-black/60 px-4"
             onClick={() => {
               setReferencePreviewOpen(false);
-              console.log("[REF_STATE_SET]", {
-                from: "reference_preview_overlay_close",
-                referenceImageData,
-                referenceImageThumbData,
-                referencePreviewData: null,
-              });
               setReferencePreviewData(null);
             }}
           >
@@ -2790,12 +2715,6 @@ export default function Home() {
                 <button
                   onClick={() => {
                     setReferencePreviewOpen(false);
-                    console.log("[REF_STATE_SET]", {
-                      from: "reference_preview_close_header",
-                      referenceImageData,
-                      referenceImageThumbData,
-                      referencePreviewData: null,
-                    });
                     setReferencePreviewData(null);
                   }}
                   className={isDark ? "rounded-full bg-gray-800 px-3 py-1.5 text-xs text-gray-100" : "rounded-full bg-gray-100 px-3 py-1.5 text-xs text-gray-700"}
@@ -2806,8 +2725,6 @@ export default function Home() {
               <div className={isDark ? "max-h-[72vh] overflow-auto rounded-2xl border border-gray-800 bg-[#18181b] p-2" : "max-h-[72vh] overflow-auto rounded-2xl border border-gray-200 bg-gray-50 p-2"}>
                 {(() => {
                   const finalSrc = normalizeReferenceImageSrc(referencePreviewData);
-                  console.log("[GLOBAL_IMG_SRC_FIXED]", finalSrc);
-                  console.log("[IMG_RENDER_SRC]", finalSrc ?? "");
                   return <img src={finalSrc ?? ""} alt="参考图大图预览" className="max-h-[68vh] w-full rounded-xl object-contain" />;
                 })()}
               </div>

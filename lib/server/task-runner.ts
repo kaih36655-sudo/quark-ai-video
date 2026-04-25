@@ -4,6 +4,7 @@ import { Task } from "./types";
 import { generateVideoScript } from "./gpt";
 import { createSora2Task, downloadSora2Video, querySora2Task } from "./sora2";
 import { runRunningHubUpscaleWithPolling } from "./runninghub";
+import { generateYunwuImage } from "./yunwu-image";
 import { enqueueUpscaleJob } from "./upscale-queue";
 import { extractCoverAt015FromVideoUrl } from "./video-cover-extractor";
 import {
@@ -433,6 +434,121 @@ async function executeTask(taskId: string) {
   let successCount = 0;
   let failedCount = 0;
   const upscaleJobs: Promise<void>[] = [];
+  if (task.mode === "image") {
+    for (let index = 0; index < task.count; index += 1) {
+      const latestTask = tasksRepository.getById(taskId);
+      if (!latestTask || latestTask.status === "cancelled") {
+        runnerLog("TASK_ABORTED", { taskId, reason: "image task removed or cancelled during execution" });
+        return;
+      }
+      const targetRatio = task.ratio === "9:16" ? "9:16" : "16:9";
+      const targetSize = task.ratio === "9:16" ? "1024x1792" : "1792x1024";
+      try {
+        const result = await generateYunwuImage({
+          prompt: task.prompt,
+          referenceImageUrl: task.referenceImageUrl,
+          ratio: task.ratio,
+        });
+        successCount += 1;
+        const created = videosRepository.createMany([
+          {
+            kind: "image" as const,
+            taskId: task.id,
+            providerTaskId: result.providerTaskId,
+            title: `图片${index + 1}：${task.prompt.slice(0, 32)}`,
+            content: `图片${index + 1}：${task.prompt}${task.referenceImageName ? `｜参考图：${task.referenceImageName}` : ""}`,
+            script: [],
+            prompt: task.prompt,
+            status: "success" as const,
+            originalCoverUrl: result.imageUrl,
+            originalVideoUrl: "",
+            upscaledVideoUrl: "",
+            upscaledCoverUrl: "",
+            upscaleStatus: "idle" as const,
+            upscaleTaskId: "",
+            upscaleErrorMessage: "",
+            upscaleConsumeMoney: 0,
+            upscaleTaskCostTime: 0,
+            coverUrl: result.imageUrl,
+            videoUrl: result.imageUrl,
+            previewImageUrl: result.imageUrl,
+            referenceImageUrl: task.referenceImageUrl,
+            referenceImageName: task.referenceImageName,
+            cost: 0,
+            seconds: 0,
+            duration: task.duration,
+            ratio: targetRatio,
+            size: targetSize,
+          },
+        ])[0];
+        runnerLog("IMAGE_SUCCESS_WRITE", {
+          taskId: task.id,
+          videoId: created.id,
+          index: index + 1,
+          providerTaskId: result.providerTaskId || "",
+          model: result.model,
+          imageUrl: result.imageUrl,
+        });
+      } catch (error) {
+        failedCount += 1;
+        const errorMessage = error instanceof Error ? error.message : "图片生成异常";
+        videosRepository.createMany([
+          {
+            kind: "image" as const,
+            taskId: task.id,
+            providerTaskId: "",
+            title: `图片${index + 1}（失败）`,
+            content: `图片${index + 1}：生成失败｜${errorMessage}`,
+            script: [],
+            prompt: task.prompt,
+            status: "failed" as const,
+            originalCoverUrl: "",
+            originalVideoUrl: "",
+            upscaledVideoUrl: "",
+            upscaledCoverUrl: "",
+            upscaleStatus: "idle" as const,
+            upscaleTaskId: "",
+            upscaleErrorMessage: "",
+            upscaleConsumeMoney: 0,
+            upscaleTaskCostTime: 0,
+            coverUrl: "",
+            previewImageUrl: "",
+            errorMessage,
+            referenceImageUrl: task.referenceImageUrl,
+            referenceImageName: task.referenceImageName,
+            cost: 0,
+            seconds: 0,
+            duration: task.duration,
+            ratio: targetRatio,
+            size: targetSize,
+          },
+        ]);
+        runnerLog("IMAGE_FAILED_WRITE", {
+          taskId: task.id,
+          index: index + 1,
+          finalReason: errorMessage,
+        });
+      }
+    }
+    const latestTaskAfterImages = tasksRepository.getById(taskId);
+    if (!latestTaskAfterImages || latestTaskAfterImages.status === "cancelled") {
+      runnerLog("TASK_ABORTED", { taskId, reason: "image task removed before final status" });
+      return;
+    }
+    const finalStatus = successCount > 0 ? "success" : "failed";
+    tasksRepository.update(taskId, { status: finalStatus });
+    runnerLog("TASK_SUMMARY", {
+      taskId: task.id,
+      phase: "image_generation_complete",
+      total: task.count,
+      successCount,
+      failedCount,
+      upscaleSuccessCount: 0,
+      upscaleFailedCount: 0,
+      finalStatus,
+    });
+    return;
+  }
   for (let index = 0; index < task.count; index += 1) {
     const targetSize = task.ratio === "9:16" ? "720x1280" : "1280x720";
     const targetRatio = task.ratio === "9:16" ? "9:16" : "16:9";

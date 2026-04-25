@@ -1,9 +1,28 @@
 import { NextResponse } from "next/server";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { tasksRepository, videosRepository } from "@/lib/server/repositories";
 import { fetchProviderVideo } from "@/lib/server/provider-video-fetch";
 import { resolvePlaybackSource } from "@/lib/server/video-playback";
 
 export const runtime = "nodejs";
+
+const DEPLOY_UPLOADS_DIR = "/www/wwwroot/quark-video-git/public/uploads";
+
+const contentTypeByExt: Record<string, string> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+};
+
+const localUploadPathFromUrl = (url?: string) => {
+  if (!url?.startsWith("/api/uploads/")) return null;
+  const relative = url.slice("/api/uploads/".length);
+  if (!relative || relative.split("/").some((part) => !part || part === "." || part === "..")) return null;
+  return path.resolve(DEPLOY_UPLOADS_DIR, relative);
+};
 
 export async function GET(_: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
@@ -16,6 +35,24 @@ export async function GET(_: Request, ctx: { params: Promise<{ id: string }> }) 
   const userId = task?.userId ?? "unknown";
 
   try {
+    if (video.kind === "image") {
+      const imageUrl = video.videoUrl || video.previewImageUrl || video.coverUrl || video.originalCoverUrl;
+      const imagePath = localUploadPathFromUrl(imageUrl);
+      if (!imagePath) {
+        throw new Error("未解析到可下载的图片源地址");
+      }
+      const bytes = await readFile(imagePath);
+      const ext = path.extname(imagePath).toLowerCase();
+      const filename = `task-${video.taskId}-image-${id}${ext || ".jpg"}`;
+      return new NextResponse(bytes, {
+        status: 200,
+        headers: {
+          "Content-Type": contentTypeByExt[ext] || "image/jpeg",
+          "Content-Disposition": `attachment; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+          "Cache-Control": "private, no-store",
+        },
+      });
+    }
     const playbackSource = resolvePlaybackSource(video, "video");
     console.log(
       `[VIDEO_PROXY][DOWNLOAD_REQUEST]`,

@@ -41,6 +41,7 @@ export type Task = {
 export type Video = {
   id: string;
   taskId: string;
+  kind?: "video" | "image";
   providerTaskId?: string;
   title: string;
   content: string;

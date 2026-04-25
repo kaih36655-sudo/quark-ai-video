@@ -18,6 +18,24 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
+## Image Generation
+
+Text-to-image and image-to-image generation use Yunwu-compatible server APIs. Configure the API key only on the server:
+
+```bash
+YUNWU_API_KEY=your_yunwu_api_key
+```
+
+Optional overrides:
+
+```bash
+YUNWU_BASE_URL=https://yunwu.ai
+YUNWU_TEXT_TO_IMAGE_MODEL=gemini-2.5-flash-image
+YUNWU_IMAGE_TO_IMAGE_MODEL=gemini-3-pro-image-preview
+YUNWU_TEXT_TO_IMAGE_PATH=/v1/images/generations
+YUNWU_IMAGE_TO_IMAGE_PATH=/v1/images/edits
+```
+
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
 ## Learn More
