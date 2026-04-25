@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { agentsRepository, tasksRepository, videosRepository } from "@/lib/server/repositories";
 import { scheduleTask } from "@/lib/server/task-runner";
 import { ApiResponse } from "@/lib/server/types";
+import { getCurrentUser, requireCurrentUser } from "@/lib/server/auth";
+import { estimateTaskCost } from "@/lib/server/pricing";
 
 export const runtime = "nodejs";
 
@@ -19,8 +21,17 @@ type CreateTaskBody = {
 };
 
 export async function GET() {
-  const tasks = tasksRepository.list();
-  const videos = videosRepository.listAll();
+  const currentUser = await getCurrentUser();
+  if (!currentUser) {
+    return NextResponse.json<ApiResponse<{ tasks: never[]; videos: never[] }>>({
+      success: true,
+      data: { tasks: [], videos: [] },
+    });
+  }
+  const allTasks = tasksRepository.list();
+  const tasks = currentUser.role === "admin" ? allTasks : allTasks.filter((task) => task.userId === currentUser.id);
+  const taskIds = new Set(tasks.map((task) => task.id));
+  const videos = videosRepository.listAll().filter((video) => taskIds.has(video.taskId));
   return NextResponse.json<ApiResponse<{ tasks: typeof tasks; videos: typeof videos }>>({
     success: true,
     data: { tasks, videos },
@@ -28,6 +39,13 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  let currentUser: Awaited<ReturnType<typeof requireCurrentUser>>;
+  try {
+    currentUser = await requireCurrentUser();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "请先登录";
+    return NextResponse.json<ApiResponse<null>>({ success: false, message }, { status: 401 });
+  }
   const body = (await req.json()) as CreateTaskBody;
   const prompt = body.prompt?.trim() ?? "";
   const mode = body.mode ?? "normal";
@@ -41,6 +59,10 @@ export async function POST(req: NextRequest) {
   }
   if (!Number.isFinite(count) || count < 1 || count > 10) {
     return NextResponse.json<ApiResponse<null>>({ success: false, message: "count 必须在 1~10" }, { status: 400 });
+  }
+  const estimateCost = estimateTaskCost({ mode, duration, imageSize, count });
+  if (currentUser.balance < estimateCost) {
+    return NextResponse.json<ApiResponse<null>>({ success: false, message: `余额不足，预计需要 ¥${estimateCost.toFixed(2)}` }, { status: 402 });
   }
 
   let agentName: string | undefined;
@@ -62,7 +84,7 @@ export async function POST(req: NextRequest) {
 
   const isScheduled = Boolean(body.scheduledAt && Date.parse(body.scheduledAt));
   const task = tasksRepository.create({
-    userId: "10293",
+    userId: currentUser.id,
     agentId: body.agentId,
     agentName,
     agentAccessType: accessType,

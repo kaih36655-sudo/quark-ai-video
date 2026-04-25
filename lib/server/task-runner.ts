@@ -7,6 +7,8 @@ import { runRunningHubUpscaleWithPolling } from "./runninghub";
 import { generateYunwuImage } from "./yunwu-image";
 import { enqueueUpscaleJob } from "./upscale-queue";
 import { extractCoverAt015FromVideoUrl } from "./video-cover-extractor";
+import { adjustUserBalance } from "./auth-store";
+import { getUnitPrice } from "./pricing";
 import {
   PIPELINE_RETRY_BACKOFF_MS,
   PIPELINE_RETRY_MAX_ATTEMPTS,
@@ -41,6 +43,32 @@ const sora2PipelineLog = (stage: "CREATE_RETRY" | "CREATE_FINAL_FAILED", payload
 const upscalePipelineLog = (stage: "RETRY" | "FINAL_FAILED", payload: Record<string, unknown>) => {
   console.log(`[UPSCALE][${stage}]`, JSON.stringify(payload));
 };
+
+async function chargeSuccessfulGenerations(task: Task, successCount: number) {
+  if (successCount <= 0) return;
+  const amount = Number((-getUnitPrice(task) * successCount).toFixed(2));
+  try {
+    await adjustUserBalance({
+      userId: task.userId,
+      amount,
+      reason: task.mode === "image" ? `图片生成成功扣费 x${successCount}` : `视频生成成功扣费 x${successCount}`,
+      operatorUserId: "system",
+    });
+    runnerLog("BALANCE_CHARGED", {
+      taskId: task.id,
+      userId: task.userId,
+      successCount,
+      amount,
+    });
+  } catch (error) {
+    runnerLog("BALANCE_CHARGE_FAILED", {
+      taskId: task.id,
+      userId: task.userId,
+      successCount,
+      errorMessage: stringifyUnknownError(error),
+    });
+  }
+}
 
 function resolveSoraSeconds(duration: string): number {
   if (duration === "4s") return 4;
@@ -549,6 +577,7 @@ async function executeTask(taskId: string) {
       return;
     }
     const finalStatus = successCount > 0 ? "success" : "failed";
+    await chargeSuccessfulGenerations(task, successCount);
     tasksRepository.update(taskId, { status: finalStatus });
     runnerLog("TASK_SUMMARY", {
       taskId: task.id,
@@ -831,6 +860,7 @@ async function executeTask(taskId: string) {
   const upscaleFailedCount = taskVideos.filter((v) => v.status === "success" && v.upscaleStatus === "failed").length;
 
   const finalStatus = successCount > 0 ? "success" : "failed";
+  await chargeSuccessfulGenerations(task, successCount);
   tasksRepository.update(taskId, { status: finalStatus });
 
   runnerLog("TASK_SUMMARY", {

@@ -2,9 +2,37 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useState } from "react";
 
 export default function RegisterPage() {
   const router = useRouter();
+  const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleRegister = async () => {
+    if (password !== confirmPassword) {
+      setMessage("两次密码不一致");
+      return;
+    }
+    setLoading(true);
+    setMessage("");
+    const res = await fetch("/api/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password, name }),
+    });
+    const json = await res.json();
+    setLoading(false);
+    if (!res.ok || !json?.success) {
+      setMessage(json?.message || "注册失败");
+      return;
+    }
+    router.push("/");
+  };
 
   return (
     <div className="min-h-screen bg-[#f7f7f8] text-black">
@@ -41,28 +69,43 @@ export default function RegisterPage() {
 
           <div className="space-y-3">
             <input
-              placeholder="手机号 / 邮箱"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="邮箱"
               className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none placeholder:text-gray-400"
             />
 
             <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="昵称（可选）"
+              className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none placeholder:text-gray-400"
+            />
+
+            <input
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
               placeholder="设置密码"
               type="password"
               className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none placeholder:text-gray-400"
             />
 
             <input
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
               placeholder="确认密码"
               type="password"
               className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none placeholder:text-gray-400"
             />
           </div>
+          {message && <div className="mt-3 rounded-xl bg-red-50 px-4 py-2 text-sm text-red-600">{message}</div>}
 
           <button
-            onClick={() => router.push("/login")}
+            onClick={() => void handleRegister()}
+            disabled={loading}
             className="mt-5 w-full rounded-xl bg-black py-3 text-sm font-medium text-white"
           >
-            注册
+            {loading ? "注册中..." : "注册"}
           </button>
 
           <div className="mt-5 flex items-center justify-between text-sm">

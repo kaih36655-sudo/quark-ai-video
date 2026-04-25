@@ -113,7 +113,8 @@ export default function Home() {
 
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [userId, setUserId] = useState("10293");
-  const [balance] = useState("23.6");
+  const [balance, setBalance] = useState("0.0");
+  const [currentUserRole, setCurrentUserRole] = useState<"user" | "admin">("user");
   const [mounted, setMounted] = useState(false);
   const [isDark, setIsDark] = useState(false);
 
@@ -129,6 +130,7 @@ export default function Home() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [videos, setVideos] = useState<Video[]>([]);
   const [previewVideo, setPreviewVideo] = useState<any>(null);
+  const [imagePreviewScale, setImagePreviewScale] = useState(1);
   const [referencePreviewOpen, setReferencePreviewOpen] = useState(false);
   const [referencePreviewTitle, setReferencePreviewTitle] = useState("");
   const [referencePreviewData, setReferencePreviewData] = useState<string | null>(null);
@@ -168,8 +170,6 @@ export default function Home() {
   ];
 
   useEffect(() => {
-    const savedLogin = localStorage.getItem("quark_is_logged_in");
-    const savedUserId = localStorage.getItem("quark_user_id");
     const savedTheme = localStorage.getItem("quark_theme");
     const savedFavorites = localStorage.getItem("quark_favorites");
     const savedPrompt = localStorage.getItem("quark_prompt");
@@ -183,14 +183,6 @@ export default function Home() {
     const savedReferenceImageData = localStorage.getItem("quark_reference_image_data");
     const savedReferenceImageThumbData = localStorage.getItem("quark_reference_image_thumb_data");
     const savedReferenceImageName = localStorage.getItem("quark_reference_image_name");
-
-    if (savedLogin === "true") {
-      setIsLoggedIn(true);
-    }
-
-    if (savedUserId) {
-      setUserId(savedUserId);
-    }
 
     if (savedTheme === "dark") {
       setIsDark(true);
@@ -253,12 +245,32 @@ export default function Home() {
     }
 
     setMounted(true);
+    void refreshCurrentUser();
   }, []);
 
 
-  const handleLogout = () => {
-    localStorage.removeItem("quark_is_logged_in");
+  const refreshCurrentUser = async () => {
+    const res = await fetch("/api/auth/me", { cache: "no-store" });
+    const json = await res.json();
+    const user = json?.data?.user;
+    if (res.ok && user) {
+      setIsLoggedIn(true);
+      setUserId(String(user.id));
+      setBalance(Number(user.balance ?? 0).toFixed(1));
+      setCurrentUserRole(user.role === "admin" ? "admin" : "user");
+      return;
+    }
     setIsLoggedIn(false);
+    setBalance("0.0");
+    setCurrentUserRole("user");
+  };
+
+  const handleLogout = async () => {
+    await fetch("/api/auth/logout", { method: "POST" });
+    setIsLoggedIn(false);
+    setUserId("");
+    setBalance("0.0");
+    router.push("/login");
   };
 
   const toggleTheme = () => {
@@ -567,6 +579,7 @@ export default function Home() {
           if (taskStatus === "success") {
             const videosCount = snapshot.videos.filter((video) => String(video.taskId) === createdTaskId).length;
             showToast(mode === "image" ? `已生成${videosCount}张图片` : `已生成${videosCount}条视频`);
+            void refreshCurrentUser();
           } else if (taskStatus === "failed") {
             showToast("任务执行失败");
           } else {
@@ -581,6 +594,11 @@ export default function Home() {
   };
 
   const handleGenerate = () => {
+    if (!isLoggedIn) {
+      showToast("请先登录后再创建任务");
+      router.push("/login");
+      return;
+    }
     if (mode === "agent" && !selectedAgent) {
       showToast("请先选择智能体");
       return;
@@ -1342,6 +1360,12 @@ export default function Home() {
     };
   }, []);
 
+  useEffect(() => {
+    if (previewVideo?.mediaType === "image") {
+      setImagePreviewScale(1);
+    }
+  }, [previewVideo?.id, previewVideo?.mediaType]);
+
   const pillClass = (active: boolean) =>
     active ? "bg-black text-white" : "bg-gray-100 text-gray-700 hover:bg-gray-200";
 
@@ -1415,6 +1439,19 @@ export default function Home() {
                 >
                   任务记录 {tasks.length > 0 ? `(${tasks.length})` : ""}
                 </button>
+
+                {currentUserRole === "admin" && (
+                  <button
+                    onClick={() => router.push("/admin")}
+                    className={
+                      isDark
+                        ? "rounded-full bg-gray-800 px-4 py-2 text-sm font-medium text-gray-100"
+                        : "rounded-full bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700"
+                    }
+                  >
+                    管理后台
+                  </button>
+                )}
 
                 <div className="flex items-center gap-2">
                   <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 via-violet-500 to-pink-500 text-sm font-semibold text-white">
@@ -2659,16 +2696,51 @@ export default function Home() {
               </div>
 
               <div className="space-y-4">
+                {previewVideo.mediaType === "image" && (
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    <span className={isDark ? "text-xs text-gray-400" : "text-xs text-gray-500"}>
+                      缩放：{Math.round(imagePreviewScale * 100)}%
+                    </span>
+                    <button
+                      onClick={() => setImagePreviewScale((prev) => Math.min(3, Number((prev + 0.25).toFixed(2))))}
+                      className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700"}
+                    >
+                      放大
+                    </button>
+                    <button
+                      onClick={() => setImagePreviewScale((prev) => Math.max(0.5, Number((prev - 0.25).toFixed(2))))}
+                      className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700"}
+                    >
+                      缩小
+                    </button>
+                    <button
+                      onClick={() => setImagePreviewScale(1)}
+                      className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700"}
+                    >
+                      重置
+                    </button>
+                  </div>
+                )}
                 <div
                   className={
                     isDark
-                      ? "relative h-52 overflow-hidden rounded-2xl border border-gray-800 bg-[#18181b]"
-                      : "relative h-52 overflow-hidden rounded-2xl border border-gray-200 bg-gray-50"
+                      ? "relative h-52 overflow-auto rounded-2xl border border-gray-800 bg-[#18181b]"
+                      : "relative h-52 overflow-auto rounded-2xl border border-gray-200 bg-gray-50"
                   }
                 >
                   {previewVideo.videoUrl ? (
                     previewVideo.mediaType === "image" ? (
-                      <img src={previewVideo.videoUrl} alt={previewVideo.title || "生成图片"} className="h-full w-full object-contain" />
+                      <div className="flex min-h-full min-w-full items-center justify-center">
+                        <img
+                          src={previewVideo.videoUrl}
+                          alt={previewVideo.title || "生成图片"}
+                          className="max-h-none max-w-none object-contain transition-transform duration-150"
+                          style={{
+                            width: `${imagePreviewScale * 100}%`,
+                            height: "auto",
+                          }}
+                        />
+                      </div>
                     ) : (
                       <video src={previewVideo.videoUrl} controls className="h-full w-full object-contain" />
                     )

@@ -2,9 +2,31 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useState } from "react";
 
 export default function LoginPage() {
   const router = useRouter();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleLogin = async () => {
+    setLoading(true);
+    setMessage("");
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    const json = await res.json();
+    setLoading(false);
+    if (!res.ok || !json?.success) {
+      setMessage(json?.message || "登录失败");
+      return;
+    }
+    router.push("/");
+  };
 
   return (
     <div className="min-h-screen bg-[#f7f7f8] text-black">
@@ -41,31 +63,28 @@ export default function LoginPage() {
 
           <div className="space-y-3">
             <input
-              placeholder="手机号 / 邮箱"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="邮箱"
               className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none placeholder:text-gray-400"
             />
 
             <input
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
               placeholder="密码"
               type="password"
               className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none placeholder:text-gray-400"
             />
           </div>
+          {message && <div className="mt-3 rounded-xl bg-red-50 px-4 py-2 text-sm text-red-600">{message}</div>}
 
           <button
-            onClick={() => {
-              const generatedId =
-                localStorage.getItem("quark_user_id") ||
-                String(Math.floor(10000 + Math.random() * 90000));
-
-              localStorage.setItem("quark_is_logged_in", "true");
-              localStorage.setItem("quark_user_id", generatedId);
-
-              router.push("/");
-            }}
+            onClick={() => void handleLogin()}
+            disabled={loading}
             className="mt-5 w-full rounded-xl bg-black py-3 text-sm font-medium text-white"
           >
-            登录
+            {loading ? "登录中..." : "登录"}
           </button>
 
           <div className="mt-5 flex items-center justify-between text-sm">
