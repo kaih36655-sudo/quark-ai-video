@@ -29,6 +29,7 @@ export type Task = {
   mode: "agent" | "normal" | "image";
   duration: string;
   ratio: string;
+  imageSize?: "1K" | "2K" | "4K";
   count: number;
   status: TaskStatus;
   referenceImageUrl?: string;
@@ -68,6 +69,7 @@ export type Video = {
   duration: string;
   ratio: string;
   size?: string;
+  imageSize?: "1K" | "2K" | "4K";
   createdAt: string;
 };
 

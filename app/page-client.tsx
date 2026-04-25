@@ -23,6 +23,7 @@ type Task = {
   agentName?: string;
   agentAccess?: "public" | "restricted";
   agentAuthorized?: boolean;
+  imageSize?: "1K" | "2K" | "4K";
 };
 
 type Video = {
@@ -38,8 +39,9 @@ type Video = {
   cost: number;
   seconds?: number;
   duration?: string;
-  ratio: "9:16" | "16:9";
+  ratio: "1:1" | "9:16" | "16:9";
   size?: string;
+  imageSize?: "1K" | "2K" | "4K";
   originalVideoUrl?: string;
   originalCoverUrl?: string;
   upscaledVideoUrl?: string;
@@ -120,6 +122,7 @@ export default function Home() {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [duration, setDuration] = useState("12s");
   const [ratio, setRatio] = useState("16:9");
+  const [imageSize, setImageSize] = useState<"1K" | "2K" | "4K">("2K");
   const [timingEnabled, setTimingEnabled] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateProgress, setGenerateProgress] = useState(0);
@@ -175,6 +178,7 @@ export default function Home() {
     const savedAgentId = localStorage.getItem("quark_selected_agent_id");
     const savedDuration = localStorage.getItem("quark_duration");
     const savedRatio = localStorage.getItem("quark_ratio");
+    const savedImageSize = localStorage.getItem("quark_image_size");
     const savedHasReferenceImage = localStorage.getItem("quark_has_reference_image");
     const savedReferenceImageData = localStorage.getItem("quark_reference_image_data");
     const savedReferenceImageThumbData = localStorage.getItem("quark_reference_image_thumb_data");
@@ -228,6 +232,9 @@ export default function Home() {
 
     if (savedRatio) {
       setRatio(savedRatio);
+    }
+    if (savedImageSize === "1K" || savedImageSize === "2K" || savedImageSize === "4K") {
+      setImageSize(savedImageSize);
     }
 
     if (savedHasReferenceImage === "true") {
@@ -342,6 +349,7 @@ export default function Home() {
     agentId: typeof task.agentId === "string" ? task.agentId : undefined,
     agentName: typeof task.agentName === "string" ? task.agentName : undefined,
     agentAccess: task.agentAccessType === "restricted" ? "restricted" : task.agentAccessType === "public" ? "public" : undefined,
+    imageSize: task.imageSize === "1K" || task.imageSize === "4K" ? task.imageSize : task.imageSize === "2K" ? "2K" : undefined,
   });
 
   const mapApiVideoToLocal = (video: Record<string, unknown>): Video => {
@@ -353,7 +361,15 @@ export default function Home() {
           ? video.video_size
           : undefined;
     const inferredRatio =
-      rawSize === "720x1280" ? "9:16" : rawSize === "1280x720" ? "16:9" : video.ratio === "9:16" ? "9:16" : "16:9";
+      video.ratio === "1:1"
+        ? "1:1"
+        : rawSize === "720x1280"
+          ? "9:16"
+          : rawSize === "1280x720"
+            ? "16:9"
+            : video.ratio === "9:16"
+              ? "9:16"
+              : "16:9";
     const resolvedVideoUrl = normalizeDisplayUrl(
       typeof video.videoUrl === "string" && video.videoUrl
         ? video.videoUrl
@@ -438,6 +454,7 @@ export default function Home() {
       duration: resolvedDuration,
       ratio: inferredRatio,
       size: rawSize,
+      imageSize: video.imageSize === "1K" || video.imageSize === "4K" ? video.imageSize : video.imageSize === "2K" ? "2K" : rawSize === "1K" || rawSize === "2K" || rawSize === "4K" ? rawSize : undefined,
       originalVideoUrl,
       originalCoverUrl,
       upscaledVideoUrl,
@@ -506,7 +523,8 @@ export default function Home() {
       prompt: seedPrompt.trim(),
       mode: mode as "agent" | "normal" | "image",
       duration,
-      ratio,
+      ratio: mode === "image" ? ratio : ratio === "9:16" ? "9:16" : "16:9",
+      imageSize: mode === "image" ? imageSize : undefined,
       count: effectiveCount,
       agentId: activeAgentId,
       referenceImageUrl: useReference ? referenceImageData ?? undefined : undefined,
@@ -628,9 +646,12 @@ export default function Home() {
   };
 
   const getRatioLabel = (ratioValue?: string, sizeValue?: string) => {
-    const resolvedRatio = sizeValue === "720x1280" ? "9:16" : sizeValue === "1280x720" ? "16:9" : ratioValue;
+    const resolvedRatio = ratioValue === "1:1" ? "1:1" : sizeValue === "720x1280" ? "9:16" : sizeValue === "1280x720" ? "16:9" : ratioValue;
+    if (resolvedRatio === "1:1") return "1:1方屏";
     return resolvedRatio === "9:16" ? "9:16竖屏" : "16:9横屏";
   };
+
+  const getImageSizeLabel = (value?: string) => (value === "1K" || value === "4K" ? value : "2K");
 
   const getDurationLabel = (secondsValue?: number, durationValue?: string) => {
     if (typeof secondsValue === "number" && Number.isFinite(secondsValue) && secondsValue > 0) {
@@ -1048,6 +1069,7 @@ export default function Home() {
         referenceImageThumbData: parentTask?.referenceImageThumbData,
         ratio: video.ratio,
         size: video.size,
+        imageSize: video.imageSize ?? parentTask?.imageSize,
         coverData: video.coverData,
         videoUrl: video.videoUrl,
         kind: parentTask?.kind === "schedule" ? "schedule" : "video",
@@ -1125,7 +1147,7 @@ export default function Home() {
   };
 
   const renderVideoCover = (
-    video: { id?: number; coverData?: string; coverUrl?: string; previewImageUrl?: string; videoUrl?: string; ratio?: "9:16" | "16:9"; seconds?: number; duration?: string } | null
+    video: { id?: number; mediaType?: "video" | "image"; coverData?: string; coverUrl?: string; previewImageUrl?: string; videoUrl?: string; ratio?: "1:1" | "9:16" | "16:9"; seconds?: number; duration?: string } | null
   ) => {
     const finalCoverSrc = normalizeReferenceImageSrc(video?.coverData);
     const hasCover = Boolean(finalCoverSrc);
@@ -1135,15 +1157,17 @@ export default function Home() {
       : `relative flex h-full w-full items-center justify-center overflow-hidden rounded-2xl border border-gray-200 bg-gradient-to-br from-gray-100 via-white to-gray-200`;
     return (
       <div className={outerClass}>
-        <div className="absolute right-1.5 top-1.5 z-10 rounded-full bg-black/60 px-1.5 py-0.5 text-[9px] text-white">
-          {getDurationLabel(video?.seconds, video?.duration)}
-        </div>
+        {video?.mediaType !== "image" && (
+          <div className="absolute right-1.5 top-1.5 z-10 rounded-full bg-black/60 px-1.5 py-0.5 text-[9px] text-white">
+            {getDurationLabel(video?.seconds, video?.duration)}
+          </div>
+        )}
         <div className="h-full w-full overflow-hidden rounded-2xl">
           {hasCover ? (
-            <img src={finalCoverSrc ?? ""} alt="视频封面" className="h-full w-full object-cover object-center" draggable={false} />
+            <img src={finalCoverSrc ?? ""} alt={video?.mediaType === "image" ? "图片封面" : "视频封面"} className="h-full w-full object-cover object-center" draggable={false} />
           ) : (
             <div className={isDark ? "flex h-full w-full items-center justify-center bg-black/35 text-[10px] text-gray-300" : "flex h-full w-full items-center justify-center bg-white/70 text-[10px] text-gray-600"}>
-              视频封面
+              {video?.mediaType === "image" ? "图片封面" : "视频封面"}
             </div>
           )}
         </div>
@@ -1253,6 +1277,11 @@ export default function Home() {
     if (!mounted) return;
     localStorage.setItem("quark_ratio", ratio);
   }, [ratio, mounted]);
+
+  useEffect(() => {
+    if (!mounted) return;
+    localStorage.setItem("quark_image_size", imageSize);
+  }, [imageSize, mounted]);
 
   useEffect(() => {
     if (!mounted) return;
@@ -1518,14 +1547,20 @@ export default function Home() {
 
             <div className="flex flex-wrap items-center gap-3">
               <button
-                onClick={() => setMode("agent")}
+                onClick={() => {
+                  setMode("agent");
+                  if (ratio === "1:1") setRatio("16:9");
+                }}
                 className={`rounded-full px-4 py-2 text-sm transition ${pillClass(mode === "agent")}`}
               >
                 智能体批量视频
               </button>
 
               <button
-                onClick={() => setMode("normal")}
+                onClick={() => {
+                  setMode("normal");
+                  if (ratio === "1:1") setRatio("16:9");
+                }}
                 className={`rounded-full px-4 py-2 text-sm transition ${pillClass(mode === "normal")}`}
               >
                 通用视频
@@ -1627,17 +1662,19 @@ export default function Home() {
             )}
 
             <div className="flex flex-wrap items-center gap-3">
-              {["4s", "8s", "12s"].map((item) => (
-                <button
-                  key={item}
-                  onClick={() => setDuration(item)}
-                  className={`rounded-full px-4 py-2 text-sm transition ${pillClass(duration === item)}`}
-                >
-                  {item}
-                </button>
-              ))}
+              {mode !== "image" &&
+                ["4s", "8s", "12s"].map((item) => (
+                  <button
+                    key={item}
+                    onClick={() => setDuration(item)}
+                    className={`rounded-full px-4 py-2 text-sm transition ${pillClass(duration === item)}`}
+                  >
+                    {item}
+                  </button>
+                ))}
 
               {[
+                ...(mode === "image" ? [{ label: "1:1方屏", value: "1:1" }] : []),
                 { label: "9:16竖屏", value: "9:16" },
                 { label: "16:9横屏", value: "16:9" },
               ].map((item) => (
@@ -1650,13 +1687,28 @@ export default function Home() {
                 </button>
               ))}
 
-              <div className={isDark ? "rounded-full bg-gray-800 px-4 py-2 text-sm text-gray-100" : "rounded-full bg-gray-100 px-4 py-2 text-sm text-gray-700"}>
-                超清1080P
-              </div>
+              {mode === "image" ? (
+                <div className="flex items-center gap-2">
+                  <span className={isDark ? "text-sm text-gray-400" : "text-sm text-gray-500"}>分辨率</span>
+                  {(["1K", "2K", "4K"] as const).map((item) => (
+                    <button
+                      key={item}
+                      onClick={() => setImageSize(item)}
+                      className={`rounded-full px-4 py-2 text-sm transition ${pillClass(imageSize === item)}`}
+                    >
+                      {item}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className={isDark ? "rounded-full bg-gray-800 px-4 py-2 text-sm text-gray-100" : "rounded-full bg-gray-100 px-4 py-2 text-sm text-gray-700"}>
+                  超清1080P
+                </div>
+              )}
 
               <div className="flex items-center gap-2">
                 <span className={isDark ? "text-sm text-gray-400" : "text-sm text-gray-500"}>
-                  生成条数
+                  {mode === "image" ? "生成张数" : "生成条数"}
                 </span>
                 <select
                   value={generateCount}
@@ -1669,7 +1721,7 @@ export default function Home() {
                 >
                   {Array.from({ length: 10 }, (_, i) => i + 1).map((count) => (
                     <option key={count} value={count}>
-                      {count}条
+                      {count}{mode === "image" ? "张" : "条"}
                     </option>
                   ))}
                 </select>
@@ -1854,7 +1906,7 @@ export default function Home() {
                       ? "暂无失败任务"
                       : "暂无任务记录"}
               </div>
-            ) : pagedVisibleResults.map(({ item, id, taskId, mediaType, title, prompt: fromTaskPrompt, isFavorite, status, isLatestDone, cost, seconds, duration: videoDuration, upscaleStatus, upscaleErrorMessage, hasReferenceImage: taskHasRef, referenceImageName, referenceImageThumbData: taskRefThumbData, coverData, videoUrl, ratio: videoRatio, size: videoSize, kind, scheduledAt, createdAt, taskStatus, agentName }) => (
+            ) : pagedVisibleResults.map(({ item, id, taskId, mediaType, title, prompt: fromTaskPrompt, isFavorite, status, isLatestDone, cost, seconds, duration: videoDuration, upscaleStatus, upscaleErrorMessage, hasReferenceImage: taskHasRef, referenceImageName, referenceImageThumbData: taskRefThumbData, coverData, videoUrl, ratio: videoRatio, size: videoSize, imageSize: resultImageSize, kind, scheduledAt, createdAt, taskStatus, agentName }) => (
               <div
                 key={id}
                 className={
@@ -1865,8 +1917,8 @@ export default function Home() {
               >
                 <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
                   <div className="flex items-start gap-3">
-                    <div className={`relative group shrink-0 overflow-hidden rounded-2xl ${videoRatio === "9:16" ? "h-20 w-14" : "h-16 w-28"}`}>
-                      {renderVideoCover({ id, coverData, videoUrl, ratio: videoRatio, seconds, duration: videoDuration })}
+                    <div className={`relative group shrink-0 overflow-hidden rounded-2xl ${videoRatio === "9:16" ? "h-20 w-14" : videoRatio === "1:1" ? "h-16 w-16" : "h-16 w-28"}`}>
+                      {renderVideoCover({ id, mediaType, coverData, videoUrl, ratio: videoRatio, seconds, duration: videoDuration })}
                       <button
                         type="button"
                         onClick={(event) => {
@@ -1884,6 +1936,7 @@ export default function Home() {
                             seconds,
                             duration: videoDuration,
                             cost,
+                            imageSize: resultImageSize,
                             upscaleStatus,
                             upscaleErrorMessage,
                             hasReferenceImage: taskHasRef,
@@ -1967,7 +2020,7 @@ export default function Home() {
 
                       <div className="flex flex-wrap items-center gap-1.5">
                         <span className={isDark ? "rounded-full border border-gray-700/70 bg-gray-800/80 px-2 py-0.5 text-[10px] font-medium text-gray-400" : "rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[10px] font-medium text-gray-500"}>
-                          时长：{getDurationLabel(seconds, videoDuration)}
+                          {mediaType === "image" ? `分辨率：${getImageSizeLabel(resultImageSize || videoSize)}` : `时长：${getDurationLabel(seconds, videoDuration)}`}
                         </span>
                         <span className={isDark ? "rounded-full border border-gray-700/70 bg-gray-800/80 px-2 py-0.5 text-[10px] font-medium text-gray-400" : "rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[10px] font-medium text-gray-500"}>
                           比例：{getRatioLabel(videoRatio, videoSize)}
@@ -2013,6 +2066,7 @@ export default function Home() {
                             seconds,
                             duration: videoDuration,
                             cost,
+                            imageSize: resultImageSize,
                             upscaleStatus,
                             upscaleErrorMessage,
                             hasReferenceImage: taskHasRef,
@@ -2579,7 +2633,7 @@ export default function Home() {
                 <>
               <div className="mb-4 flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <div className="text-lg font-semibold">视频预览</div>
+                  <div className="text-lg font-semibold">{previewVideo.mediaType === "image" ? "图片预览" : "视频预览"}</div>
                   <span className={isDark ? "rounded-full bg-gray-800 px-2 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-2 py-1 text-xs text-gray-600"}>
                     {makeTaskId(previewVideo.taskId)}
                   </span>
@@ -2638,9 +2692,15 @@ export default function Home() {
                     <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
                       消耗：¥{previewVideo.cost.toFixed(1)}
                     </span>
-                    <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
-                      时长：{getDurationLabel(previewVideo.seconds, previewVideo.duration)}
-                    </span>
+                    {previewVideo.mediaType === "image" ? (
+                      <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
+                        分辨率：{getImageSizeLabel(previewVideo.imageSize || previewVideo.size)}
+                      </span>
+                    ) : (
+                      <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
+                        时长：{getDurationLabel(previewVideo.seconds, previewVideo.duration)}
+                      </span>
+                    )}
                     <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
                       比例：{getRatioLabel(previewVideo.ratio, previewVideo.size)}
                     </span>
@@ -2665,6 +2725,9 @@ export default function Home() {
                         : "rounded-2xl border border-gray-200 bg-gray-50 p-4 text-sm leading-6 text-gray-700"
                     }
                   >
+                    <div className={isDark ? "mb-2 text-xs font-medium text-gray-400" : "mb-2 text-xs font-medium text-gray-500"}>
+                      {previewVideo.mediaType === "image" ? "图片提示词" : "视频提示词"}
+                    </div>
                     {previewVideo.item}
                   </div>
                 </div>
@@ -2772,9 +2835,15 @@ export default function Home() {
                       <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
                         消耗：¥{detailTask.cost.toFixed(1)}
                       </span>
-                      <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
-                        时长：{getDurationLabel(activeDetailVideo?.seconds, activeDetailVideo?.duration)}
-                      </span>
+                      {activeDetailVideo?.mediaType === "image" ? (
+                        <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
+                          分辨率：{getImageSizeLabel(activeDetailVideo.imageSize || activeDetailVideo.size)}
+                        </span>
+                      ) : (
+                        <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
+                          时长：{getDurationLabel(activeDetailVideo?.seconds, activeDetailVideo?.duration)}
+                        </span>
+                      )}
                       <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
                         比例：{getRatioLabel(activeDetailVideo?.ratio, activeDetailVideo?.size)}
                       </span>
@@ -2822,27 +2891,29 @@ export default function Home() {
                                     event.stopPropagation();
                                     setPreviewVideo(video);
                                   }}
-                                  className={`group shrink-0 cursor-pointer overflow-hidden rounded-2xl ${video.ratio === "9:16" ? "h-20 w-14" : "h-16 w-28"}`}
+                                  className={`group shrink-0 cursor-pointer overflow-hidden rounded-2xl ${video.ratio === "9:16" ? "h-20 w-14" : video.ratio === "1:1" ? "h-16 w-16" : "h-16 w-28"}`}
                                 >
-                                  {renderVideoCover({ id: video.id, coverData: video.coverData, videoUrl: video.videoUrl, ratio: video.ratio, seconds: video.seconds, duration: video.duration })}
+                                  {renderVideoCover({ id: video.id, mediaType: video.mediaType, coverData: video.coverData, videoUrl: video.videoUrl, ratio: video.ratio, seconds: video.seconds, duration: video.duration })}
                                 </button>
                                 <div className="min-w-0 flex-1">
                                   <div className="mb-1 flex flex-wrap items-center gap-2">
                                     <span className={isDark ? "rounded-full bg-gray-700 px-2 py-0.5 text-xs font-medium text-gray-200" : "rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600"}>
-                                      VIDEO-{String(video.id).padStart(3, "0")}
+                                      {video.mediaType === "image" ? "IMAGE" : "VIDEO"}-{String(video.id).padStart(3, "0")}
                                     </span>
                                     <span className={video.status === "success" ? "rounded-full border border-emerald-400/70 bg-emerald-500/90 px-2 py-0.5 text-xs font-medium text-white" : "rounded-full border border-rose-400/70 bg-rose-500/90 px-2 py-0.5 text-xs font-medium text-white"}>
                                       {video.status === "success" ? "已完成" : "失败"}
                                     </span>
-                                    <span className={video.upscaleStatus === "success" ? "rounded-full border border-emerald-400/70 bg-emerald-500/90 px-2 py-0.5 text-xs font-medium text-white" : video.upscaleStatus === "failed" ? "rounded-full border border-rose-400/70 bg-rose-500/90 px-2 py-0.5 text-xs font-medium text-white" : video.upscaleStatus === "processing" || video.upscaleStatus === "pending" || video.upscaleStatus === "queued" ? "rounded-full border border-amber-400/70 bg-amber-500/90 px-2 py-0.5 text-xs font-medium text-white" : isDark ? "rounded-full border border-gray-600 bg-gray-700 px-2 py-0.5 text-xs font-medium text-gray-200" : "rounded-full border border-gray-200 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600"}>
-                                      {getUpscaleStatusLabel(video.upscaleStatus)}
-                                    </span>
-                                    {video.upscaleStatus === "success" && (
+                                    {video.mediaType !== "image" && (
+                                      <span className={video.upscaleStatus === "success" ? "rounded-full border border-emerald-400/70 bg-emerald-500/90 px-2 py-0.5 text-xs font-medium text-white" : video.upscaleStatus === "failed" ? "rounded-full border border-rose-400/70 bg-rose-500/90 px-2 py-0.5 text-xs font-medium text-white" : video.upscaleStatus === "processing" || video.upscaleStatus === "pending" || video.upscaleStatus === "queued" ? "rounded-full border border-amber-400/70 bg-amber-500/90 px-2 py-0.5 text-xs font-medium text-white" : isDark ? "rounded-full border border-gray-600 bg-gray-700 px-2 py-0.5 text-xs font-medium text-gray-200" : "rounded-full border border-gray-200 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600"}>
+                                        {getUpscaleStatusLabel(video.upscaleStatus)}
+                                      </span>
+                                    )}
+                                    {video.mediaType !== "image" && video.upscaleStatus === "success" && (
                                       <span className={isDark ? "rounded-full bg-emerald-900/50 px-2 py-0.5 text-xs text-emerald-200" : "rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-700"}>
                                         预览/下载：超分视频优先
                                       </span>
                                     )}
-                                    {video.upscaleStatus === "failed" && (
+                                    {video.mediaType !== "image" && video.upscaleStatus === "failed" && (
                                       <button
                                         onClick={(e) => {
                                           e.stopPropagation();
@@ -2857,6 +2928,11 @@ export default function Home() {
                                     <span className={isDark ? "rounded-full bg-gray-700 px-2 py-0.5 text-xs text-gray-200" : "rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600"}>
                                       比例：{getRatioLabel(video.ratio, video.size)}
                                     </span>
+                                    {video.mediaType === "image" && (
+                                      <span className={isDark ? "rounded-full bg-gray-700 px-2 py-0.5 text-xs text-gray-200" : "rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600"}>
+                                        分辨率：{getImageSizeLabel(video.imageSize || video.size)}
+                                      </span>
+                                    )}
                                   </div>
                                   <div className="mb-2 text-xs leading-5">{video.item}</div>
                                   {video.script && video.script.length > 0 && (
@@ -2874,7 +2950,7 @@ export default function Home() {
                                   {video.promptText && (
                                     <div className={isDark ? "mb-2 rounded-xl border border-gray-700 bg-[#141417] p-2" : "mb-2 rounded-xl border border-gray-200 bg-gray-50 p-2"}>
                                       <div className="mb-1 flex items-center justify-between gap-2">
-                                        <span className="text-[11px] font-medium">视频提示词</span>
+                                        <span className="text-[11px] font-medium">{video.mediaType === "image" ? "图片提示词" : "视频提示词"}</span>
                                         <button
                                           onClick={(e) => {
                                             e.stopPropagation();

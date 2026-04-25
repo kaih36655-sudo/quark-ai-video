@@ -30,10 +30,7 @@ Optional overrides:
 
 ```bash
 YUNWU_BASE_URL=https://yunwu.ai
-YUNWU_TEXT_TO_IMAGE_MODEL=gemini-2.5-flash-image
-YUNWU_IMAGE_TO_IMAGE_MODEL=gemini-3-pro-image-preview
-YUNWU_TEXT_TO_IMAGE_PATH=/v1/images/generations
-YUNWU_IMAGE_TO_IMAGE_PATH=/v1/images/edits
+YUNWU_IMAGE_MODEL=gemini-3.1-flash-image-preview
 ```
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.

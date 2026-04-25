@@ -452,13 +452,14 @@ async function executeTask(taskId: string) {
         runnerLog("TASK_ABORTED", { taskId, reason: "image task removed or cancelled during execution" });
         return;
       }
-      const targetRatio = task.ratio === "9:16" ? "9:16" : "16:9";
-      const targetSize = task.ratio === "9:16" ? "1024x1792" : "1792x1024";
+      const targetRatio = task.ratio === "1:1" || task.ratio === "16:9" ? task.ratio : "9:16";
+      const targetImageSize = task.imageSize === "1K" || task.imageSize === "4K" ? task.imageSize : "2K";
       try {
         const result = await generateYunwuImage({
           prompt: task.prompt,
           referenceImageUrl: task.referenceImageUrl,
           ratio: task.ratio,
+          imageSize: targetImageSize,
         });
         successCount += 1;
         const created = videosRepository.createMany([
@@ -486,10 +487,10 @@ async function executeTask(taskId: string) {
             referenceImageUrl: task.referenceImageUrl,
             referenceImageName: task.referenceImageName,
             cost: 0,
-            seconds: 0,
-            duration: task.duration,
+            duration: "",
             ratio: targetRatio,
-            size: targetSize,
+            size: targetImageSize,
+            imageSize: targetImageSize,
           },
         ])[0];
         runnerLog("IMAGE_SUCCESS_WRITE", {
@@ -529,10 +530,10 @@ async function executeTask(taskId: string) {
             referenceImageUrl: task.referenceImageUrl,
             referenceImageName: task.referenceImageName,
             cost: 0,
-            seconds: 0,
-            duration: task.duration,
+            duration: "",
             ratio: targetRatio,
-            size: targetSize,
+            size: targetImageSize,
+            imageSize: targetImageSize,
           },
         ]);
         runnerLog("IMAGE_FAILED_WRITE", {

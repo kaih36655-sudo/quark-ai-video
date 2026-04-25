@@ -10,6 +10,7 @@ type CreateTaskBody = {
   mode?: "agent" | "normal" | "image";
   duration?: string;
   ratio?: string;
+  imageSize?: "1K" | "2K" | "4K";
   count?: number;
   agentId?: string;
   referenceImageUrl?: string;
@@ -32,6 +33,7 @@ export async function POST(req: NextRequest) {
   const mode = body.mode ?? "normal";
   const duration = body.duration ?? "12s";
   const ratio = body.ratio ?? "16:9";
+  const imageSize = body.imageSize === "1K" || body.imageSize === "4K" ? body.imageSize : "2K";
   const count = Number(body.count ?? 1);
 
   if (!prompt) {
@@ -68,6 +70,7 @@ export async function POST(req: NextRequest) {
     mode,
     duration,
     ratio,
+    imageSize: mode === "image" ? imageSize : undefined,
     count,
     status: isScheduled ? "waiting" : "queued",
     referenceImageUrl: body.referenceImageUrl,
