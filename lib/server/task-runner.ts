@@ -1,5 +1,5 @@
 import { getStore } from "./store";
-import { agentsRepository, tasksRepository, videosRepository } from "./repositories";
+import { tasksRepository, videosRepository } from "./repositories";
 import { Task } from "./types";
 import { generateVideoScript } from "./gpt";
 import { createSora2Task, downloadSora2Video, querySora2Task } from "./sora2";
@@ -9,6 +9,7 @@ import { enqueueUpscaleJob } from "./upscale-queue";
 import { extractCoverAt015FromVideoUrl } from "./video-cover-extractor";
 import { adjustUserBalance } from "./auth-store";
 import { getUnitPrice } from "./pricing";
+import { getManagedAgentById } from "./agent-store";
 import {
   PIPELINE_RETRY_BACKOFF_MS,
   PIPELINE_RETRY_MAX_ATTEMPTS,
@@ -46,7 +47,7 @@ const upscalePipelineLog = (stage: "RETRY" | "FINAL_FAILED", payload: Record<str
 
 async function chargeSuccessfulGenerations(task: Task, successCount: number) {
   if (successCount <= 0) return;
-  const amount = Number((-getUnitPrice(task) * successCount).toFixed(2));
+  const amount = Number((-(await getUnitPrice(task)) * successCount).toFixed(2));
   try {
     await adjustUserBalance({
       userId: task.userId,
@@ -469,7 +470,8 @@ async function executeTask(taskId: string) {
   const running = tasksRepository.getById(taskId);
   if (!running || running.status === "cancelled") return;
 
-  const agent = task.agentId ? agentsRepository.getById(task.agentId) : null;
+  const agent = task.agentId ? await getManagedAgentById(task.agentId) : null;
+  const effectivePrompt = task.promptSnapshot || task.prompt;
   let successCount = 0;
   let failedCount = 0;
   const upscaleJobs: Promise<void>[] = [];
@@ -484,7 +486,7 @@ async function executeTask(taskId: string) {
       const targetImageSize = task.imageSize === "1K" || task.imageSize === "4K" ? task.imageSize : "2K";
       try {
         const result = await generateYunwuImage({
-          prompt: task.prompt,
+          prompt: effectivePrompt,
           referenceImageUrl: task.referenceImageUrl,
           ratio: task.ratio,
           imageSize: targetImageSize,
@@ -498,7 +500,7 @@ async function executeTask(taskId: string) {
             title: `图片${index + 1}：${task.prompt.slice(0, 32)}`,
             content: `图片${index + 1}：${task.prompt}${task.referenceImageName ? `｜参考图：${task.referenceImageName}` : ""}`,
             script: [],
-            prompt: task.prompt,
+            prompt: effectivePrompt,
             status: "success" as const,
             originalCoverUrl: result.imageUrl,
             originalVideoUrl: "",
@@ -541,7 +543,7 @@ async function executeTask(taskId: string) {
             title: `图片${index + 1}（失败）`,
             content: `图片${index + 1}：生成失败｜${errorMessage}`,
             script: [],
-            prompt: task.prompt,
+            prompt: effectivePrompt,
             status: "failed" as const,
             originalCoverUrl: "",
             originalVideoUrl: "",
@@ -597,7 +599,7 @@ async function executeTask(taskId: string) {
     let scriptResult: Awaited<ReturnType<typeof generateVideoScript>> | null = null;
     try {
       scriptResult = await generateVideoScript({
-        theme: task.prompt,
+        theme: effectivePrompt,
         duration: task.duration,
         agentName: task.agentName,
         agentDescription: agent?.description,

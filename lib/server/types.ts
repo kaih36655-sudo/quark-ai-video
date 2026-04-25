@@ -34,6 +34,7 @@ export type Task = {
   status: TaskStatus;
   referenceImageUrl?: string;
   referenceImageName?: string;
+  promptSnapshot?: string;
   scheduledAt?: string;
   createdAt: string;
   updatedAt: string;

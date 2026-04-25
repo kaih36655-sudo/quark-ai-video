@@ -10,6 +10,7 @@ export type AppUser = {
   role: "user" | "admin";
   disabled: boolean;
   balance: number;
+  authorizedAgentIds?: string[];
   createdAt: string;
   updatedAt: string;
 };
@@ -121,6 +122,15 @@ async function ensureInitialAdmin(users: AppUser[]) {
   return [admin];
 }
 
+function createUniqueNumericUserId(users: AppUser[]) {
+  const existing = new Set(users.map((user) => user.id));
+  for (let attempt = 0; attempt < 1000; attempt += 1) {
+    const id = String(10000 + crypto.randomInt(90000));
+    if (!existing.has(id)) return id;
+  }
+  throw new Error("无法生成唯一用户 ID");
+}
+
 export async function listUsers() {
   const users = await ensureInitialAdmin(await readJsonArray<AppUser>(USERS_FILE));
   return users;
@@ -143,15 +153,15 @@ export async function createUser(payload: { email: string; password: string; nam
     throw new Error("邮箱已注册");
   }
   const now = new Date().toISOString();
-  const maxId = users.reduce((max, user) => Math.max(max, Number(user.id.replace(/^u_/, "")) || 0), 0);
   const user: AppUser = {
-    id: `u_${maxId + 1}`,
+    id: createUniqueNumericUserId(users),
     email,
     passwordHash: hashPassword(payload.password),
     name: payload.name?.trim() || email.split("@")[0],
     role: "user",
     disabled: false,
     balance: 0,
+    authorizedAgentIds: [],
     createdAt: now,
     updatedAt: now,
   };
@@ -168,7 +178,7 @@ export async function authenticateUser(email: string, password: string) {
   return user;
 }
 
-export async function updateUser(id: string, patch: Partial<Pick<AppUser, "role" | "disabled" | "balance" | "name">>) {
+export async function updateUser(id: string, patch: Partial<Pick<AppUser, "role" | "disabled" | "balance" | "name" | "authorizedAgentIds">>) {
   const users = await listUsers();
   const index = users.findIndex((user) => user.id === id);
   if (index < 0) return null;

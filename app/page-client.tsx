@@ -120,6 +120,7 @@ export default function Home() {
 
   const [mode, setMode] = useState("agent");
   const [agentSearch, setAgentSearch] = useState("");
+  const [agentProfiles, setAgentProfiles] = useState<AgentProfile[]>(AGENT_PROFILES);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [duration, setDuration] = useState("12s");
   const [ratio, setRatio] = useState("16:9");
@@ -246,6 +247,7 @@ export default function Home() {
 
     setMounted(true);
     void refreshCurrentUser();
+    void refreshAgents();
   }, []);
 
 
@@ -263,6 +265,21 @@ export default function Home() {
     setIsLoggedIn(false);
     setBalance("0.0");
     setCurrentUserRole("user");
+  };
+
+  const refreshAgents = async () => {
+    const res = await fetch("/api/agents", { cache: "no-store" });
+    const json = await res.json();
+    if (!res.ok || !json?.success || !Array.isArray(json.data)) return;
+    const nextAgents = json.data.map((agent: Record<string, unknown>): AgentProfile => ({
+      id: String(agent.id ?? ""),
+      name: String(agent.name ?? "未命名智能体"),
+      description: String(agent.description ?? ""),
+      tags: Array.isArray(agent.tags) ? agent.tags.filter((tag): tag is string => typeof tag === "string") : [],
+      access: agent.accessType === "restricted" ? "restricted" : "public",
+      isAuthorized: Boolean(agent.isAuthorized),
+    }));
+    setAgentProfiles(nextAgents);
   };
 
   const handleLogout = async () => {
@@ -356,7 +373,7 @@ export default function Home() {
     referenceImageName: typeof task.referenceImageName === "string" ? task.referenceImageName : undefined,
     referenceImageThumbData: normalizeDisplayUrl(typeof task.referenceImageUrl === "string" ? task.referenceImageUrl : undefined),
     scheduledAt: typeof task.scheduledAt === "string" ? Date.parse(task.scheduledAt) : undefined,
-    promptSnapshot: typeof task.prompt === "string" ? task.prompt : undefined,
+    promptSnapshot: typeof task.promptSnapshot === "string" ? task.promptSnapshot : typeof task.prompt === "string" ? task.prompt : undefined,
     countSnapshot: typeof task.count === "number" ? task.count : undefined,
     agentId: typeof task.agentId === "string" ? task.agentId : undefined,
     agentName: typeof task.agentName === "string" ? task.agentName : undefined,
@@ -1003,9 +1020,9 @@ export default function Home() {
   };
 
   const makeTaskId = (taskId: number) => `TASK-${String(taskId).padStart(3, "0")}`;
-  const selectedAgent = AGENT_PROFILES.find((agent) => agent.id === selectedAgentId) ?? null;
+  const selectedAgent = agentProfiles.find((agent) => agent.id === selectedAgentId) ?? null;
   const agentSearchKeyword = agentSearch.trim().toLowerCase();
-  const visibleAgents = AGENT_PROFILES.filter((agent) => {
+  const visibleAgents = agentProfiles.filter((agent) => {
     if (!agentSearchKeyword) return true;
     return (
       agent.name.toLowerCase().includes(agentSearchKeyword) ||
@@ -2645,8 +2662,8 @@ export default function Home() {
               onClick={(e) => e.stopPropagation()}
               className={
                 isDark
-                  ? "w-full max-w-lg rounded-3xl border border-gray-800 bg-[#121214] p-6 shadow-xl"
-                  : "w-full max-w-lg rounded-3xl border border-gray-200 bg-white p-6 shadow-xl"
+                  ? `w-full ${previewVideo.mediaType === "image" ? "max-w-5xl" : "max-w-lg"} rounded-3xl border border-gray-800 bg-[#121214] p-6 shadow-xl`
+                  : `w-full ${previewVideo.mediaType === "image" ? "max-w-5xl" : "max-w-lg"} rounded-3xl border border-gray-200 bg-white p-6 shadow-xl`
               }
             >
               {!previewVideo ? (
@@ -2723,20 +2740,26 @@ export default function Home() {
                 )}
                 <div
                   className={
-                    isDark
-                      ? "relative h-52 overflow-auto rounded-2xl border border-gray-800 bg-[#18181b]"
-                      : "relative h-52 overflow-auto rounded-2xl border border-gray-200 bg-gray-50"
+                    previewVideo.mediaType === "image"
+                      ? isDark
+                        ? "relative max-h-[75vh] min-h-[60vh] overflow-auto rounded-2xl border border-gray-800 bg-[#18181b]"
+                        : "relative max-h-[75vh] min-h-[60vh] overflow-auto rounded-2xl border border-gray-200 bg-gray-50"
+                      : isDark
+                        ? "relative h-52 overflow-hidden rounded-2xl border border-gray-800 bg-[#18181b]"
+                        : "relative h-52 overflow-hidden rounded-2xl border border-gray-200 bg-gray-50"
                   }
                 >
                   {previewVideo.videoUrl ? (
                     previewVideo.mediaType === "image" ? (
-                      <div className="flex min-h-full min-w-full items-center justify-center">
+                      <div className="flex min-h-full min-w-full items-center justify-center p-2">
                         <img
                           src={previewVideo.videoUrl}
                           alt={previewVideo.title || "生成图片"}
-                          className="max-h-none max-w-none object-contain transition-transform duration-150"
+                          className="object-contain transition-all duration-150"
                           style={{
-                            width: `${imagePreviewScale * 100}%`,
+                            maxHeight: imagePreviewScale === 1 ? "75vh" : "none",
+                            maxWidth: imagePreviewScale === 1 ? "100%" : "none",
+                            width: imagePreviewScale === 1 ? "auto" : `${imagePreviewScale * 100}%`,
                             height: "auto",
                           }}
                         />

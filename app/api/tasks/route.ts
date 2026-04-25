@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { agentsRepository, tasksRepository, videosRepository } from "@/lib/server/repositories";
+import { tasksRepository, videosRepository } from "@/lib/server/repositories";
 import { scheduleTask } from "@/lib/server/task-runner";
 import { ApiResponse } from "@/lib/server/types";
 import { getCurrentUser, requireCurrentUser } from "@/lib/server/auth";
 import { estimateTaskCost } from "@/lib/server/pricing";
+import { canUserUseAgent, composeAgentPrompt, getManagedAgentById } from "@/lib/server/agent-store";
 
 export const runtime = "nodejs";
 
@@ -60,26 +61,28 @@ export async function POST(req: NextRequest) {
   if (!Number.isFinite(count) || count < 1 || count > 10) {
     return NextResponse.json<ApiResponse<null>>({ success: false, message: "count 必须在 1~10" }, { status: 400 });
   }
-  const estimateCost = estimateTaskCost({ mode, duration, imageSize, count });
+  const estimateCost = await estimateTaskCost({ mode, duration, imageSize, count });
   if (currentUser.balance < estimateCost) {
     return NextResponse.json<ApiResponse<null>>({ success: false, message: `余额不足，预计需要 ¥${estimateCost.toFixed(2)}` }, { status: 402 });
   }
 
   let agentName: string | undefined;
   let accessType: "public" | "restricted" | undefined;
+  let promptSnapshot = prompt;
   if (mode === "agent") {
     if (!body.agentId) {
       return NextResponse.json<ApiResponse<null>>({ success: false, message: "智能体模式必须选择 agentId" }, { status: 400 });
     }
-    const agent = agentsRepository.getById(body.agentId);
+    const agent = await getManagedAgentById(body.agentId);
     if (!agent) {
       return NextResponse.json<ApiResponse<null>>({ success: false, message: "智能体不存在或不可用" }, { status: 400 });
     }
-    if (agent.accessType === "restricted" && !agent.isAuthorized) {
+    if (!canUserUseAgent(currentUser, agent)) {
       return NextResponse.json<ApiResponse<null>>({ success: false, message: "当前智能体尚未获得授权，无法执行任务" }, { status: 403 });
     }
     agentName = agent.name;
-    accessType = agent.accessType;
+    accessType = agent.visibility === "public" ? "public" : "restricted";
+    promptSnapshot = composeAgentPrompt(agent, prompt);
   }
 
   const isScheduled = Boolean(body.scheduledAt && Date.parse(body.scheduledAt));
@@ -89,6 +92,7 @@ export async function POST(req: NextRequest) {
     agentName,
     agentAccessType: accessType,
     prompt,
+    promptSnapshot,
     mode,
     duration,
     ratio,

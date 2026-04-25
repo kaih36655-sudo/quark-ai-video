@@ -13,16 +13,20 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       disabled?: boolean;
       balanceDelta?: number;
       reason?: string;
+      authorizedAgentIds?: string[];
     };
     const existing = await getUserById(id);
     if (!existing) {
       return NextResponse.json({ success: false, message: "用户不存在" }, { status: 404 });
     }
     let user = existing;
-    if (body.role === "user" || body.role === "admin" || typeof body.disabled === "boolean") {
+    if (body.role === "user" || body.role === "admin" || typeof body.disabled === "boolean" || Array.isArray(body.authorizedAgentIds)) {
       const patch: Parameters<typeof updateUser>[1] = {};
       if (body.role === "user" || body.role === "admin") patch.role = body.role;
       if (typeof body.disabled === "boolean") patch.disabled = body.disabled;
+      if (Array.isArray(body.authorizedAgentIds)) {
+        patch.authorizedAgentIds = body.authorizedAgentIds.filter((id): id is string => typeof id === "string");
+      }
       user = await updateUser(id, patch) ?? user;
     }
     if (typeof body.balanceDelta === "number" && Number.isFinite(body.balanceDelta) && body.balanceDelta !== 0) {
