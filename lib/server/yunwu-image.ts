@@ -22,7 +22,8 @@ const UPLOADS_DIR = "/www/wwwroot/quark-video-git/public/uploads";
 const IMAGE_UPLOAD_DIR = path.join(UPLOADS_DIR, "images");
 
 const getBaseUrl = () => (process.env.YUNWU_BASE_URL || process.env.SORA2_BASE_URL || "https://yunwu.ai").replace(/\/$/, "");
-const getImagePath = () => process.env.YUNWU_IMAGE_PATH || "/v1/images/generations";
+const GPT_IMAGE_2_MODEL = "gpt-image-2";
+const GEMINI_IMAGE_MODEL = "gemini-3.1-flash-image-preview";
 
 const log = (stage: string, payload: Record<string, unknown>) => {
   console.log(`[YUNWU_IMAGE][${stage}]`, JSON.stringify(payload));
@@ -76,14 +77,14 @@ const normalizeImageModel = (imageModel?: string) => {
 
 const resolveYunwuImageModel = (displayModel?: string) => {
   const normalized = normalizeImageModel(displayModel);
-  if (normalized === "banana2") return "gemini-3.1-flash-image-preview";
-  return "gpt-image-2";
+  if (normalized === "banana2") return GEMINI_IMAGE_MODEL;
+  return GPT_IMAGE_2_MODEL;
 };
 
 const resolveYunwuApiKey = (apiModel: string) => {
   const dedicatedImage2Key = process.env.YUNWU_IMAGE2_API_KEY || "";
   const defaultKey = process.env.YUNWU_API_KEY || "";
-  if (apiModel === "gpt-image-2") {
+  if (apiModel === GPT_IMAGE_2_MODEL) {
     return {
       apiKey: dedicatedImage2Key || defaultKey,
       hasDedicatedImage2Key: Boolean(dedicatedImage2Key),
@@ -93,6 +94,13 @@ const resolveYunwuApiKey = (apiModel: string) => {
     apiKey: defaultKey,
     hasDedicatedImage2Key: Boolean(dedicatedImage2Key),
   };
+};
+
+const resolveYunwuEndpoint = (apiModel: string) => {
+  if (apiModel === GEMINI_IMAGE_MODEL) {
+    return joinUrl(getBaseUrl(), `/v1beta/models/${GEMINI_IMAGE_MODEL}:generateContent`);
+  }
+  return joinUrl(getBaseUrl(), "/v1/images/generations");
 };
 
 const localUploadPathFromUrl = (url: string) => {
@@ -198,6 +206,69 @@ const shouldRetryImageError = (message: string) => {
   );
 };
 
+const resolveGptImage2Size = (aspectRatio: string, imageSize: string) => {
+  if (imageSize === "1K") {
+    if (aspectRatio === "1:1") return "1024x1024";
+    if (aspectRatio === "16:9") return "1536x864";
+    return "864x1536";
+  }
+  if (imageSize === "2K") {
+    if (aspectRatio === "9:16") {
+      throw new Error("image2模型暂不支持该比例");
+    }
+    if (aspectRatio === "1:1") return "2048x2048";
+    return "2048x1152";
+  }
+  if (aspectRatio === "1:1") {
+    throw new Error("image2模型暂不支持该比例");
+  }
+  if (aspectRatio === "16:9") return "4096x2304";
+  return "2304x4096";
+};
+
+const createRequestBody = (params: {
+  apiModel: string;
+  prompt: string;
+  aspectRatio: string;
+  imageSize: string;
+  referenceImageInlineData?: Awaited<ReturnType<typeof resolveReferenceImageInlineData>>;
+}) => {
+  if (params.apiModel === GEMINI_IMAGE_MODEL) {
+    const parts: Record<string, unknown>[] = [{ text: params.prompt }];
+    if (params.referenceImageInlineData) {
+      parts.push({
+        inline_data: {
+          mime_type: params.referenceImageInlineData.mimeType,
+          data: params.referenceImageInlineData.data,
+        },
+      });
+    }
+    return {
+      body: {
+        contents: [{ role: "user", parts }],
+        generationConfig: {
+          responseModalities: ["IMAGE"],
+          imageConfig: {
+            aspectRatio: params.aspectRatio,
+            imageSize: params.imageSize,
+          },
+        },
+      } as Record<string, unknown>,
+      size: undefined,
+    };
+  }
+  const size = resolveGptImage2Size(params.aspectRatio, params.imageSize);
+  return {
+    body: {
+      model: params.apiModel,
+      prompt: params.prompt,
+      n: 1,
+      size,
+    } as Record<string, unknown>,
+    size,
+  };
+};
+
 async function saveImageBytes(bytes: Uint8Array, ext: string) {
   await mkdir(IMAGE_UPLOAD_DIR, { recursive: true });
   const fileName = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`;
@@ -230,25 +301,20 @@ export async function generateYunwuImage(params: GenerateYunwuImageParams): Prom
   const apiModel = resolveYunwuImageModel(displayModel);
   const { apiKey, hasDedicatedImage2Key } = resolveYunwuApiKey(apiModel);
   if (!apiKey) {
-    throw new Error(apiModel === "gpt-image-2" ? "缺少 YUNWU_IMAGE2_API_KEY 或 YUNWU_API_KEY，请在服务端环境变量配置" : "缺少 YUNWU_API_KEY，请在服务端环境变量配置");
+    throw new Error(apiModel === GPT_IMAGE_2_MODEL ? "缺少 YUNWU_IMAGE2_API_KEY 或 YUNWU_API_KEY，请在服务端环境变量配置" : "缺少 YUNWU_API_KEY，请在服务端环境变量配置");
   }
   const mode: YunwuImageMode = params.referenceImageUrl ? "image-to-image" : "text-to-image";
-  const endpoint = joinUrl(getBaseUrl(), getImagePath());
+  const endpoint = resolveYunwuEndpoint(apiModel);
   const aspectRatio = normalizeAspectRatio(params.ratio);
   const imageSize = normalizeImageSize(params.imageSize);
   const referenceImageInlineData = await resolveReferenceImageInlineData(params.referenceImageUrl);
-  const body: Record<string, unknown> = {
-    model: apiModel,
+  const { body, size } = createRequestBody({
+    apiModel,
     prompt: params.prompt,
-    n: 1,
-    response_format: "url",
-    aspect_ratio: aspectRatio,
-    size: imageSize,
-  };
-  if (referenceImageInlineData) {
-    body.image = `data:${referenceImageInlineData.mimeType};base64,${referenceImageInlineData.data}`;
-    body.images = [body.image];
-  }
+    aspectRatio,
+    imageSize,
+    referenceImageInlineData,
+  });
 
   const maxAttempts = 3;
   let lastErrorMessage = "图片生成失败";
@@ -259,11 +325,13 @@ export async function generateYunwuImage(params: GenerateYunwuImageParams): Prom
         displayModel,
         apiModel,
         endpoint,
+        requestBodyKeys: Object.keys(body),
         hasDedicatedImage2Key,
         attempt,
         maxAttempts,
         aspectRatio,
         imageSize,
+        size,
         hasReferenceImage: Boolean(params.referenceImageUrl),
         promptPreview: params.prompt.slice(0, 120),
       });

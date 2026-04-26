@@ -81,7 +81,7 @@ export default function LoginPage() {
             <a
               href="https://work.weixin.qq.com/ca/cawcde87c5c2d49c7f"
               target="_blank"
-              rel="noopener noreferrer"
+              rel="noreferrer"
               className="text-xs text-gray-400 transition hover:text-gray-700"
             >
               忘记密码

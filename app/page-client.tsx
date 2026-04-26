@@ -80,9 +80,6 @@ type PricingConfig = {
   image2_1K: number;
   image2_2K: number;
   image2_4K: number;
-  banana2_1K: number;
-  banana2_2K: number;
-  banana2_4K: number;
 };
 
 const DEFAULT_PRICING: PricingConfig = {
@@ -97,9 +94,6 @@ const DEFAULT_PRICING: PricingConfig = {
   image2_1K: 0.5,
   image2_2K: 0.8,
   image2_4K: 1.5,
-  banana2_1K: 0.5,
-  banana2_2K: 0.8,
-  banana2_4K: 1.5,
 };
 
 const PAGE_SIZE = 50;
@@ -343,9 +337,6 @@ export default function Home() {
         image2_1K: Number(next.image2_1K ?? next.image_1K ?? DEFAULT_PRICING.image2_1K),
         image2_2K: Number(next.image2_2K ?? next.image_2K ?? DEFAULT_PRICING.image2_2K),
         image2_4K: Number(next.image2_4K ?? next.image_4K ?? DEFAULT_PRICING.image2_4K),
-        banana2_1K: Number(next.banana2_1K ?? DEFAULT_PRICING.banana2_1K),
-        banana2_2K: Number(next.banana2_2K ?? DEFAULT_PRICING.banana2_2K),
-        banana2_4K: Number(next.banana2_4K ?? DEFAULT_PRICING.banana2_4K),
       });
     } catch {
       setPricing(DEFAULT_PRICING);
@@ -1101,8 +1092,8 @@ export default function Home() {
   };
 
   const estimatedCost = (() => {
-    const imagePrefix: "banana2" | "image2" = imageModel === "banana2" ? "banana2" : "image2";
-    const imagePriceKey = `${imagePrefix}_${imageSize}` as "image2_1K" | "image2_2K" | "image2_4K" | "banana2_1K" | "banana2_2K" | "banana2_4K";
+    const imagePrefix: "image" | "image2" = imageModel === "banana2" ? "image" : "image2";
+    const imagePriceKey = `${imagePrefix}_${imageSize}` as "image_1K" | "image_2K" | "image_4K" | "image2_1K" | "image2_2K" | "image2_4K";
     const unit =
       mode === "image"
         ? pricing[imagePriceKey]
@@ -1840,15 +1831,24 @@ export default function Home() {
                 ...(mode === "image" ? [{ label: "1:1方屏", value: "1:1" }] : []),
                 { label: "9:16竖屏", value: "9:16" },
                 { label: "16:9横屏", value: "16:9" },
-              ].map((item) => (
-                <button
-                  key={item.value}
-                  onClick={() => setRatio(item.value)}
-                  className={`rounded-full px-4 py-2 text-sm transition ${pillClass(ratio === item.value)}`}
-                >
-                  {item.label}
-                </button>
-              ))}
+              ].map((item) => {
+                const disabled = mode === "image" && imageModel === "image2" && ((item.value === "9:16" && imageSize === "2K") || (item.value === "1:1" && imageSize === "4K"));
+                return (
+                  <button
+                    key={item.value}
+                    onClick={() => {
+                      if (disabled) {
+                        showToast("image2模型暂不支持该比例");
+                        return;
+                      }
+                      setRatio(item.value);
+                    }}
+                    className={`rounded-full px-4 py-2 text-sm transition ${disabled ? "cursor-not-allowed bg-gray-100 text-gray-400 opacity-60" : pillClass(ratio === item.value)}`}
+                  >
+                    {item.label}
+                  </button>
+                );
+              })}
 
               {mode === "image" ? (
                 <>

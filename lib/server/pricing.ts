@@ -14,9 +14,6 @@ export type PricingConfig = {
   image2_1K: number;
   image2_2K: number;
   image2_4K: number;
-  banana2_1K: number;
-  banana2_2K: number;
-  banana2_4K: number;
 };
 
 const DATA_DIR = path.join(process.cwd(), "data");
@@ -34,14 +31,17 @@ export const DEFAULT_PRICING: PricingConfig = {
   image2_1K: 0.5,
   image2_2K: 0.8,
   image2_4K: 1.5,
-  banana2_1K: 0.5,
-  banana2_2K: 0.8,
-  banana2_4K: 1.5,
 };
 
 async function writePricing(config: PricingConfig) {
   await mkdir(DATA_DIR, { recursive: true });
-  await writeFile(PRICING_FILE, JSON.stringify(config, null, 2), "utf-8");
+  let existing: Record<string, unknown> = {};
+  try {
+    existing = JSON.parse(await readFile(PRICING_FILE, "utf-8")) as Record<string, unknown>;
+  } catch {
+    existing = {};
+  }
+  await writeFile(PRICING_FILE, JSON.stringify({ ...existing, ...config }, null, 2), "utf-8");
 }
 
 export async function getPricingConfig() {
@@ -60,9 +60,6 @@ export async function getPricingConfig() {
       image2_1K: Number(parsed.image2_1K ?? parsed.image_1K ?? DEFAULT_PRICING.image2_1K),
       image2_2K: Number(parsed.image2_2K ?? parsed.image_2K ?? DEFAULT_PRICING.image2_2K),
       image2_4K: Number(parsed.image2_4K ?? parsed.image_4K ?? DEFAULT_PRICING.image2_4K),
-      banana2_1K: Number(parsed.banana2_1K ?? DEFAULT_PRICING.banana2_1K),
-      banana2_2K: Number(parsed.banana2_2K ?? DEFAULT_PRICING.banana2_2K),
-      banana2_4K: Number(parsed.banana2_4K ?? DEFAULT_PRICING.banana2_4K),
     };
     return config;
   } catch {
@@ -94,9 +91,9 @@ export async function updatePricingConfig(patch: Partial<PricingConfig>) {
 export async function getUnitPrice(input: Pick<Task, "mode" | "duration" | "imageSize" | "imageModel">) {
   const pricing = await getPricingConfig();
   if (input.mode === "image") {
-    const prefix: "banana2" | "image2" = input.imageModel === "banana2" ? "banana2" : "image2";
     const size = input.imageSize === "1K" || input.imageSize === "4K" ? input.imageSize : "2K";
-    const key = `${prefix}_${size}` as "image2_1K" | "image2_2K" | "image2_4K" | "banana2_1K" | "banana2_2K" | "banana2_4K";
+    const prefix: "image" | "image2" = input.imageModel === "banana2" ? "image" : "image2";
+    const key = `${prefix}_${size}` as "image_1K" | "image_2K" | "image_4K" | "image2_1K" | "image2_2K" | "image2_4K";
     return pricing[key];
   }
   if (input.duration === "8s") return pricing.video_8s;

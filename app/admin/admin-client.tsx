@@ -42,9 +42,6 @@ type PricingConfig = {
   image2_1K: number;
   image2_2K: number;
   image2_4K: number;
-  banana2_1K: number;
-  banana2_2K: number;
-  banana2_4K: number;
 };
 
 const emptyAgent: ManagedAgent = {
@@ -181,6 +178,18 @@ export default function AdminClient() {
   };
 
   const fieldClass = "rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none";
+  const agentPromptHints: Record<
+    "scenePrompt" | "characterPrompt" | "languagePrompt" | "cameraPrompt" | "stylePrompt" | "negativePrompt" | "extraPrompt",
+    string
+  > = {
+    scenePrompt: "场景提示，描述画面发生的地点、环境和背景",
+    characterPrompt: "角色提示，描述人物/主体身份、外观、动作和状态",
+    languagePrompt: "语言/对白提示，描述对白语言、语气、口播风格",
+    cameraPrompt: "镜头提示，描述机位、景别、运镜和拍摄方式",
+    stylePrompt: "风格提示，描述视觉风格、质感、光影和色调",
+    negativePrompt: "负面提示，描述不要出现的内容",
+    extraPrompt: "补充提示，放置其他额外要求或固定规则",
+  };
 
   return (
     <main className="min-h-screen bg-[#f7f7f8] px-6 py-8 text-black">
@@ -236,7 +245,7 @@ export default function AdminClient() {
           <div className="grid gap-3 md:grid-cols-3">
             <label>
               <input className={fieldClass} placeholder="名称" value={editingAgent.name} onChange={(e) => setEditingAgent((prev) => ({ ...prev, name: e.target.value }))} />
-              <div className="mt-1 text-xs text-gray-400">名称：用于前端展示</div>
+              <div className="mt-1 text-xs text-gray-400">智能体名称，用于前台展示</div>
             </label>
             <label>
               <select className={fieldClass} value={editingAgent.type} onChange={(e) => setEditingAgent((prev) => ({ ...prev, type: e.target.value as ManagedAgent["type"] }))}>
@@ -244,13 +253,19 @@ export default function AdminClient() {
                 <option value="image">图片</option>
                 <option value="both">全部</option>
               </select>
-              <div className="mt-1 text-xs text-gray-400">类型：区分视频/图片用途</div>
+              <div className="mt-1 text-xs text-gray-400">适用类型，决定用于视频、图片或全部</div>
             </label>
-            <select className={fieldClass} value={editingAgent.visibility} onChange={(e) => setEditingAgent((prev) => ({ ...prev, visibility: e.target.value as ManagedAgent["visibility"] }))}>
-              <option value="public">公开</option>
-              <option value="private">非公开</option>
-            </select>
-            <input className={`${fieldClass} md:col-span-3`} placeholder="描述" value={editingAgent.description} onChange={(e) => setEditingAgent((prev) => ({ ...prev, description: e.target.value }))} />
+            <label>
+              <select className={fieldClass} value={editingAgent.visibility} onChange={(e) => setEditingAgent((prev) => ({ ...prev, visibility: e.target.value as ManagedAgent["visibility"] }))}>
+                <option value="public">公开</option>
+                <option value="private">非公开</option>
+              </select>
+              <div className="mt-1 text-xs text-gray-400">公开状态，公开智能体所有用户可见，非公开需授权</div>
+            </label>
+            <label className="md:col-span-3">
+              <input className={`${fieldClass} w-full`} placeholder="描述" value={editingAgent.description} onChange={(e) => setEditingAgent((prev) => ({ ...prev, description: e.target.value }))} />
+              <div className="mt-1 text-xs text-gray-400">智能体简介，用于说明适用场景</div>
+            </label>
             <label className="md:col-span-3">
               <input
                 className={`${fieldClass} w-full`}
@@ -258,7 +273,7 @@ export default function AdminClient() {
                 value={editingAgent.tags.join(",")}
                 onChange={(e) => setEditingAgent((prev) => ({ ...prev, tags: e.target.value.split(",").map((tag) => tag.trim()).filter(Boolean) }))}
               />
-              <div className="mt-1 text-xs text-gray-400">标签：用于前端展示，可用逗号分隔</div>
+              <div className="mt-1 text-xs text-gray-400">标签名称，用于前台卡片展示，可多个</div>
             </label>
             {(["scenePrompt", "characterPrompt", "languagePrompt", "cameraPrompt", "stylePrompt", "negativePrompt", "extraPrompt"] as const).map((key) => (
               <label key={key}>
@@ -268,12 +283,15 @@ export default function AdminClient() {
                   value={editingAgent[key]}
                   onChange={(e) => setEditingAgent((prev) => ({ ...prev, [key]: e.target.value }))}
                 />
-                <div className="mt-1 text-xs text-gray-400">prompt：用于生成内容的核心提示词</div>
+                <div className="mt-1 text-xs text-gray-400">{agentPromptHints[key]}</div>
               </label>
             ))}
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={editingAgent.enabled} onChange={(e) => setEditingAgent((prev) => ({ ...prev, enabled: e.target.checked }))} />
-              启用
+              <span>
+                启用
+                <div className="mt-1 text-xs text-gray-400">启用状态，关闭后前台不可使用</div>
+              </span>
             </label>
             <button onClick={() => void saveAgent()} className="rounded-xl bg-black px-4 py-2 text-sm text-white">{editingAgent.id ? "保存修改" : "创建智能体"}</button>
           </div>
