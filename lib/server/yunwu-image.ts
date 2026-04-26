@@ -32,6 +32,8 @@ const log = (stage: string, payload: Record<string, unknown>) => {
   console.log(`[YUNWU_IMAGE][${stage}]`, JSON.stringify(payload));
 };
 
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const pickString = (value: unknown): string | undefined => {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
@@ -200,13 +202,13 @@ const shouldRetryImageError = (message: string) => {
   const lower = message.toLowerCase();
   return (
     lower.includes("429") ||
+    lower.includes("status=429") ||
     lower.includes("no_image") ||
     lower.includes("image_generation_failed") ||
     lower.includes("network") ||
     lower.includes("fetch failed") ||
     lower.includes("timeout") ||
     lower.includes("status=5") ||
-    lower.includes("status=4") ||
     lower.includes("未返回图片")
   );
 };
@@ -322,6 +324,7 @@ export async function generateYunwuImage(params: GenerateYunwuImageParams): Prom
   });
 
   const maxAttempts = 3;
+  const retryDelaysMs = [2000, 5000];
   let lastErrorMessage = "图片生成失败";
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
@@ -398,6 +401,7 @@ export async function generateYunwuImage(params: GenerateYunwuImageParams): Prom
     } catch (error) {
       lastErrorMessage = stringifyUnknown(error) || lastErrorMessage;
       if (attempt < maxAttempts && shouldRetryImageError(lastErrorMessage)) {
+        const delayMs = retryDelaysMs[attempt - 1] ?? 0;
         log("RETRY", {
           mode,
           displayModel,
@@ -405,8 +409,12 @@ export async function generateYunwuImage(params: GenerateYunwuImageParams): Prom
           endpoint,
           attempt,
           maxAttempts,
+          delayMs,
           message: lastErrorMessage,
         });
+        if (delayMs > 0) {
+          await delay(delayMs);
+        }
         continue;
       }
       break;
