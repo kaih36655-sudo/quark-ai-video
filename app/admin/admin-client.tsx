@@ -273,11 +273,16 @@ export default function AdminClient() {
                   <td className="px-4 py-3">¥{user.balance.toFixed(2)}</td>
                   <td className="px-4 py-3">{user.disabled ? "已禁用" : "正常"}</td>
                   <td className="px-4 py-3">
-                    <div className="space-y-1">
+                    <div className="min-w-48 rounded-2xl border border-gray-100 bg-gray-50 p-3">
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <span className="text-xs font-medium text-gray-700">授权 private 智能体</span>
+                        <span className="text-[10px] text-gray-400">{(user.authorizedAgentIds ?? []).length} 项</span>
+                      </div>
+                      <div className="space-y-1.5">
                       {privateAgents.length === 0 ? <span className="text-xs text-gray-400">暂无 private 智能体</span> : privateAgents.map((agent) => {
                         const checked = (user.authorizedAgentIds ?? []).includes(agent.id);
                         return (
-                          <label key={agent.id} className="flex items-center gap-1 text-xs">
+                          <label key={agent.id} className="flex items-center gap-2 rounded-xl bg-white px-2 py-1 text-xs text-gray-700">
                             <input
                               type="checkbox"
                               checked={checked}
@@ -292,6 +297,8 @@ export default function AdminClient() {
                           </label>
                         );
                       })}
+                      </div>
+                      <div className="mt-2 text-[10px] text-gray-400">勾选后该用户前台可见并使用该 private 智能体</div>
                     </div>
                   </td>
                   <td className="space-y-2 px-4 py-3">

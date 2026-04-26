@@ -66,6 +66,24 @@ type AgentProfile = {
   isAuthorized?: boolean;
 };
 
+type PricingConfig = {
+  video_4s: number;
+  video_8s: number;
+  video_12s: number;
+  image_1K: number;
+  image_2K: number;
+  image_4K: number;
+};
+
+const DEFAULT_PRICING: PricingConfig = {
+  video_4s: 0.8,
+  video_8s: 1.6,
+  video_12s: 2.4,
+  image_1K: 0.5,
+  image_2K: 0.8,
+  image_4K: 1.5,
+};
+
 const PAGE_SIZE = 50;
 const AGENT_PROFILES: AgentProfile[] = [
   {
@@ -121,6 +139,7 @@ export default function Home() {
   const [mode, setMode] = useState("agent");
   const [agentSearch, setAgentSearch] = useState("");
   const [agentProfiles, setAgentProfiles] = useState<AgentProfile[]>(AGENT_PROFILES);
+  const [pricing, setPricing] = useState<PricingConfig>(DEFAULT_PRICING);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [duration, setDuration] = useState("12s");
   const [ratio, setRatio] = useState("16:9");
@@ -248,6 +267,7 @@ export default function Home() {
     setMounted(true);
     void refreshCurrentUser();
     void refreshAgents();
+    void refreshPricing();
   }, []);
 
 
@@ -280,6 +300,25 @@ export default function Home() {
       isAuthorized: Boolean(agent.isAuthorized),
     }));
     setAgentProfiles(nextAgents);
+  };
+
+  const refreshPricing = async () => {
+    try {
+      const res = await fetch("/api/pricing", { cache: "no-store" });
+      const json = await res.json();
+      const next = json?.data?.pricing;
+      if (!res.ok || !next) return;
+      setPricing({
+        video_4s: Number(next.video_4s ?? DEFAULT_PRICING.video_4s),
+        video_8s: Number(next.video_8s ?? DEFAULT_PRICING.video_8s),
+        video_12s: Number(next.video_12s ?? DEFAULT_PRICING.video_12s),
+        image_1K: Number(next.image_1K ?? DEFAULT_PRICING.image_1K),
+        image_2K: Number(next.image_2K ?? DEFAULT_PRICING.image_2K),
+        image_4K: Number(next.image_4K ?? DEFAULT_PRICING.image_4K),
+      });
+    } catch {
+      setPricing(DEFAULT_PRICING);
+    }
   };
 
   const handleLogout = async () => {
@@ -1018,6 +1057,23 @@ export default function Home() {
     }
     fileInputRef.current?.click();
   };
+
+  const estimatedCost = (() => {
+    const unit =
+      mode === "image"
+        ? imageSize === "1K"
+          ? pricing.image_1K
+          : imageSize === "4K"
+            ? pricing.image_4K
+            : pricing.image_2K
+        : duration === "4s"
+          ? pricing.video_4s
+          : duration === "8s"
+            ? pricing.video_8s
+            : pricing.video_12s;
+    return Number((unit * generateCount).toFixed(2));
+  })();
+  const isBalanceInsufficient = isLoggedIn && Number(balance) < estimatedCost;
 
   const makeTaskId = (taskId: number) => `TASK-${String(taskId).padStart(3, "0")}`;
   const selectedAgent = agentProfiles.find((agent) => agent.id === selectedAgentId) ?? null;
@@ -1788,12 +1844,18 @@ export default function Home() {
                 {timingEnabled ? "已开启定时" : "定时生成"}
               </button>
 
+              <div className={isDark ? "ml-auto rounded-full border border-gray-700 bg-gray-800 px-4 py-2 text-sm text-gray-100" : "ml-auto rounded-full border border-gray-200 bg-gray-50 px-4 py-2 text-sm text-gray-700"}>
+                <span className="mr-1">金币</span>
+                预计消耗 ¥{estimatedCost.toFixed(1)}
+                {isBalanceInsufficient && <span className="ml-2 text-rose-500">余额不足，请充值</span>}
+              </div>
+
               <button
                 onClick={handleGenerate}
                 className={
                   isDark
-                    ? "ml-auto rounded-full bg-white px-6 py-2 text-sm font-medium text-black"
-                    : "ml-auto rounded-full bg-black px-6 py-2 text-sm font-medium text-white"
+                    ? "rounded-full bg-white px-6 py-2 text-sm font-medium text-black"
+                    : "rounded-full bg-black px-6 py-2 text-sm font-medium text-white"
                 }
               >
                 {isGenerating ? "生成中..." : "开始生成"}
@@ -2662,8 +2724,8 @@ export default function Home() {
               onClick={(e) => e.stopPropagation()}
               className={
                 isDark
-                  ? `w-full ${previewVideo.mediaType === "image" ? "max-w-5xl" : "max-w-lg"} rounded-3xl border border-gray-800 bg-[#121214] p-6 shadow-xl`
-                  : `w-full ${previewVideo.mediaType === "image" ? "max-w-5xl" : "max-w-lg"} rounded-3xl border border-gray-200 bg-white p-6 shadow-xl`
+                  ? `w-full ${previewVideo.mediaType === "image" ? "max-h-[90vh] max-w-[90vw] overflow-hidden p-4" : "max-w-lg p-6"} rounded-3xl border border-gray-800 bg-[#121214] shadow-xl`
+                  : `w-full ${previewVideo.mediaType === "image" ? "max-h-[90vh] max-w-[90vw] overflow-hidden p-4" : "max-w-lg p-6"} rounded-3xl border border-gray-200 bg-white shadow-xl`
               }
             >
               {!previewVideo ? (
@@ -2712,7 +2774,7 @@ export default function Home() {
                 </button>
               </div>
 
-              <div className="space-y-4">
+              <div className={previewVideo.mediaType === "image" ? "max-h-[calc(90vh-5.5rem)] space-y-4 overflow-y-auto pr-1" : "space-y-4"}>
                 {previewVideo.mediaType === "image" && (
                   <div className="flex flex-wrap items-center justify-end gap-2">
                     <span className={isDark ? "text-xs text-gray-400" : "text-xs text-gray-500"}>
@@ -2742,8 +2804,8 @@ export default function Home() {
                   className={
                     previewVideo.mediaType === "image"
                       ? isDark
-                        ? "relative max-h-[75vh] min-h-[60vh] overflow-auto rounded-2xl border border-gray-800 bg-[#18181b]"
-                        : "relative max-h-[75vh] min-h-[60vh] overflow-auto rounded-2xl border border-gray-200 bg-gray-50"
+                        ? "relative max-h-[60vh] overflow-auto rounded-2xl border border-gray-800 bg-[#18181b]"
+                        : "relative max-h-[60vh] overflow-auto rounded-2xl border border-gray-200 bg-gray-50"
                       : isDark
                         ? "relative h-52 overflow-hidden rounded-2xl border border-gray-800 bg-[#18181b]"
                         : "relative h-52 overflow-hidden rounded-2xl border border-gray-200 bg-gray-50"
@@ -2757,7 +2819,7 @@ export default function Home() {
                           alt={previewVideo.title || "生成图片"}
                           className="object-contain transition-all duration-150"
                           style={{
-                            maxHeight: imagePreviewScale === 1 ? "75vh" : "none",
+                            maxHeight: imagePreviewScale === 1 ? "60vh" : "none",
                             maxWidth: imagePreviewScale === 1 ? "100%" : "none",
                             width: imagePreviewScale === 1 ? "auto" : `${imagePreviewScale * 100}%`,
                             height: "auto",
