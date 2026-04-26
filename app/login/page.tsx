@@ -77,6 +77,16 @@ export default function LoginPage() {
               className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none placeholder:text-gray-400"
             />
           </div>
+          <div className="mt-2 flex justify-end">
+            <a
+              href="https://work.weixin.qq.com/ca/cawcde87c5c2d49c7f"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-gray-400 transition hover:text-gray-700"
+            >
+              忘记密码
+            </a>
+          </div>
           {message && <div className="mt-3 rounded-xl bg-red-50 px-4 py-2 text-sm text-red-600">{message}</div>}
 
           <button

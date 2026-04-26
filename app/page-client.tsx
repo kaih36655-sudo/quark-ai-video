@@ -24,6 +24,7 @@ type Task = {
   agentAccess?: "public" | "restricted";
   agentAuthorized?: boolean;
   imageSize?: "1K" | "2K" | "4K";
+  imageModel?: "image2" | "banana2";
 };
 
 type Video = {
@@ -42,6 +43,7 @@ type Video = {
   ratio: "1:1" | "9:16" | "16:9";
   size?: string;
   imageSize?: "1K" | "2K" | "4K";
+  imageModel?: "image2" | "banana2";
   originalVideoUrl?: string;
   originalCoverUrl?: string;
   upscaledVideoUrl?: string;
@@ -67,21 +69,37 @@ type AgentProfile = {
 };
 
 type PricingConfig = {
+  video_enabled: boolean;
+  image_enabled: boolean;
   video_4s: number;
   video_8s: number;
   video_12s: number;
   image_1K: number;
   image_2K: number;
   image_4K: number;
+  image2_1K: number;
+  image2_2K: number;
+  image2_4K: number;
+  banana2_1K: number;
+  banana2_2K: number;
+  banana2_4K: number;
 };
 
 const DEFAULT_PRICING: PricingConfig = {
+  video_enabled: true,
+  image_enabled: true,
   video_4s: 0.8,
   video_8s: 1.6,
   video_12s: 2.4,
   image_1K: 0.5,
   image_2K: 0.8,
   image_4K: 1.5,
+  image2_1K: 0.5,
+  image2_2K: 0.8,
+  image2_4K: 1.5,
+  banana2_1K: 0.5,
+  banana2_2K: 0.8,
+  banana2_4K: 1.5,
 };
 
 const PAGE_SIZE = 50;
@@ -144,6 +162,7 @@ export default function Home() {
   const [duration, setDuration] = useState("12s");
   const [ratio, setRatio] = useState("16:9");
   const [imageSize, setImageSize] = useState<"1K" | "2K" | "4K">("2K");
+  const [imageModel, setImageModel] = useState<"image2" | "banana2">("image2");
   const [timingEnabled, setTimingEnabled] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateProgress, setGenerateProgress] = useState(0);
@@ -199,6 +218,7 @@ export default function Home() {
     const savedDuration = localStorage.getItem("quark_duration");
     const savedRatio = localStorage.getItem("quark_ratio");
     const savedImageSize = localStorage.getItem("quark_image_size");
+    const savedImageModel = localStorage.getItem("quark_image_model");
     const savedHasReferenceImage = localStorage.getItem("quark_has_reference_image");
     const savedReferenceImageData = localStorage.getItem("quark_reference_image_data");
     const savedReferenceImageThumbData = localStorage.getItem("quark_reference_image_thumb_data");
@@ -247,6 +267,9 @@ export default function Home() {
     }
     if (savedImageSize === "1K" || savedImageSize === "2K" || savedImageSize === "4K") {
       setImageSize(savedImageSize);
+    }
+    if (savedImageModel === "banana2" || savedImageModel === "image2") {
+      setImageModel(savedImageModel);
     }
 
     if (savedHasReferenceImage === "true") {
@@ -309,12 +332,20 @@ export default function Home() {
       const next = json?.data?.pricing;
       if (!res.ok || !next) return;
       setPricing({
+        video_enabled: typeof next.video_enabled === "boolean" ? next.video_enabled : DEFAULT_PRICING.video_enabled,
+        image_enabled: typeof next.image_enabled === "boolean" ? next.image_enabled : DEFAULT_PRICING.image_enabled,
         video_4s: Number(next.video_4s ?? DEFAULT_PRICING.video_4s),
         video_8s: Number(next.video_8s ?? DEFAULT_PRICING.video_8s),
         video_12s: Number(next.video_12s ?? DEFAULT_PRICING.video_12s),
         image_1K: Number(next.image_1K ?? DEFAULT_PRICING.image_1K),
         image_2K: Number(next.image_2K ?? DEFAULT_PRICING.image_2K),
         image_4K: Number(next.image_4K ?? DEFAULT_PRICING.image_4K),
+        image2_1K: Number(next.image2_1K ?? next.image_1K ?? DEFAULT_PRICING.image2_1K),
+        image2_2K: Number(next.image2_2K ?? next.image_2K ?? DEFAULT_PRICING.image2_2K),
+        image2_4K: Number(next.image2_4K ?? next.image_4K ?? DEFAULT_PRICING.image2_4K),
+        banana2_1K: Number(next.banana2_1K ?? DEFAULT_PRICING.banana2_1K),
+        banana2_2K: Number(next.banana2_2K ?? DEFAULT_PRICING.banana2_2K),
+        banana2_4K: Number(next.banana2_4K ?? DEFAULT_PRICING.banana2_4K),
       });
     } catch {
       setPricing(DEFAULT_PRICING);
@@ -418,6 +449,7 @@ export default function Home() {
     agentName: typeof task.agentName === "string" ? task.agentName : undefined,
     agentAccess: task.agentAccessType === "restricted" ? "restricted" : task.agentAccessType === "public" ? "public" : undefined,
     imageSize: task.imageSize === "1K" || task.imageSize === "4K" ? task.imageSize : task.imageSize === "2K" ? "2K" : undefined,
+    imageModel: task.imageModel === "banana2" ? "banana2" : task.imageModel === "image2" ? "image2" : undefined,
   });
 
   const mapApiVideoToLocal = (video: Record<string, unknown>): Video => {
@@ -523,6 +555,7 @@ export default function Home() {
       ratio: inferredRatio,
       size: rawSize,
       imageSize: video.imageSize === "1K" || video.imageSize === "4K" ? video.imageSize : video.imageSize === "2K" ? "2K" : rawSize === "1K" || rawSize === "2K" || rawSize === "4K" ? rawSize : undefined,
+      imageModel: video.imageModel === "banana2" ? "banana2" : video.imageModel === "image2" ? "image2" : undefined,
       originalVideoUrl,
       originalCoverUrl,
       upscaledVideoUrl,
@@ -593,6 +626,7 @@ export default function Home() {
       duration,
       ratio: mode === "image" ? ratio : ratio === "9:16" ? "9:16" : "16:9",
       imageSize: mode === "image" ? imageSize : undefined,
+      imageModel: mode === "image" ? imageModel : undefined,
       count: effectiveCount,
       agentId: activeAgentId,
       referenceImageUrl: useReference ? referenceImageData ?? undefined : undefined,
@@ -653,6 +687,14 @@ export default function Home() {
     if (!isLoggedIn) {
       showToast("请先登录后再创建任务");
       router.push("/login");
+      return;
+    }
+    if (!currentChannelEnabled) {
+      showToast("通道维护升级中请稍后再试");
+      return;
+    }
+    if (imageModelRestrictionMessage) {
+      showToast(imageModelRestrictionMessage);
       return;
     }
     if (mode === "agent" && !selectedAgent) {
@@ -1059,13 +1101,11 @@ export default function Home() {
   };
 
   const estimatedCost = (() => {
+    const imagePrefix: "banana2" | "image2" = imageModel === "banana2" ? "banana2" : "image2";
+    const imagePriceKey = `${imagePrefix}_${imageSize}` as "image2_1K" | "image2_2K" | "image2_4K" | "banana2_1K" | "banana2_2K" | "banana2_4K";
     const unit =
       mode === "image"
-        ? imageSize === "1K"
-          ? pricing.image_1K
-          : imageSize === "4K"
-            ? pricing.image_4K
-            : pricing.image_2K
+        ? pricing[imagePriceKey]
         : duration === "4s"
           ? pricing.video_4s
           : duration === "8s"
@@ -1074,6 +1114,13 @@ export default function Home() {
     return Number((unit * generateCount).toFixed(2));
   })();
   const isBalanceInsufficient = isLoggedIn && Number(balance) < estimatedCost;
+  const currentChannelEnabled = mode === "image" ? pricing.image_enabled : pricing.video_enabled;
+  const imageModelRestrictionMessage =
+    mode === "image" && imageModel === "image2" && imageSize === "2K" && ratio === "9:16"
+      ? "image2模型暂不支持该比例"
+      : mode === "image" && imageModel === "image2" && imageSize === "4K" && ratio === "1:1"
+        ? "image2模型暂不支持该比例"
+        : "";
 
   const makeTaskId = (taskId: number) => `TASK-${String(taskId).padStart(3, "0")}`;
   const selectedAgent = agentProfiles.find((agent) => agent.id === selectedAgentId) ?? null;
@@ -1161,6 +1208,7 @@ export default function Home() {
         ratio: video.ratio,
         size: video.size,
         imageSize: video.imageSize ?? parentTask?.imageSize,
+        imageModel: video.imageModel ?? parentTask?.imageModel,
         coverData: video.coverData,
         videoUrl: video.videoUrl,
         kind: parentTask?.kind === "schedule" ? "schedule" : "video",
@@ -1373,6 +1421,11 @@ export default function Home() {
     if (!mounted) return;
     localStorage.setItem("quark_image_size", imageSize);
   }, [imageSize, mounted]);
+
+  useEffect(() => {
+    if (!mounted) return;
+    localStorage.setItem("quark_image_model", imageModel);
+  }, [imageModel, mounted]);
 
   useEffect(() => {
     if (!mounted) return;
@@ -1798,18 +1851,44 @@ export default function Home() {
               ))}
 
               {mode === "image" ? (
-                <div className="flex items-center gap-2">
-                  <span className={isDark ? "text-sm text-gray-400" : "text-sm text-gray-500"}>分辨率</span>
-                  {(["1K", "2K", "4K"] as const).map((item) => (
-                    <button
-                      key={item}
-                      onClick={() => setImageSize(item)}
-                      className={`rounded-full px-4 py-2 text-sm transition ${pillClass(imageSize === item)}`}
-                    >
-                      {item}
-                    </button>
-                  ))}
-                </div>
+                <>
+                  <div className="flex items-center gap-2">
+                    <span className={isDark ? "text-sm text-gray-400" : "text-sm text-gray-500"}>模型</span>
+                    {[
+                      { label: "image2", value: "image2" },
+                      { label: "Nano Banana2", value: "banana2" },
+                    ].map((item) => (
+                      <button
+                        key={item.value}
+                        onClick={() => setImageModel(item.value as "image2" | "banana2")}
+                        className={`rounded-full px-4 py-2 text-sm transition ${pillClass(imageModel === item.value)}`}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={isDark ? "text-sm text-gray-400" : "text-sm text-gray-500"}>分辨率</span>
+                    {(["1K", "2K", "4K"] as const).map((item) => {
+                      const disabled = imageModel === "image2" && ((item === "2K" && ratio === "9:16") || (item === "4K" && ratio === "1:1"));
+                      return (
+                        <button
+                          key={item}
+                          onClick={() => {
+                            if (disabled) {
+                              showToast("image2模型暂不支持该比例");
+                              return;
+                            }
+                            setImageSize(item);
+                          }}
+                          className={`rounded-full px-4 py-2 text-sm transition ${disabled ? "cursor-not-allowed bg-gray-100 text-gray-400 opacity-60" : pillClass(imageSize === item)}`}
+                        >
+                          {item}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
               ) : (
                 <div className={isDark ? "rounded-full bg-gray-800 px-4 py-2 text-sm text-gray-100" : "rounded-full bg-gray-100 px-4 py-2 text-sm text-gray-700"}>
                   超清1080P
@@ -1845,8 +1924,10 @@ export default function Home() {
               </button>
 
               <div className={isDark ? "ml-auto rounded-full border border-gray-700 bg-gray-800 px-4 py-2 text-sm text-gray-100" : "ml-auto rounded-full border border-gray-200 bg-gray-50 px-4 py-2 text-sm text-gray-700"}>
-                <span className="mr-1">金币</span>
+                <span className="mr-1">🪙</span>
                 预计消耗 ¥{estimatedCost.toFixed(1)}
+                {!currentChannelEnabled && <span className="ml-2 text-rose-500">通道维护升级中请稍后再试</span>}
+                {imageModelRestrictionMessage && <span className="ml-2 text-rose-500">{imageModelRestrictionMessage}</span>}
                 {isBalanceInsufficient && <span className="ml-2 text-rose-500">余额不足，请充值</span>}
               </div>
 
@@ -2724,8 +2805,8 @@ export default function Home() {
               onClick={(e) => e.stopPropagation()}
               className={
                 isDark
-                  ? `w-full ${previewVideo.mediaType === "image" ? "max-h-[90vh] max-w-[90vw] overflow-hidden p-4" : "max-w-lg p-6"} rounded-3xl border border-gray-800 bg-[#121214] shadow-xl`
-                  : `w-full ${previewVideo.mediaType === "image" ? "max-h-[90vh] max-w-[90vw] overflow-hidden p-4" : "max-w-lg p-6"} rounded-3xl border border-gray-200 bg-white shadow-xl`
+                  ? `w-full ${previewVideo.mediaType === "image" ? "max-h-[90vh] max-w-[70vw] overflow-hidden p-4" : "max-w-lg p-6"} rounded-3xl border border-gray-800 bg-[#121214] shadow-xl`
+                  : `w-full ${previewVideo.mediaType === "image" ? "max-h-[90vh] max-w-[70vw] overflow-hidden p-4" : "max-w-lg p-6"} rounded-3xl border border-gray-200 bg-white shadow-xl`
               }
             >
               {!previewVideo ? (
@@ -2797,6 +2878,19 @@ export default function Home() {
                       className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700"}
                     >
                       重置
+                    </button>
+                    <span className={isDark ? "mx-1 h-5 w-px bg-gray-700" : "mx-1 h-5 w-px bg-gray-200"} />
+                    <button
+                      onClick={() => void handleDownload(previewVideo)}
+                      className={isDark ? "rounded-full border border-white/15 bg-white px-3 py-1 text-xs font-semibold text-black" : "rounded-full bg-black px-3 py-1 text-xs font-semibold text-white"}
+                    >
+                      下载
+                    </button>
+                    <button
+                      onClick={() => handleCopy(previewVideo.item)}
+                      className={isDark ? "rounded-full border border-gray-700 bg-gray-800 px-3 py-1 text-xs font-medium text-gray-100" : "rounded-full border border-gray-200 bg-gray-100 px-3 py-1 text-xs font-medium text-gray-700"}
+                    >
+                      {isPreviewCopied ? "已复制✓" : "复制文案"}
                     </button>
                   </div>
                 )}
@@ -2889,7 +2983,7 @@ export default function Home() {
                   </div>
                 </div>
 
-                <div className="flex flex-wrap items-center justify-end gap-2">
+                {previewVideo.mediaType !== "image" && <div className="flex flex-wrap items-center justify-end gap-2">
                   <button
                     onClick={() => void handleDownload(previewVideo)}
                     className={
@@ -2910,7 +3004,7 @@ export default function Home() {
                   >
                     {isPreviewCopied ? "已复制✓" : "复制文案"}
                   </button>
-                </div>
+                </div>}
               </div>
                 </>
               )}

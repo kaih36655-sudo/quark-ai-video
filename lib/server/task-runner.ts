@@ -490,6 +490,7 @@ async function executeTask(taskId: string) {
           referenceImageUrl: task.referenceImageUrl,
           ratio: task.ratio,
           imageSize: targetImageSize,
+          imageModel: task.imageModel,
         });
         successCount += 1;
         const created = videosRepository.createMany([
@@ -521,6 +522,7 @@ async function executeTask(taskId: string) {
             ratio: targetRatio,
             size: targetImageSize,
             imageSize: targetImageSize,
+            imageModel: task.imageModel,
           },
         ])[0];
         runnerLog("IMAGE_SUCCESS_WRITE", {
@@ -564,6 +566,7 @@ async function executeTask(taskId: string) {
             ratio: targetRatio,
             size: targetImageSize,
             imageSize: targetImageSize,
+            imageModel: task.imageModel,
           },
         ]);
         runnerLog("IMAGE_FAILED_WRITE", {

@@ -8,6 +8,7 @@ type GenerateYunwuImageParams = {
   referenceImageUrl?: string;
   ratio?: string;
   imageSize?: "1K" | "2K" | "4K";
+  imageModel?: "image2" | "banana2";
 };
 
 type GenerateYunwuImageResult = {
@@ -22,13 +23,7 @@ const IMAGE_UPLOAD_DIR = path.join(UPLOADS_DIR, "images");
 
 const getYunwuApiKey = () => process.env.YUNWU_API_KEY || process.env.SORA2_API_KEY || process.env.SORA_API_KEY || "";
 const getBaseUrl = () => (process.env.YUNWU_BASE_URL || process.env.SORA2_BASE_URL || "https://yunwu.ai").replace(/\/$/, "");
-const getImageModel = () =>
-  process.env.YUNWU_IMAGE_MODEL ||
-  process.env.YUNWU_TEXT_TO_IMAGE_MODEL ||
-  process.env.YUNWU_IMAGE_TO_IMAGE_MODEL ||
-  "gemini-3.1-flash-image-preview";
-const getImagePath = (model: string) =>
-  process.env.YUNWU_IMAGE_PATH || `/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+const getImagePath = () => process.env.YUNWU_IMAGE_PATH || "/v1/images/generations";
 
 const log = (stage: string, payload: Record<string, unknown>) => {
   console.log(`[YUNWU_IMAGE][${stage}]`, JSON.stringify(payload));
@@ -73,6 +68,11 @@ const normalizeAspectRatio = (ratio?: string) => {
 const normalizeImageSize = (imageSize?: string) => {
   if (imageSize === "1K" || imageSize === "2K" || imageSize === "4K") return imageSize;
   return "2K";
+};
+
+const normalizeImageModel = (imageModel?: string) => {
+  if (imageModel === "banana2") return "Nano Banana2";
+  return "image2";
 };
 
 const localUploadPathFromUrl = (url: string) => {
@@ -211,30 +211,23 @@ export async function generateYunwuImage(params: GenerateYunwuImageParams): Prom
     throw new Error("缺少 YUNWU_API_KEY，请在服务端环境变量配置；也可临时复用 SORA2_API_KEY/SORA_API_KEY");
   }
   const mode: YunwuImageMode = params.referenceImageUrl ? "image-to-image" : "text-to-image";
-  const model = getImageModel();
-  const endpoint = joinUrl(getBaseUrl(), getImagePath(model));
+  const model = normalizeImageModel(params.imageModel);
+  const endpoint = joinUrl(getBaseUrl(), getImagePath());
   const aspectRatio = normalizeAspectRatio(params.ratio);
   const imageSize = normalizeImageSize(params.imageSize);
   const referenceImageInlineData = await resolveReferenceImageInlineData(params.referenceImageUrl);
-  const parts: Record<string, unknown>[] = [{ text: params.prompt }];
-  if (referenceImageInlineData) {
-    parts.push({
-      inline_data: {
-        mime_type: referenceImageInlineData.mimeType,
-        data: referenceImageInlineData.data,
-      },
-    });
-  }
   const body: Record<string, unknown> = {
-    contents: [{ role: "user", parts }],
-    generationConfig: {
-      responseModalities: ["IMAGE"],
-      imageConfig: {
-        aspectRatio,
-        imageSize,
-      },
-    },
+    model,
+    prompt: params.prompt,
+    n: 1,
+    response_format: "url",
+    aspect_ratio: aspectRatio,
+    size: imageSize,
   };
+  if (referenceImageInlineData) {
+    body.image = `data:${referenceImageInlineData.mimeType};base64,${referenceImageInlineData.data}`;
+    body.images = [body.image];
+  }
 
   const maxAttempts = 3;
   let lastErrorMessage = "图片生成失败";

@@ -17,6 +17,7 @@ type ManagedAgent = {
   id: string;
   name: string;
   description: string;
+  tags: string[];
   type: "video" | "image" | "both";
   visibility: "public" | "private";
   enabled: boolean;
@@ -30,18 +31,27 @@ type ManagedAgent = {
 };
 
 type PricingConfig = {
+  video_enabled: boolean;
+  image_enabled: boolean;
   video_4s: number;
   video_8s: number;
   video_12s: number;
   image_1K: number;
   image_2K: number;
   image_4K: number;
+  image2_1K: number;
+  image2_2K: number;
+  image2_4K: number;
+  banana2_1K: number;
+  banana2_2K: number;
+  banana2_4K: number;
 };
 
 const emptyAgent: ManagedAgent = {
   id: "",
   name: "",
   description: "",
+  tags: [],
   type: "both",
   visibility: "public",
   enabled: true,
@@ -61,8 +71,19 @@ export default function AdminClient() {
   const [message, setMessage] = useState("");
   const [deltas, setDeltas] = useState<Record<string, string>>({});
   const [editingAgent, setEditingAgent] = useState<ManagedAgent>(emptyAgent);
+  const [userSearch, setUserSearch] = useState("");
+  const [userPage, setUserPage] = useState(1);
+  const [grantUser, setGrantUser] = useState<AdminUser | null>(null);
+  const [grantAgentIds, setGrantAgentIds] = useState<string[]>([]);
 
   const privateAgents = agents.filter((agent) => agent.visibility === "private");
+  const filteredUsers = users.filter((user) => {
+    const keyword = userSearch.trim().toLowerCase();
+    if (!keyword) return true;
+    return user.id.toLowerCase().includes(keyword) || user.email.toLowerCase().includes(keyword) || user.name.toLowerCase().includes(keyword);
+  });
+  const userTotalPages = Math.max(1, Math.ceil(filteredUsers.length / 20));
+  const pagedUsers = filteredUsers.slice((userPage - 1) * 20, userPage * 20);
 
   const loadUsers = async () => {
     const res = await fetch("/api/admin/users", { cache: "no-store" });
@@ -176,21 +197,33 @@ export default function AdminClient() {
         <section className="rounded-3xl border border-gray-200 bg-white p-5 shadow-sm">
           <h2 className="mb-4 text-lg font-semibold">价格配置</h2>
           {pricing && (
-            <div className="grid gap-3 md:grid-cols-6">
-              {(Object.keys(pricing) as (keyof PricingConfig)[]).map((key) => (
+            <div className="space-y-4">
+              <div className="flex flex-wrap gap-4">
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <input type="checkbox" checked={pricing.video_enabled} onChange={(event) => setPricing((prev) => prev ? { ...prev, video_enabled: event.target.checked } : prev)} />
+                  视频生成开关
+                </label>
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <input type="checkbox" checked={pricing.image_enabled} onChange={(event) => setPricing((prev) => prev ? { ...prev, image_enabled: event.target.checked } : prev)} />
+                  图片生成开关
+                </label>
+              </div>
+              <div className="grid gap-3 md:grid-cols-6">
+              {(Object.keys(pricing).filter((key) => typeof pricing[key as keyof PricingConfig] === "number") as (keyof PricingConfig)[]).map((key) => (
                 <label key={key} className="space-y-1 text-xs text-gray-500">
                   <span>{key}</span>
                   <input
                     type="number"
                     min="0"
                     step="0.1"
-                    value={pricing[key]}
+                    value={pricing[key] as number}
                     onChange={(event) => setPricing((prev) => prev ? { ...prev, [key]: Number(event.target.value) } : prev)}
                     className={fieldClass}
                   />
                 </label>
               ))}
               <button onClick={() => void savePricing()} className="self-end rounded-xl bg-black px-4 py-2 text-sm text-white">保存价格</button>
+              </div>
             </div>
           )}
         </section>
@@ -201,25 +234,42 @@ export default function AdminClient() {
             <button onClick={() => setEditingAgent(emptyAgent)} className="rounded-full bg-gray-100 px-3 py-1.5 text-xs text-gray-700">新建</button>
           </div>
           <div className="grid gap-3 md:grid-cols-3">
-            <input className={fieldClass} placeholder="名称" value={editingAgent.name} onChange={(e) => setEditingAgent((prev) => ({ ...prev, name: e.target.value }))} />
-            <select className={fieldClass} value={editingAgent.type} onChange={(e) => setEditingAgent((prev) => ({ ...prev, type: e.target.value as ManagedAgent["type"] }))}>
-              <option value="video">视频</option>
-              <option value="image">图片</option>
-              <option value="both">全部</option>
-            </select>
+            <label>
+              <input className={fieldClass} placeholder="名称" value={editingAgent.name} onChange={(e) => setEditingAgent((prev) => ({ ...prev, name: e.target.value }))} />
+              <div className="mt-1 text-xs text-gray-400">名称：用于前端展示</div>
+            </label>
+            <label>
+              <select className={fieldClass} value={editingAgent.type} onChange={(e) => setEditingAgent((prev) => ({ ...prev, type: e.target.value as ManagedAgent["type"] }))}>
+                <option value="video">视频</option>
+                <option value="image">图片</option>
+                <option value="both">全部</option>
+              </select>
+              <div className="mt-1 text-xs text-gray-400">类型：区分视频/图片用途</div>
+            </label>
             <select className={fieldClass} value={editingAgent.visibility} onChange={(e) => setEditingAgent((prev) => ({ ...prev, visibility: e.target.value as ManagedAgent["visibility"] }))}>
               <option value="public">公开</option>
               <option value="private">非公开</option>
             </select>
             <input className={`${fieldClass} md:col-span-3`} placeholder="描述" value={editingAgent.description} onChange={(e) => setEditingAgent((prev) => ({ ...prev, description: e.target.value }))} />
-            {(["scenePrompt", "characterPrompt", "languagePrompt", "cameraPrompt", "stylePrompt", "negativePrompt", "extraPrompt"] as const).map((key) => (
-              <textarea
-                key={key}
-                className={`${fieldClass} min-h-20`}
-                placeholder={key}
-                value={editingAgent[key]}
-                onChange={(e) => setEditingAgent((prev) => ({ ...prev, [key]: e.target.value }))}
+            <label className="md:col-span-3">
+              <input
+                className={`${fieldClass} w-full`}
+                placeholder="标签，逗号分隔，例如：视频,带货,公开"
+                value={editingAgent.tags.join(",")}
+                onChange={(e) => setEditingAgent((prev) => ({ ...prev, tags: e.target.value.split(",").map((tag) => tag.trim()).filter(Boolean) }))}
               />
+              <div className="mt-1 text-xs text-gray-400">标签：用于前端展示，可用逗号分隔</div>
+            </label>
+            {(["scenePrompt", "characterPrompt", "languagePrompt", "cameraPrompt", "stylePrompt", "negativePrompt", "extraPrompt"] as const).map((key) => (
+              <label key={key}>
+                <textarea
+                  className={`${fieldClass} min-h-20 w-full`}
+                  placeholder={key}
+                  value={editingAgent[key]}
+                  onChange={(e) => setEditingAgent((prev) => ({ ...prev, [key]: e.target.value }))}
+                />
+                <div className="mt-1 text-xs text-gray-400">prompt：用于生成内容的核心提示词</div>
+              </label>
             ))}
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={editingAgent.enabled} onChange={(e) => setEditingAgent((prev) => ({ ...prev, enabled: e.target.checked }))} />
@@ -235,6 +285,11 @@ export default function AdminClient() {
                   <div className="text-xs text-gray-500">{agent.type} / {agent.visibility} / {agent.enabled ? "启用" : "停用"}</div>
                 </div>
                 <p className="mb-3 text-xs text-gray-500">{agent.description || "无描述"}</p>
+                <div className="mb-3 flex flex-wrap gap-1">
+                  {agent.tags.map((tag) => (
+                    <span key={`${agent.id}-${tag}`} className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] text-gray-600">{tag}</span>
+                  ))}
+                </div>
                 <div className="flex flex-wrap gap-2">
                   <button onClick={() => setEditingAgent(agent)} className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700">编辑</button>
                   <button onClick={() => void patchAgentQuick(agent.id, { enabled: !agent.enabled })} className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700">{agent.enabled ? "停用" : "启用"}</button>
@@ -247,8 +302,17 @@ export default function AdminClient() {
         </section>
 
         <section className="overflow-x-auto rounded-3xl border border-gray-200 bg-white shadow-sm">
-          <div className="px-5 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
             <h2 className="text-lg font-semibold">用户管理</h2>
+            <input
+              value={userSearch}
+              onChange={(event) => {
+                setUserSearch(event.target.value);
+                setUserPage(1);
+              }}
+              placeholder="搜索 ID / 邮箱 / 昵称"
+              className="rounded-full border border-gray-200 bg-gray-50 px-4 py-2 text-sm outline-none"
+            />
           </div>
           <table className="min-w-full text-left text-sm">
             <thead className="bg-gray-50 text-xs text-gray-500">
@@ -264,7 +328,7 @@ export default function AdminClient() {
               </tr>
             </thead>
             <tbody>
-              {users.map((user) => (
+              {pagedUsers.map((user) => (
                 <tr key={user.id} className="border-t border-gray-100 align-top">
                   <td className="px-4 py-3">{user.id}</td>
                   <td className="px-4 py-3">{user.email}</td>
@@ -273,38 +337,21 @@ export default function AdminClient() {
                   <td className="px-4 py-3">¥{user.balance.toFixed(2)}</td>
                   <td className="px-4 py-3">{user.disabled ? "已禁用" : "正常"}</td>
                   <td className="px-4 py-3">
-                    <div className="min-w-48 rounded-2xl border border-gray-100 bg-gray-50 p-3">
-                      <div className="mb-2 flex items-center justify-between gap-2">
-                        <span className="text-xs font-medium text-gray-700">授权 private 智能体</span>
-                        <span className="text-[10px] text-gray-400">{(user.authorizedAgentIds ?? []).length} 项</span>
-                      </div>
-                      <div className="space-y-1.5">
-                      {privateAgents.length === 0 ? <span className="text-xs text-gray-400">暂无 private 智能体</span> : privateAgents.map((agent) => {
-                        const checked = (user.authorizedAgentIds ?? []).includes(agent.id);
-                        return (
-                          <label key={agent.id} className="flex items-center gap-2 rounded-xl bg-white px-2 py-1 text-xs text-gray-700">
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={() => {
-                                const current = new Set(user.authorizedAgentIds ?? []);
-                                if (checked) current.delete(agent.id);
-                                else current.add(agent.id);
-                                void patchUser(user.id, { authorizedAgentIds: Array.from(current) });
-                              }}
-                            />
-                            {agent.name}
-                          </label>
-                        );
-                      })}
-                      </div>
-                      <div className="mt-2 text-[10px] text-gray-400">勾选后该用户前台可见并使用该 private 智能体</div>
-                    </div>
+                    <span className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600">{(user.authorizedAgentIds ?? []).length} 个已授权</span>
                   </td>
                   <td className="space-y-2 px-4 py-3">
                     <div className="flex flex-wrap gap-2">
                       <button onClick={() => void patchUser(user.id, { disabled: !user.disabled })} className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700">{user.disabled ? "启用" : "禁用"}</button>
                       <button onClick={() => void patchUser(user.id, { role: user.role === "admin" ? "user" : "admin" })} className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700">{user.role === "admin" ? "取消管理员" : "设为管理员"}</button>
+                      <button
+                        onClick={() => {
+                          setGrantUser(user);
+                          setGrantAgentIds(user.authorizedAgentIds ?? []);
+                        }}
+                        className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700"
+                      >
+                        授权智能体
+                      </button>
                     </div>
                     <div className="flex gap-2">
                       <input value={deltas[user.id] ?? ""} onChange={(event) => setDeltas((prev) => ({ ...prev, [user.id]: event.target.value }))} placeholder="+10 或 -5" className="w-24 rounded-full border border-gray-200 px-3 py-1 text-xs outline-none" />
@@ -327,8 +374,55 @@ export default function AdminClient() {
               ))}
             </tbody>
           </table>
+          <div className="flex items-center justify-end gap-3 border-t border-gray-100 px-5 py-4 text-sm text-gray-600">
+            <button onClick={() => setUserPage((prev) => Math.max(1, prev - 1))} disabled={userPage <= 1} className="rounded-full bg-gray-100 px-3 py-1 disabled:opacity-40">上一页</button>
+            <span>第 {userPage} / {userTotalPages} 页，共 {filteredUsers.length} 个用户</span>
+            <button onClick={() => setUserPage((prev) => Math.min(userTotalPages, prev + 1))} disabled={userPage >= userTotalPages} className="rounded-full bg-gray-100 px-3 py-1 disabled:opacity-40">下一页</button>
+          </div>
         </section>
       </div>
+      {grantUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={() => setGrantUser(null)}>
+          <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-xl" onClick={(event) => event.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <div className="text-lg font-semibold">授权智能体</div>
+                <div className="text-xs text-gray-500">{grantUser.email} / {grantUser.id}</div>
+              </div>
+              <button onClick={() => setGrantUser(null)} className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700">关闭</button>
+            </div>
+            <div className="max-h-[52vh] space-y-2 overflow-y-auto rounded-2xl border border-gray-100 bg-gray-50 p-3">
+              {privateAgents.length === 0 ? (
+                <div className="text-sm text-gray-500">暂无 private 智能体</div>
+              ) : privateAgents.map((agent) => {
+                const checked = grantAgentIds.includes(agent.id);
+                return (
+                  <label key={agent.id} className="flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-sm text-gray-700">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => setGrantAgentIds((prev) => checked ? prev.filter((id) => id !== agent.id) : [...prev, agent.id])}
+                    />
+                    <span>{agent.name}</span>
+                  </label>
+                );
+              })}
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button onClick={() => setGrantUser(null)} className="rounded-full bg-gray-100 px-4 py-2 text-sm text-gray-700">取消</button>
+              <button
+                onClick={() => {
+                  void patchUser(grantUser.id, { authorizedAgentIds: grantAgentIds });
+                  setGrantUser(null);
+                }}
+                className="rounded-full bg-black px-4 py-2 text-sm text-white"
+              >
+                保存授权
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 

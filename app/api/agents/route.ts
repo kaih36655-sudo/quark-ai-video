@@ -12,7 +12,9 @@ export async function GET() {
     id: agent.id,
     name: agent.name,
     description: agent.description,
-    tags: [agent.type === "both" ? "全部" : agent.type === "image" ? "图片" : "视频", agent.visibility === "public" ? "公开" : "授权"],
+    tags: agent.tags?.length
+      ? agent.tags
+      : [agent.type === "both" ? "全部" : agent.type === "image" ? "图片" : "视频", agent.visibility === "public" ? "公开" : "授权"],
     accessType: agent.visibility === "public" ? "public" : "restricted",
     isAuthorized: agent.visibility === "public" || Boolean(currentUser?.authorizedAgentIds?.includes(agent.id)),
     workflowKey: agent.id,

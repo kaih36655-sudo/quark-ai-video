@@ -6,6 +6,7 @@ export type ManagedAgent = {
   id: string;
   name: string;
   description: string;
+  tags: string[];
   type: "video" | "image" | "both";
   visibility: "public" | "private";
   enabled: boolean;
@@ -30,6 +31,7 @@ const defaultAgents = (): ManagedAgent[] => {
       id: "video-sales",
       name: "视频带货智能体",
       description: "适合商品卖点拆解、转化型短视频脚本和下单引导场景。",
+      tags: ["视频", "带货", "公开"],
       type: "video",
       visibility: "public",
       enabled: true,
@@ -47,6 +49,7 @@ const defaultAgents = (): ManagedAgent[] => {
       id: "image-product",
       name: "商品图智能体",
       description: "适合生成商品展示图、海报风格图和电商素材。",
+      tags: ["图片", "商品图", "公开"],
       type: "image",
       visibility: "public",
       enabled: true,
@@ -76,7 +79,12 @@ export async function listManagedAgents() {
   try {
     const text = await readFile(AGENTS_FILE, "utf-8");
     const parsed = JSON.parse(text);
-    if (Array.isArray(parsed)) return parsed as ManagedAgent[];
+    if (Array.isArray(parsed)) {
+      return (parsed as Partial<ManagedAgent>[]).map((agent) => ({
+        ...agent,
+        tags: Array.isArray(agent.tags) ? agent.tags.filter((tag): tag is string => typeof tag === "string") : [],
+      })) as ManagedAgent[];
+    }
   } catch {
     // fall through to defaults
   }
@@ -125,6 +133,7 @@ export async function createManagedAgent(payload: Partial<ManagedAgent>) {
     id,
     name: payload.name?.trim() || "未命名智能体",
     description: payload.description?.trim() || "",
+    tags: Array.isArray(payload.tags) ? payload.tags.filter((tag): tag is string => typeof tag === "string" && tag.trim().length > 0) : [],
     type: payload.type === "video" || payload.type === "image" ? payload.type : "both",
     visibility: payload.visibility === "private" ? "private" : "public",
     enabled: payload.enabled ?? true,
@@ -151,6 +160,7 @@ export async function updateManagedAgent(id: string, patch: Partial<ManagedAgent
     ...current,
     ...patch,
     id: current.id,
+    tags: Array.isArray(patch.tags) ? patch.tags.filter((tag): tag is string => typeof tag === "string" && tag.trim().length > 0) : current.tags,
     type: patch.type === "video" || patch.type === "image" || patch.type === "both" ? patch.type : current.type,
     visibility: patch.visibility === "private" || patch.visibility === "public" ? patch.visibility : current.visibility,
     updatedAt: new Date().toISOString(),
