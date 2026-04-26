@@ -44,6 +44,8 @@ type PricingConfig = {
   image2_4K: number;
 };
 
+const formatMoney = (value: unknown) => Number(value || 0).toFixed(2);
+
 const emptyAgent: ManagedAgent = {
   id: "",
   name: "",
@@ -352,7 +354,7 @@ export default function AdminClient() {
                   <td className="px-4 py-3">{user.email}</td>
                   <td className="px-4 py-3">{user.name}</td>
                   <td className="px-4 py-3">{user.role === "admin" ? "管理员" : "用户"}</td>
-                  <td className="px-4 py-3">¥{user.balance.toFixed(2)}</td>
+                  <td className="px-4 py-3">¥{formatMoney(user.balance)}</td>
                   <td className="px-4 py-3">{user.disabled ? "已禁用" : "正常"}</td>
                   <td className="px-4 py-3">
                     <span className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600">{(user.authorizedAgentIds ?? []).length} 个已授权</span>

@@ -45,9 +45,10 @@ const upscalePipelineLog = (stage: "RETRY" | "FINAL_FAILED", payload: Record<str
   console.log(`[UPSCALE][${stage}]`, JSON.stringify(payload));
 };
 
-async function chargeSuccessfulGenerations(task: Task, successCount: number) {
-  if (successCount <= 0) return;
-  const amount = Number((-(await getUnitPrice(task)) * successCount).toFixed(2));
+async function chargeSuccessfulGenerations(task: Task, successCount: number, unitPrice?: number) {
+  if (successCount <= 0) return null;
+  const resolvedUnitPrice = Number((unitPrice ?? (await getUnitPrice(task))).toFixed(2));
+  const amount = Number((-resolvedUnitPrice * successCount).toFixed(2));
   try {
     await adjustUserBalance({
       userId: task.userId,
@@ -60,7 +61,9 @@ async function chargeSuccessfulGenerations(task: Task, successCount: number) {
       userId: task.userId,
       successCount,
       amount,
+      unitPrice: resolvedUnitPrice,
     });
+    return resolvedUnitPrice;
   } catch (error) {
     runnerLog("BALANCE_CHARGE_FAILED", {
       taskId: task.id,
@@ -68,8 +71,19 @@ async function chargeSuccessfulGenerations(task: Task, successCount: number) {
       successCount,
       errorMessage: stringifyUnknownError(error),
     });
+    return null;
   }
 }
+
+function updateSuccessfulRecordCosts(videoIds: string[], unitPrice: number | null) {
+  if (unitPrice === null) return;
+  videoIds.forEach((videoId) => {
+    videosRepository.update(videoId, { cost: unitPrice });
+  });
+}
+
+const getImageModelLabel = (imageModel?: "image2" | "banana2") => (imageModel === "banana2" ? "Nano Banana2" : imageModel === "image2" ? "image2" : "未记录");
+const getImageApiModel = (imageModel?: "image2" | "banana2") => (imageModel === "banana2" ? "gemini-3.1-flash-image-preview" : imageModel === "image2" ? "gpt-image-2" : undefined);
 
 function resolveSoraSeconds(duration: string): number {
   if (duration === "4s") return 4;
@@ -472,8 +486,10 @@ async function executeTask(taskId: string) {
 
   const agent = task.agentId ? await getManagedAgentById(task.agentId) : null;
   const effectivePrompt = task.promptSnapshot || task.prompt;
+  const unitPrice = await getUnitPrice(task);
   let successCount = 0;
   let failedCount = 0;
+  const successfulRecordIds: string[] = [];
   const upscaleJobs: Promise<void>[] = [];
   if (task.mode === "image") {
     for (let index = 0; index < task.count; index += 1) {
@@ -523,8 +539,12 @@ async function executeTask(taskId: string) {
             size: targetImageSize,
             imageSize: targetImageSize,
             imageModel: task.imageModel,
+            displayModel: result.displayModel,
+            imageModelLabel: result.imageModelLabel,
+            apiModel: result.apiModel,
           },
         ])[0];
+        successfulRecordIds.push(created.id);
         runnerLog("IMAGE_SUCCESS_WRITE", {
           taskId: task.id,
           videoId: created.id,
@@ -567,6 +587,9 @@ async function executeTask(taskId: string) {
             size: targetImageSize,
             imageSize: targetImageSize,
             imageModel: task.imageModel,
+            displayModel: task.imageModel,
+            imageModelLabel: getImageModelLabel(task.imageModel),
+            apiModel: getImageApiModel(task.imageModel),
           },
         ]);
         runnerLog("IMAGE_FAILED_WRITE", {
@@ -582,7 +605,8 @@ async function executeTask(taskId: string) {
       return;
     }
     const finalStatus = successCount > 0 ? "success" : "failed";
-    await chargeSuccessfulGenerations(task, successCount);
+    const chargedUnitPrice = await chargeSuccessfulGenerations(task, successCount, unitPrice);
+    updateSuccessfulRecordCosts(successfulRecordIds, chargedUnitPrice);
     tasksRepository.update(taskId, { status: finalStatus });
     runnerLog("TASK_SUMMARY", {
       taskId: task.id,
@@ -687,13 +711,14 @@ async function executeTask(taskId: string) {
           previewImageUrl: soraResult.videoUrl || "",
           referenceImageUrl: task.referenceImageUrl,
           referenceImageName: task.referenceImageName,
-          cost: 0.8,
+          cost: 0,
           seconds: soraResult.seconds,
           duration: task.duration,
           ratio: soraResult.ratio || targetRatio,
           size: soraResult.size || targetSize,
         },
       ])[0];
+      successfulRecordIds.push(created.id);
 
       runnerLog("VIDEO_SUCCESS_WRITE", {
         taskId: task.id,
@@ -865,7 +890,8 @@ async function executeTask(taskId: string) {
   const upscaleFailedCount = taskVideos.filter((v) => v.status === "success" && v.upscaleStatus === "failed").length;
 
   const finalStatus = successCount > 0 ? "success" : "failed";
-  await chargeSuccessfulGenerations(task, successCount);
+  const chargedUnitPrice = await chargeSuccessfulGenerations(task, successCount, unitPrice);
+  updateSuccessfulRecordCosts(successfulRecordIds, chargedUnitPrice);
   tasksRepository.update(taskId, { status: finalStatus });
 
   runnerLog("TASK_SUMMARY", {

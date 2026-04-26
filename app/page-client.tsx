@@ -44,6 +44,9 @@ type Video = {
   size?: string;
   imageSize?: "1K" | "2K" | "4K";
   imageModel?: "image2" | "banana2";
+  displayModel?: string;
+  imageModelLabel?: string;
+  apiModel?: string;
   originalVideoUrl?: string;
   originalCoverUrl?: string;
   upscaledVideoUrl?: string;
@@ -97,6 +100,16 @@ const DEFAULT_PRICING: PricingConfig = {
 };
 
 const PAGE_SIZE = 50;
+const formatMoney = (value: unknown) => Number(value || 0).toFixed(2);
+const formatImageModelLabel = (video?: { mediaType?: "video" | "image"; imageModelLabel?: string; imageModel?: "image2" | "banana2"; displayModel?: string; apiModel?: string }) => {
+  if (video?.mediaType !== "image") return "";
+  if (video.imageModelLabel) return video.imageModelLabel;
+  if (video.displayModel === "banana2") return "Nano Banana2";
+  if (video.displayModel === "image2") return "image2";
+  if (video.imageModel === "banana2" || video.apiModel === "gemini-3.1-flash-image-preview") return "Nano Banana2";
+  if (video.imageModel === "image2" || video.apiModel === "gpt-image-2") return "image2";
+  return "未记录";
+};
 const AGENT_PROFILES: AgentProfile[] = [
   {
     id: "mercari-jp",
@@ -143,7 +156,7 @@ export default function Home() {
 
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [userId, setUserId] = useState("10293");
-  const [balance, setBalance] = useState("0.0");
+  const [balance, setBalance] = useState("0.00");
   const [currentUserRole, setCurrentUserRole] = useState<"user" | "admin">("user");
   const [mounted, setMounted] = useState(false);
   const [isDark, setIsDark] = useState(false);
@@ -295,12 +308,12 @@ export default function Home() {
     if (res.ok && user) {
       setIsLoggedIn(true);
       setUserId(String(user.id));
-      setBalance(Number(user.balance ?? 0).toFixed(1));
+      setBalance(formatMoney(user.balance));
       setCurrentUserRole(user.role === "admin" ? "admin" : "user");
       return;
     }
     setIsLoggedIn(false);
-    setBalance("0.0");
+    setBalance("0.00");
     setCurrentUserRole("user");
   };
 
@@ -347,7 +360,7 @@ export default function Home() {
     await fetch("/api/auth/logout", { method: "POST" });
     setIsLoggedIn(false);
     setUserId("");
-    setBalance("0.0");
+    setBalance("0.00");
     router.push("/login");
   };
 
@@ -547,6 +560,9 @@ export default function Home() {
       size: rawSize,
       imageSize: video.imageSize === "1K" || video.imageSize === "4K" ? video.imageSize : video.imageSize === "2K" ? "2K" : rawSize === "1K" || rawSize === "2K" || rawSize === "4K" ? rawSize : undefined,
       imageModel: video.imageModel === "banana2" ? "banana2" : video.imageModel === "image2" ? "image2" : undefined,
+      displayModel: typeof video.displayModel === "string" ? video.displayModel : undefined,
+      imageModelLabel: typeof video.imageModelLabel === "string" ? video.imageModelLabel : undefined,
+      apiModel: typeof video.apiModel === "string" ? video.apiModel : undefined,
       originalVideoUrl,
       originalCoverUrl,
       upscaledVideoUrl,
@@ -1200,6 +1216,9 @@ export default function Home() {
         size: video.size,
         imageSize: video.imageSize ?? parentTask?.imageSize,
         imageModel: video.imageModel ?? parentTask?.imageModel,
+        displayModel: video.displayModel,
+        imageModelLabel: video.imageModelLabel,
+        apiModel: video.apiModel,
         coverData: video.coverData,
         videoUrl: video.videoUrl,
         kind: parentTask?.kind === "schedule" ? "schedule" : "video",
@@ -1245,7 +1264,7 @@ export default function Home() {
   });
 
   const visibleFavoriteCount = visibleResults.filter((record) => record.isFavorite).length;
-  const totalCost = videos.reduce((sum, video) => sum + video.cost, 0).toFixed(1);
+  const totalCost = formatMoney(videos.reduce((sum, video) => sum + video.cost, 0));
   const totalGeneratedCount = videos.length;
   const successTaskCount = videos.filter((video) => video.status === "success").length;
   const failedTaskCount = videos.filter((video) => video.status === "failed").length;
@@ -1925,7 +1944,7 @@ export default function Home() {
 
               <div className={isDark ? "ml-auto rounded-full border border-gray-700 bg-gray-800 px-4 py-2 text-sm text-gray-100" : "ml-auto rounded-full border border-gray-200 bg-gray-50 px-4 py-2 text-sm text-gray-700"}>
                 <span className="mr-1">🪙</span>
-                预计消耗 ¥{estimatedCost.toFixed(1)}
+                预计消耗 ¥{formatMoney(estimatedCost)}
                 {!currentChannelEnabled && <span className="ml-2 text-rose-500">通道维护升级中请稍后再试</span>}
                 {imageModelRestrictionMessage && <span className="ml-2 text-rose-500">{imageModelRestrictionMessage}</span>}
                 {isBalanceInsufficient && <span className="ml-2 text-rose-500">余额不足，请充值</span>}
@@ -2103,7 +2122,7 @@ export default function Home() {
                       ? "暂无失败任务"
                       : "暂无任务记录"}
               </div>
-            ) : pagedVisibleResults.map(({ item, id, taskId, mediaType, title, prompt: fromTaskPrompt, isFavorite, status, isLatestDone, cost, seconds, duration: videoDuration, upscaleStatus, upscaleErrorMessage, hasReferenceImage: taskHasRef, referenceImageName, referenceImageThumbData: taskRefThumbData, coverData, videoUrl, ratio: videoRatio, size: videoSize, imageSize: resultImageSize, kind, scheduledAt, createdAt, taskStatus, agentName }) => (
+            ) : pagedVisibleResults.map(({ item, id, taskId, mediaType, title, prompt: fromTaskPrompt, isFavorite, status, isLatestDone, cost, seconds, duration: videoDuration, upscaleStatus, upscaleErrorMessage, hasReferenceImage: taskHasRef, referenceImageName, referenceImageThumbData: taskRefThumbData, coverData, videoUrl, ratio: videoRatio, size: videoSize, imageSize: resultImageSize, imageModel, displayModel, imageModelLabel, apiModel, kind, scheduledAt, createdAt, taskStatus, agentName }) => (
               <div
                 key={id}
                 className={
@@ -2134,6 +2153,10 @@ export default function Home() {
                             duration: videoDuration,
                             cost,
                             imageSize: resultImageSize,
+                            imageModel,
+                            displayModel,
+                            imageModelLabel,
+                            apiModel,
                             upscaleStatus,
                             upscaleErrorMessage,
                             hasReferenceImage: taskHasRef,
@@ -2155,7 +2178,7 @@ export default function Home() {
                           {makeTaskId(taskId)}
                         </span>
                         <span className={isDark ? "rounded-full bg-gray-800/90 px-2.5 py-1 text-[11px] font-medium text-gray-300" : "rounded-full bg-gray-100 px-2.5 py-1 text-[11px] font-medium text-gray-600"}>
-                          消耗：¥{cost.toFixed(1)}
+                          消耗：¥{formatMoney(cost)}
                         </span>
                         <span className={getStatusClass(status)}>
                           {statusLabelMap[status]}
@@ -2219,6 +2242,11 @@ export default function Home() {
                         <span className={isDark ? "rounded-full border border-gray-700/70 bg-gray-800/80 px-2 py-0.5 text-[10px] font-medium text-gray-400" : "rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[10px] font-medium text-gray-500"}>
                           {mediaType === "image" ? `分辨率：${getImageSizeLabel(resultImageSize || videoSize)}` : `时长：${getDurationLabel(seconds, videoDuration)}`}
                         </span>
+                        {mediaType === "image" && (
+                          <span className={isDark ? "rounded-full border border-gray-700/70 bg-gray-800/80 px-2 py-0.5 text-[10px] font-medium text-gray-400" : "rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[10px] font-medium text-gray-500"}>
+                            模型：{formatImageModelLabel({ mediaType, imageModel, displayModel, imageModelLabel, apiModel })}
+                          </span>
+                        )}
                         <span className={isDark ? "rounded-full border border-gray-700/70 bg-gray-800/80 px-2 py-0.5 text-[10px] font-medium text-gray-400" : "rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[10px] font-medium text-gray-500"}>
                           比例：{getRatioLabel(videoRatio, videoSize)}
                         </span>
@@ -2264,6 +2292,10 @@ export default function Home() {
                             duration: videoDuration,
                             cost,
                             imageSize: resultImageSize,
+                            imageModel,
+                            displayModel,
+                            imageModelLabel,
+                            apiModel,
                             upscaleStatus,
                             upscaleErrorMessage,
                             hasReferenceImage: taskHasRef,
@@ -2656,7 +2688,7 @@ export default function Home() {
                             {kind === "schedule" ? "定时任务" : "普通任务"}
                           </span>
                           <span className={isDark ? "rounded-full bg-gray-700 px-2.5 py-1 text-xs text-gray-200" : "rounded-full bg-white px-2.5 py-1 text-xs text-gray-600"}>
-                            消耗 ¥{cost.toFixed(1)}
+                            消耗 ¥{formatMoney(cost)}
                           </span>
                           <span className={isDark ? "rounded-full bg-gray-700 px-2.5 py-1 text-xs text-gray-200" : "rounded-full bg-white px-2.5 py-1 text-xs text-gray-600"}>
                             作品：{totalVideos}（成功 {successVideos} / 失败 {failedVideos}）
@@ -2941,12 +2973,17 @@ export default function Home() {
                       预览状态：可查看
                     </span>
                     <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
-                      消耗：¥{previewVideo.cost.toFixed(1)}
+                      消耗：¥{formatMoney(previewVideo.cost)}
                     </span>
                     {previewVideo.mediaType === "image" ? (
-                      <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
-                        分辨率：{getImageSizeLabel(previewVideo.imageSize || previewVideo.size)}
-                      </span>
+                      <>
+                        <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
+                          分辨率：{getImageSizeLabel(previewVideo.imageSize || previewVideo.size)}
+                        </span>
+                        <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
+                          模型：{formatImageModelLabel(previewVideo)}
+                        </span>
+                      </>
                     ) : (
                       <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
                         时长：{getDurationLabel(previewVideo.seconds, previewVideo.duration)}
@@ -3084,12 +3121,17 @@ export default function Home() {
                         发布时间：{formatTaskPublishTime(detailTask.createdAt)}
                       </span>
                       <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
-                        消耗：¥{detailTask.cost.toFixed(1)}
+                        消耗：¥{formatMoney(detailTask.cost)}
                       </span>
                       {activeDetailVideo?.mediaType === "image" ? (
-                        <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
-                          分辨率：{getImageSizeLabel(activeDetailVideo.imageSize || activeDetailVideo.size)}
-                        </span>
+                        <>
+                          <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
+                            分辨率：{getImageSizeLabel(activeDetailVideo.imageSize || activeDetailVideo.size)}
+                          </span>
+                          <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
+                            模型：{formatImageModelLabel(activeDetailVideo)}
+                          </span>
+                        </>
                       ) : (
                         <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
                           时长：{getDurationLabel(activeDetailVideo?.seconds, activeDetailVideo?.duration)}

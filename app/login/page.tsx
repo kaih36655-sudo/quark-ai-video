@@ -77,16 +77,6 @@ export default function LoginPage() {
               className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none placeholder:text-gray-400"
             />
           </div>
-          <div className="mt-2 flex justify-end">
-            <a
-              href="https://work.weixin.qq.com/ca/cawcde87c5c2d49c7f"
-              target="_blank"
-              rel="noreferrer"
-              className="text-xs text-gray-400 transition hover:text-gray-700"
-            >
-              忘记密码
-            </a>
-          </div>
           {message && <div className="mt-3 rounded-xl bg-red-50 px-4 py-2 text-sm text-red-600">{message}</div>}
 
           <button
@@ -98,7 +88,14 @@ export default function LoginPage() {
           </button>
 
           <div className="mt-5 flex items-center justify-between text-sm">
-            <span className="text-gray-500">还没有账号？</span>
+            <a
+              href="https://work.weixin.qq.com/ca/cawcde87c5c2d49c7f"
+              target="_blank"
+              rel="noreferrer"
+              className="text-xs text-gray-400 transition hover:text-gray-700"
+            >
+              忘记密码？
+            </a>
             <Link href="/register" className="font-medium underline underline-offset-4">
               去注册
             </Link>

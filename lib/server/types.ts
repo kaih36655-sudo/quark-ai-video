@@ -73,6 +73,9 @@ export type Video = {
   size?: string;
   imageSize?: "1K" | "2K" | "4K";
   imageModel?: "image2" | "banana2";
+  displayModel?: string;
+  imageModelLabel?: string;
+  apiModel?: string;
   createdAt: string;
 };
 

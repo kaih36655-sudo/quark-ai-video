@@ -15,6 +15,9 @@ type GenerateYunwuImageResult = {
   imageUrl: string;
   providerTaskId?: string;
   model: string;
+  displayModel: "image2" | "banana2";
+  imageModelLabel: string;
+  apiModel: string;
   endpoint: string;
 };
 
@@ -70,7 +73,7 @@ const normalizeImageSize = (imageSize?: string) => {
   return "2K";
 };
 
-const normalizeImageModel = (imageModel?: string) => {
+const normalizeImageModel = (imageModel?: string): "image2" | "banana2" => {
   if (imageModel === "banana2") return "banana2";
   return "image2";
 };
@@ -80,6 +83,8 @@ const resolveYunwuImageModel = (displayModel?: string) => {
   if (normalized === "banana2") return GEMINI_IMAGE_MODEL;
   return GPT_IMAGE_2_MODEL;
 };
+
+const getImageModelLabel = (displayModel: "image2" | "banana2") => (displayModel === "banana2" ? "Nano Banana2" : "image2");
 
 const resolveYunwuApiKey = (apiModel: string) => {
   const dedicatedImage2Key = process.env.YUNWU_IMAGE2_API_KEY || "";
@@ -385,6 +390,9 @@ export async function generateYunwuImage(params: GenerateYunwuImageParams): Prom
         imageUrl,
         providerTaskId: typeof json.id === "string" ? json.id : undefined,
         model: apiModel,
+        displayModel,
+        imageModelLabel: getImageModelLabel(displayModel),
+        apiModel,
         endpoint,
       };
     } catch (error) {
