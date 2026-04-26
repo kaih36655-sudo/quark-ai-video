@@ -21,7 +21,6 @@ type GenerateYunwuImageResult = {
 const UPLOADS_DIR = "/www/wwwroot/quark-video-git/public/uploads";
 const IMAGE_UPLOAD_DIR = path.join(UPLOADS_DIR, "images");
 
-const getYunwuApiKey = () => process.env.YUNWU_API_KEY || process.env.SORA2_API_KEY || process.env.SORA_API_KEY || "";
 const getBaseUrl = () => (process.env.YUNWU_BASE_URL || process.env.SORA2_BASE_URL || "https://yunwu.ai").replace(/\/$/, "");
 const getImagePath = () => process.env.YUNWU_IMAGE_PATH || "/v1/images/generations";
 
@@ -71,8 +70,29 @@ const normalizeImageSize = (imageSize?: string) => {
 };
 
 const normalizeImageModel = (imageModel?: string) => {
-  if (imageModel === "banana2") return "Nano Banana2";
+  if (imageModel === "banana2") return "banana2";
   return "image2";
+};
+
+const resolveYunwuImageModel = (displayModel?: string) => {
+  const normalized = normalizeImageModel(displayModel);
+  if (normalized === "banana2") return "gemini-3.1-flash-image-preview";
+  return "gpt-image-2";
+};
+
+const resolveYunwuApiKey = (apiModel: string) => {
+  const dedicatedImage2Key = process.env.YUNWU_IMAGE2_API_KEY || "";
+  const defaultKey = process.env.YUNWU_API_KEY || "";
+  if (apiModel === "gpt-image-2") {
+    return {
+      apiKey: dedicatedImage2Key || defaultKey,
+      hasDedicatedImage2Key: Boolean(dedicatedImage2Key),
+    };
+  }
+  return {
+    apiKey: defaultKey,
+    hasDedicatedImage2Key: Boolean(dedicatedImage2Key),
+  };
 };
 
 const localUploadPathFromUrl = (url: string) => {
@@ -206,18 +226,19 @@ async function persistImage(candidate: string, apiKey: string) {
 }
 
 export async function generateYunwuImage(params: GenerateYunwuImageParams): Promise<GenerateYunwuImageResult> {
-  const apiKey = getYunwuApiKey();
+  const displayModel = normalizeImageModel(params.imageModel);
+  const apiModel = resolveYunwuImageModel(displayModel);
+  const { apiKey, hasDedicatedImage2Key } = resolveYunwuApiKey(apiModel);
   if (!apiKey) {
-    throw new Error("缺少 YUNWU_API_KEY，请在服务端环境变量配置；也可临时复用 SORA2_API_KEY/SORA_API_KEY");
+    throw new Error(apiModel === "gpt-image-2" ? "缺少 YUNWU_IMAGE2_API_KEY 或 YUNWU_API_KEY，请在服务端环境变量配置" : "缺少 YUNWU_API_KEY，请在服务端环境变量配置");
   }
   const mode: YunwuImageMode = params.referenceImageUrl ? "image-to-image" : "text-to-image";
-  const model = normalizeImageModel(params.imageModel);
   const endpoint = joinUrl(getBaseUrl(), getImagePath());
   const aspectRatio = normalizeAspectRatio(params.ratio);
   const imageSize = normalizeImageSize(params.imageSize);
   const referenceImageInlineData = await resolveReferenceImageInlineData(params.referenceImageUrl);
   const body: Record<string, unknown> = {
-    model,
+    model: apiModel,
     prompt: params.prompt,
     n: 1,
     response_format: "url",
@@ -235,8 +256,10 @@ export async function generateYunwuImage(params: GenerateYunwuImageParams): Prom
     try {
       log("REQUEST", {
         mode,
-        model,
+        displayModel,
+        apiModel,
         endpoint,
+        hasDedicatedImage2Key,
         attempt,
         maxAttempts,
         aspectRatio,
@@ -284,7 +307,8 @@ export async function generateYunwuImage(params: GenerateYunwuImageParams): Prom
       const imageUrl = await persistImage(candidate, apiKey);
       log("SUCCESS", {
         mode,
-        model,
+        displayModel,
+        apiModel,
         endpoint,
         imageUrl,
         providerTaskId: json.id || "",
@@ -292,7 +316,7 @@ export async function generateYunwuImage(params: GenerateYunwuImageParams): Prom
       return {
         imageUrl,
         providerTaskId: typeof json.id === "string" ? json.id : undefined,
-        model,
+        model: apiModel,
         endpoint,
       };
     } catch (error) {
@@ -300,7 +324,8 @@ export async function generateYunwuImage(params: GenerateYunwuImageParams): Prom
       if (attempt < maxAttempts && shouldRetryImageError(lastErrorMessage)) {
         log("RETRY", {
           mode,
-          model,
+          displayModel,
+          apiModel,
           endpoint,
           attempt,
           maxAttempts,
@@ -313,7 +338,8 @@ export async function generateYunwuImage(params: GenerateYunwuImageParams): Prom
   }
   log("FINAL_FAILED", {
     mode,
-    model,
+    displayModel,
+    apiModel,
     endpoint,
     maxAttempts,
     finalReason: lastErrorMessage,
