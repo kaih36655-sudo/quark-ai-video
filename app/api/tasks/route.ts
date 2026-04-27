@@ -78,7 +78,8 @@ export async function POST(req: NextRequest) {
   let agentName: string | undefined;
   let accessType: "public" | "restricted" | undefined;
   let promptSnapshot = prompt;
-  if (mode === "agent") {
+  const shouldUseAgent = mode === "agent" || (mode === "image" && Boolean(body.agentId));
+  if (shouldUseAgent) {
     if (!body.agentId) {
       return NextResponse.json<ApiResponse<null>>({ success: false, message: "智能体模式必须选择 agentId" }, { status: 400 });
     }
@@ -89,6 +90,12 @@ export async function POST(req: NextRequest) {
     if (!canUserUseAgent(currentUser, agent)) {
       return NextResponse.json<ApiResponse<null>>({ success: false, message: "当前智能体尚未获得授权，无法执行任务" }, { status: 403 });
     }
+    if (mode === "agent" && !(agent.type === "video" || agent.type === "both")) {
+      return NextResponse.json<ApiResponse<null>>({ success: false, message: "请选择视频智能体" }, { status: 400 });
+    }
+    if (mode === "image" && !(agent.type === "image" || agent.type === "both")) {
+      return NextResponse.json<ApiResponse<null>>({ success: false, message: "请选择图片智能体" }, { status: 400 });
+    }
     agentName = agent.name;
     accessType = agent.visibility === "public" ? "public" : "restricted";
     promptSnapshot = composeAgentPrompt(agent, prompt);
@@ -97,7 +104,7 @@ export async function POST(req: NextRequest) {
   const isScheduled = Boolean(body.scheduledAt && Date.parse(body.scheduledAt));
   const task = tasksRepository.create({
     userId: currentUser.id,
-    agentId: body.agentId,
+    agentId: shouldUseAgent ? body.agentId : undefined,
     agentName,
     agentAccessType: accessType,
     prompt,

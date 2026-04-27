@@ -67,6 +67,7 @@ type AgentProfile = {
   name: string;
   description: string;
   tags: string[];
+  type: "video" | "image" | "both";
   access: "public" | "restricted";
   isAuthorized?: boolean;
 };
@@ -116,6 +117,7 @@ const AGENT_PROFILES: AgentProfile[] = [
     name: "日本煤炉智能体",
     description: "适合 Mercari / 日本跨境电商内容，强调日系平台场景与选品表达。",
     tags: ["煤炉", "Mercari", "跨境电商"],
+    type: "video",
     access: "restricted",
     isAuthorized: true,
   },
@@ -124,6 +126,7 @@ const AGENT_PROFILES: AgentProfile[] = [
     name: "小红书餐饮智能体",
     description: "适合探店、种草、门店亮点介绍，偏生活方式和消费体验。",
     tags: ["餐饮", "探店", "种草"],
+    type: "video",
     access: "restricted",
     isAuthorized: false,
   },
@@ -132,6 +135,7 @@ const AGENT_PROFILES: AgentProfile[] = [
     name: "视频带货智能体",
     description: "适合商品卖点拆解、转化型短视频脚本和下单引导场景。",
     tags: ["带货", "转化", "卖点"],
+    type: "video",
     access: "public",
   },
   {
@@ -139,6 +143,7 @@ const AGENT_PROFILES: AgentProfile[] = [
     name: "抖音口播脚本智能体",
     description: "适合口播节奏、话术结构和短时高信息密度表达。",
     tags: ["抖音", "口播", "脚本"],
+    type: "video",
     access: "restricted",
     isAuthorized: false,
   },
@@ -147,6 +152,7 @@ const AGENT_PROFILES: AgentProfile[] = [
     name: "电商搞笑短视频智能体",
     description: "适合办公室、电商团队、轻剧情反转的幽默内容。",
     tags: ["搞笑", "电商团队", "剧情反转"],
+    type: "video",
     access: "public",
   },
 ];
@@ -326,6 +332,7 @@ export default function Home() {
       name: String(agent.name ?? "未命名智能体"),
       description: String(agent.description ?? ""),
       tags: Array.isArray(agent.tags) ? agent.tags.filter((tag): tag is string => typeof tag === "string") : [],
+      type: agent.type === "image" || agent.type === "both" ? agent.type : "video",
       access: agent.accessType === "restricted" ? "restricted" : "public",
       isAuthorized: Boolean(agent.isAuthorized),
     }));
@@ -616,10 +623,13 @@ export default function Home() {
     const useReference = typeof refEnabled === "boolean" ? refEnabled : hasReferenceImage;
     const useReferenceName = refName ?? referenceImageName;
     const useReferenceThumbData = refThumbData ?? referenceImageThumbData;
-    const activeAgentId = taskAgentId ?? (mode === "agent" ? selectedAgent?.id : undefined);
-    const activeAgentName = taskAgentName ?? (mode === "agent" ? selectedAgent?.name : undefined);
-    const activeAgentAccess = taskAgentAccess ?? (mode === "agent" ? selectedAgent?.access : undefined);
-    const activeAgentAuthorized = taskAgentAuthorized ?? (mode === "agent" ? selectedAgent?.isAuthorized : undefined);
+    const isCurrentAgentMode = mode === "agent" || mode === "agent_image";
+    const isCurrentImageMode = mode === "image" || mode === "agent_image";
+    const submitMode = mode === "agent_image" ? "image" : mode;
+    const activeAgentId = taskAgentId ?? (isCurrentAgentMode ? selectedAgent?.id : undefined);
+    const activeAgentName = taskAgentName ?? (isCurrentAgentMode ? selectedAgent?.name : undefined);
+    const activeAgentAccess = taskAgentAccess ?? (isCurrentAgentMode ? selectedAgent?.access : undefined);
+    const activeAgentAuthorized = taskAgentAuthorized ?? (isCurrentAgentMode ? selectedAgent?.isAuthorized : undefined);
     if (activeAgentAccess === "restricted" && activeAgentAuthorized === false) {
       showToast("当前智能体尚未获得授权，无法执行任务");
       if (source === "schedule" && scheduleId) {
@@ -629,11 +639,11 @@ export default function Home() {
     }
     const payload = {
       prompt: seedPrompt.trim(),
-      mode: mode as "agent" | "normal" | "image",
+      mode: submitMode as "agent" | "normal" | "image",
       duration,
-      ratio: mode === "image" ? ratio : ratio === "9:16" ? "9:16" : "16:9",
-      imageSize: mode === "image" ? imageSize : undefined,
-      imageModel: mode === "image" ? imageModel : undefined,
+      ratio: isCurrentImageMode ? ratio : ratio === "9:16" ? "9:16" : "16:9",
+      imageSize: isCurrentImageMode ? imageSize : undefined,
+      imageModel: isCurrentImageMode ? imageModel : undefined,
       count: effectiveCount,
       agentId: activeAgentId,
       referenceImageUrl: useReference ? referenceImageData ?? undefined : undefined,
@@ -675,7 +685,7 @@ export default function Home() {
           }, 200);
           if (taskStatus === "success") {
             const videosCount = snapshot.videos.filter((video) => String(video.taskId) === createdTaskId).length;
-            showToast(mode === "image" ? `已生成${videosCount}张图片` : `已生成${videosCount}条视频`);
+            showToast(isCurrentImageMode ? `已生成${videosCount}张图片` : `已生成${videosCount}条视频`);
             void refreshCurrentUser();
           } else if (taskStatus === "failed") {
             showToast("任务执行失败");
@@ -704,11 +714,15 @@ export default function Home() {
       showToast(imageModelRestrictionMessage);
       return;
     }
-    if (mode === "agent" && !selectedAgent) {
-      showToast("请先选择智能体");
+    if (mode === "agent" && (!selectedAgent || !selectedAgentApplicable)) {
+      showToast("请先选择视频智能体");
       return;
     }
-    if (mode === "agent" && selectedAgent?.access === "restricted" && !selectedAgent.isAuthorized) {
+    if (mode === "agent_image" && (!selectedAgent || !selectedAgentApplicable)) {
+      showToast("请先选择图片智能体");
+      return;
+    }
+    if ((mode === "agent" || mode === "agent_image") && selectedAgent?.access === "restricted" && !selectedAgent.isAuthorized) {
       showToast("当前智能体尚未获得授权，无法执行任务");
       return;
     }
@@ -729,24 +743,32 @@ export default function Home() {
       showToast("请选择未来时间");
       return;
     }
-    if (mode === "agent" && !selectedAgent) {
-      showToast("请先选择智能体");
+    if (mode === "agent" && (!selectedAgent || !selectedAgentApplicable)) {
+      showToast("请先选择视频智能体");
       return;
     }
-    if (mode === "agent" && selectedAgent?.access === "restricted" && !selectedAgent.isAuthorized) {
+    if (mode === "agent_image" && (!selectedAgent || !selectedAgentApplicable)) {
+      showToast("请先选择图片智能体");
+      return;
+    }
+    if ((mode === "agent" || mode === "agent_image") && selectedAgent?.access === "restricted" && !selectedAgent.isAuthorized) {
       showToast("当前智能体尚未获得授权，无法执行任务");
       return;
     }
+    const isCurrentImageMode = mode === "image" || mode === "agent_image";
+    const submitMode = mode === "agent_image" ? "image" : mode;
     const createRes = await fetch("/api/tasks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         prompt: prompt.trim(),
-        mode: mode as "agent" | "normal" | "image",
+        mode: submitMode as "agent" | "normal" | "image",
         duration,
         ratio,
+        imageSize: isCurrentImageMode ? imageSize : undefined,
+        imageModel: isCurrentImageMode ? imageModel : undefined,
         count: generateCount,
-        agentId: mode === "agent" ? selectedAgent?.id : undefined,
+        agentId: mode === "agent" || mode === "agent_image" ? selectedAgent?.id : undefined,
         referenceImageUrl: hasReferenceImage ? referenceImageData ?? undefined : undefined,
         referenceImageName: hasReferenceImage ? referenceImageName || undefined : undefined,
         scheduledAt: new Date(targetTs).toISOString(),
@@ -1107,11 +1129,28 @@ export default function Home() {
     fileInputRef.current?.click();
   };
 
+  const selectedAgent = agentProfiles.find((agent) => agent.id === selectedAgentId) ?? null;
+  const isImageMode = mode === "image" || mode === "agent_image";
+  const isAgentMode = mode === "agent" || mode === "agent_image";
+  const modeLabel =
+    mode === "agent"
+      ? "智能体批量视频"
+      : mode === "normal"
+        ? "通用视频"
+        : mode === "agent_image"
+          ? "智能体批量图片"
+          : "通用图片";
+  const selectedAgentApplicable =
+    !selectedAgent ||
+    (mode === "agent" && (selectedAgent.type === "video" || selectedAgent.type === "both")) ||
+    (mode === "agent_image" && (selectedAgent.type === "image" || selectedAgent.type === "both")) ||
+    !isAgentMode;
+
   const estimatedCost = (() => {
     const imagePrefix: "image" | "image2" = imageModel === "banana2" ? "image" : "image2";
     const imagePriceKey = `${imagePrefix}_${imageSize}` as "image_1K" | "image_2K" | "image_4K" | "image2_1K" | "image2_2K" | "image2_4K";
     const unit =
-      mode === "image"
+      isImageMode
         ? pricing[imagePriceKey]
         : duration === "4s"
           ? pricing.video_4s
@@ -1121,18 +1160,19 @@ export default function Home() {
     return Number((unit * generateCount).toFixed(2));
   })();
   const isBalanceInsufficient = isLoggedIn && Number(balance) < estimatedCost;
-  const currentChannelEnabled = mode === "image" ? pricing.image_enabled : pricing.video_enabled;
+  const currentChannelEnabled = isImageMode ? pricing.image_enabled : pricing.video_enabled;
   const imageModelRestrictionMessage =
-    mode === "image" && imageModel === "image2" && imageSize === "2K" && ratio === "9:16"
+    isImageMode && imageModel === "image2" && imageSize === "2K" && ratio === "9:16"
       ? "image2模型暂不支持该比例/分辨率组合"
-      : mode === "image" && imageModel === "image2" && imageSize === "4K" && ratio === "1:1"
+      : isImageMode && imageModel === "image2" && imageSize === "4K" && ratio === "1:1"
         ? "image2模型暂不支持该比例/分辨率组合"
         : "";
 
   const makeTaskId = (taskId: number) => `TASK-${String(taskId).padStart(3, "0")}`;
-  const selectedAgent = agentProfiles.find((agent) => agent.id === selectedAgentId) ?? null;
   const agentSearchKeyword = agentSearch.trim().toLowerCase();
   const visibleAgents = agentProfiles.filter((agent) => {
+    if (mode === "agent" && !(agent.type === "video" || agent.type === "both")) return false;
+    if (mode === "agent_image" && !(agent.type === "image" || agent.type === "both")) return false;
     if (!agentSearchKeyword) return true;
     return (
       agent.name.toLowerCase().includes(agentSearchKeyword) ||
@@ -1438,13 +1478,13 @@ export default function Home() {
   }, [imageModel, mounted]);
 
   useEffect(() => {
-    if (!mounted || mode !== "image" || imageModel !== "image2") return;
+    if (!mounted || !isImageMode || imageModel !== "image2") return;
     const unsupported = (imageSize === "2K" && ratio === "9:16") || (imageSize === "4K" && ratio === "1:1");
     if (unsupported) {
       setImageSize("1K");
       setRatio("9:16");
     }
-  }, [imageModel, imageSize, mode, mounted, ratio]);
+  }, [imageModel, imageSize, isImageMode, mounted, ratio]);
 
   useEffect(() => {
     if (!mounted) return;
@@ -1681,7 +1721,7 @@ export default function Home() {
                 </button>
 
                 <div className={isDark ? "rounded-full bg-gray-800 px-4 py-2 text-sm text-gray-100" : "rounded-full bg-gray-100 px-4 py-2 text-sm text-gray-700"}>
-                  {mode === "image" ? "图像模式" : "视频模式"}
+                  {isImageMode ? "图像模式" : "视频模式"}
                 </div>
               </div>
 
@@ -1731,6 +1771,7 @@ export default function Home() {
               <button
                 onClick={() => {
                   setMode("agent");
+                  setSelectedAgentId(null);
                   if (ratio === "1:1") setRatio("16:9");
                 }}
                 className={`rounded-full px-4 py-2 text-sm transition ${pillClass(mode === "agent")}`}
@@ -1741,6 +1782,7 @@ export default function Home() {
               <button
                 onClick={() => {
                   setMode("normal");
+                  setSelectedAgentId(null);
                   if (ratio === "1:1") setRatio("16:9");
                 }}
                 className={`rounded-full px-4 py-2 text-sm transition ${pillClass(mode === "normal")}`}
@@ -1749,18 +1791,31 @@ export default function Home() {
               </button>
 
               <button
-                onClick={() => setMode("image")}
+                onClick={() => {
+                  setMode("agent_image");
+                  setSelectedAgentId(null);
+                }}
+                className={`rounded-full px-4 py-2 text-sm transition ${pillClass(mode === "agent_image")}`}
+              >
+                智能体批量图片
+              </button>
+
+              <button
+                onClick={() => {
+                  setMode("image");
+                  setSelectedAgentId(null);
+                }}
                 className={`rounded-full px-4 py-2 text-sm transition ${pillClass(mode === "image")}`}
               >
                 通用图片
               </button>
             </div>
 
-            {mode === "agent" && (
+            {isAgentMode && (
               <div className={isDark ? "rounded-2xl border border-gray-800 bg-[#18181b] p-3" : "rounded-2xl border border-gray-200 bg-gray-50 p-3"}>
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                  <div className="text-sm font-semibold">选择智能体</div>
-                  {selectedAgent ? (
+                  <div className="text-sm font-semibold">{mode === "agent_image" ? "选择图片智能体" : "选择视频智能体"}</div>
+                  {selectedAgent && selectedAgentApplicable ? (
                     <div className="flex items-center gap-2">
                       <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-200" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>
                         当前已选：{selectedAgent.name}
@@ -1844,7 +1899,7 @@ export default function Home() {
             )}
 
             <div className="flex flex-wrap items-center gap-3">
-              {mode !== "image" &&
+              {!isImageMode &&
                 ["4s", "8s", "12s"].map((item) => (
                   <button
                     key={item}
@@ -1856,11 +1911,11 @@ export default function Home() {
                 ))}
 
               {[
-                ...(mode === "image" ? [{ label: "1:1方屏", value: "1:1" }] : []),
+                ...(isImageMode ? [{ label: "1:1方屏", value: "1:1" }] : []),
                 { label: "9:16竖屏", value: "9:16" },
                 { label: "16:9横屏", value: "16:9" },
               ].map((item) => {
-                const disabled = mode === "image" && imageModel === "image2" && ((item.value === "9:16" && imageSize === "2K") || (item.value === "1:1" && imageSize === "4K"));
+                const disabled = isImageMode && imageModel === "image2" && ((item.value === "9:16" && imageSize === "2K") || (item.value === "1:1" && imageSize === "4K"));
                 return (
                   <button
                     key={item.value}
@@ -1878,7 +1933,7 @@ export default function Home() {
                 );
               })}
 
-              {mode === "image" ? (
+              {isImageMode ? (
                 <>
                   <div className="flex items-center gap-2">
                     <span className={isDark ? "text-sm text-gray-400" : "text-sm text-gray-500"}>模型</span>
@@ -1925,7 +1980,7 @@ export default function Home() {
 
               <div className="flex items-center gap-2">
                 <span className={isDark ? "text-sm text-gray-400" : "text-sm text-gray-500"}>
-                  {mode === "image" ? "生成张数" : "生成条数"}
+                  {isImageMode ? "生成张数" : "生成条数"}
                 </span>
                 <select
                   value={generateCount}
@@ -1938,7 +1993,7 @@ export default function Home() {
                 >
                   {Array.from({ length: 10 }, (_, i) => i + 1).map((count) => (
                     <option key={count} value={count}>
-                      {count}{mode === "image" ? "张" : "条"}
+                      {count}{isImageMode ? "张" : "条"}
                     </option>
                   ))}
                 </select>
@@ -2036,7 +2091,7 @@ export default function Home() {
                   作品管理区
                 </div>
                 <div className={isDark ? "mt-1 text-sm text-gray-400" : "mt-1 text-sm text-gray-500"}>
-                  当前显示 {pagedVisibleResults.length} / 筛选后 {visibleResults.length} / 总计 {videos.length} 条作品，当前收藏 {visibleFavoriteCount} 条，模式：{mode === "agent" ? "智能体批量视频" : mode === "normal" ? "通用视频" : "通用图片"}，参考图：{hasReferenceImage ? "已添加" : "未添加"}
+                  当前显示 {pagedVisibleResults.length} / 筛选后 {visibleResults.length} / 总计 {videos.length} 条作品，当前收藏 {visibleFavoriteCount} 条，模式：{modeLabel}，参考图：{hasReferenceImage ? "已添加" : "未添加"}
                 </div>
               </div>
 
