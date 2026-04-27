@@ -1,3 +1,6 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+
 type CreateVideoRequest = {
   prompt: string;
   images?: string[];
@@ -28,8 +31,7 @@ type SoraDownloadResult = {
 };
 
 const getBaseUrl = () => (process.env.SORA2_BASE_URL || "https://yunwu.ai").replace(/\/$/, "");
-const getCreatePath = () => process.env.SORA2_CREATE_PATH || "/v1/video/create";
-const getImageCreatePath = () => process.env.SORA2_IMAGE_CREATE_PATH || "/v1/video/create";
+const getCreatePath = () => "/v1/videos";
 const getQueryPath = () => process.env.SORA2_QUERY_PATH || "/v1/video/query";
 const getDownloadPath = (taskId: string) =>
   (process.env.SORA2_DOWNLOAD_PATH_TEMPLATE || "/v1/videos/{id}/content").replace("{id}", encodeURIComponent(taskId));
@@ -61,6 +63,7 @@ const maskHeaders = (headers: Record<string, string>) => {
 
 const textPreview = (raw: string, length = 300) => raw.slice(0, length).replace(/\s+/g, " ").trim();
 const urlPreview = (value: string, length = 160) => value.slice(0, length);
+const UPLOADS_DIR = "/www/wwwroot/quark-video-git/public/uploads";
 
 const getPublicAppBaseUrl = () => {
   const raw =
@@ -91,6 +94,65 @@ const isLikelyPublicUrl = (value: string) => {
     return false;
   }
 };
+
+const mimeTypeFromPath = (filePath: string) => {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === ".png") return "image/png";
+  if (ext === ".webp") return "image/webp";
+  return "image/jpeg";
+};
+
+const localUploadPathFromReference = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  let pathname = trimmed;
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      pathname = new URL(trimmed).pathname;
+    } catch {
+      return null;
+    }
+  }
+  if (pathname.startsWith("/uploads/")) {
+    pathname = `/api${pathname}`;
+  }
+  const prefix = "/api/uploads/";
+  if (!pathname.startsWith(prefix)) return null;
+  const relative = pathname.slice(prefix.length);
+  if (!relative || relative.split("/").some((part) => !part || part === "." || part === "..")) return null;
+  return path.join(UPLOADS_DIR, relative);
+};
+
+async function resolveSoraReferenceImage(value?: string) {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("data:image/")) {
+    return {
+      imageUrl: trimmed,
+      mode: "input_reference.image_url.data_url" as const,
+      publicUrl: false,
+    };
+  }
+  const localPath = localUploadPathFromReference(trimmed);
+  if (localPath) {
+    const bytes = await readFile(localPath);
+    const mimeType = mimeTypeFromPath(localPath);
+    return {
+      imageUrl: `data:${mimeType};base64,${Buffer.from(bytes).toString("base64")}`,
+      mode: "input_reference.image_url.data_url" as const,
+      publicUrl: false,
+    };
+  }
+  const absoluteUrl = toAbsoluteReferenceImageUrl(trimmed);
+  if (!isLikelyPublicUrl(absoluteUrl)) {
+    throw new Error("Sora2 参考图必须是本地上传文件、data URL 或公网可访问 URL，不能使用 127.0.0.1/localhost");
+  }
+  return {
+    imageUrl: absoluteUrl,
+    mode: "input_reference.image_url.public_url" as const,
+    publicUrl: true,
+  };
+}
 
 type ParsedResponse = {
   ok: boolean;
@@ -206,65 +268,35 @@ export async function createSora2Task(payload: CreateVideoRequest): Promise<{ ta
   }
   const size = payload.size === "720x1280" ? "720x1280" : "1280x720";
   const model = process.env.SORA2_MODEL || "sora-2";
-  const imageFieldName = process.env.SORA2_REFERENCE_IMAGE_FIELD || "images";
-  const imageFieldMode = (process.env.SORA2_REFERENCE_IMAGE_MODE || "repeat").toLowerCase();
   const inputImage = (payload.images || []).find((item) => typeof item === "string" && item.trim().length > 0);
-  const absoluteImageUrl = inputImage ? toAbsoluteReferenceImageUrl(inputImage) : "";
-  const useImageStructuredRequest = Boolean(absoluteImageUrl);
-  const orientation = payload.orientation || (size === "720x1280" ? "portrait" : "landscape");
-
-  const requestFields: string[] = [];
-  let body: BodyInit;
-  let headers: Record<string, string>;
-  let url = `${getBaseUrl()}${(useImageStructuredRequest ? getImageCreatePath() : getCreatePath()).startsWith("/") ? "" : "/"}${
-    useImageStructuredRequest ? getImageCreatePath() : getCreatePath()
-  }`;
-
-  if (useImageStructuredRequest) {
-    const createBody: Record<string, unknown> = {
-      model,
-      prompt: payload.prompt,
-      orientation,
-      size,
-      duration: seconds,
-      seconds,
-      watermark: false,
-    };
-    if (imageFieldName === "images") {
-      createBody[imageFieldName] = [absoluteImageUrl];
-    } else if (imageFieldMode === "array_json") {
-      createBody[imageFieldName] = [absoluteImageUrl];
-    } else {
-      createBody[imageFieldName] = absoluteImageUrl;
-    }
-    requestFields.push(...Object.keys(createBody));
-    body = JSON.stringify(createBody);
-    headers = authHeaders();
-  } else {
-    const formData = new FormData();
-    formData.append("model", model);
-    formData.append("prompt", payload.prompt);
-    formData.append("seconds", String(seconds));
-    formData.append("size", size);
-    requestFields.push("model", "prompt", "seconds", "size");
-    body = formData;
-    headers = {
-      Authorization: authHeaders().Authorization,
-      Accept: "application/json",
+  const referenceImage = await resolveSoraReferenceImage(inputImage);
+  const createPath = getCreatePath();
+  const url = `${getBaseUrl()}${createPath.startsWith("/") ? "" : "/"}${createPath}`;
+  const createBody: Record<string, unknown> = {
+    model,
+    prompt: payload.prompt,
+    seconds: String(seconds),
+    size,
+  };
+  if (referenceImage) {
+    createBody.input_reference = {
+      image_url: referenceImage.imageUrl,
     };
   }
+  const requestFields = Object.keys(createBody);
+  const body = JSON.stringify(createBody);
+  const headers = authHeaders();
 
   log("CREATE_REQUEST", {
     model,
     promptPreview: payload.prompt.slice(0, 120),
     seconds,
     size,
-    hasReferenceImage: Boolean(absoluteImageUrl),
-    referenceImageFieldName: absoluteImageUrl ? imageFieldName : "",
-    referenceImageFieldMode: absoluteImageUrl ? imageFieldMode : "",
-    referenceImageUrlPreview: absoluteImageUrl ? urlPreview(absoluteImageUrl) : "",
-    referenceImageUrlPublic: absoluteImageUrl ? isLikelyPublicUrl(absoluteImageUrl) : false,
-    createPath: useImageStructuredRequest ? getImageCreatePath() : getCreatePath(),
+    hasReferenceImage: Boolean(referenceImage),
+    referenceImageMode: referenceImage?.mode || "",
+    referenceImageUrlPreview: referenceImage ? urlPreview(referenceImage.imageUrl, 80) : "",
+    referenceImageUrlPublic: referenceImage?.publicUrl ?? false,
+    createPath,
     requestFields,
   });
 
@@ -272,11 +304,11 @@ export async function createSora2Task(payload: CreateVideoRequest): Promise<{ ta
     url,
     method: "POST",
     headers: maskHeaders(headers),
-    imagePayloadMeta: absoluteImageUrl
+    imagePayloadMeta: referenceImage
       ? {
-          fieldName: imageFieldName,
-          mode: imageFieldMode,
-          valuePreview: urlPreview(absoluteImageUrl),
+          fieldName: "input_reference.image_url",
+          mode: referenceImage.mode,
+          valuePreview: urlPreview(referenceImage.imageUrl, 80),
         }
       : { fieldName: "", mode: "", valuePreview: "" },
   });
@@ -298,10 +330,11 @@ export async function createSora2Task(payload: CreateVideoRequest): Promise<{ ta
   if (!parsed.contentType.toLowerCase().includes("application/json")) {
     throw new Error(`Sora2 创建任务返回非JSON，status=${parsed.status}，preview=${textPreview(parsed.rawText, 120)}`);
   }
-  if (!parsed.ok || !parsed.json?.id) {
+  const createdId = pickString(parsed.json?.id) || pickString(parsed.json?.task_id);
+  if (!parsed.ok || !createdId) {
     throw new Error(String(parsed.json?.message || parsed.json?.error || "Sora2 创建任务失败"));
   }
-  return { taskId: String(parsed.json.id) };
+  return { taskId: createdId };
 }
 
 export async function querySora2Task(taskId: string): Promise<SoraQueryResult> {
