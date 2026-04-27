@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import sharp from "sharp";
 
 type CreateVideoRequest = {
   prompt: string;
@@ -95,13 +96,6 @@ const isLikelyPublicUrl = (value: string) => {
   }
 };
 
-const mimeTypeFromPath = (filePath: string) => {
-  const ext = path.extname(filePath).toLowerCase();
-  if (ext === ".png") return "image/png";
-  if (ext === ".webp") return "image/webp";
-  return "image/jpeg";
-};
-
 const localUploadPathFromReference = (value: string) => {
   const trimmed = value.trim();
   if (!trimmed) return null;
@@ -123,34 +117,68 @@ const localUploadPathFromReference = (value: string) => {
   return path.join(UPLOADS_DIR, relative);
 };
 
-async function resolveSoraReferenceImage(value?: string) {
-  const trimmed = value?.trim();
-  if (!trimmed) return null;
-  if (trimmed.startsWith("data:image/")) {
-    return {
-      imageUrl: trimmed,
-      mode: "input_reference.data_url" as const,
-      publicUrl: false,
-    };
-  }
-  const localPath = localUploadPathFromReference(trimmed);
-  if (localPath) {
-    const bytes = await readFile(localPath);
-    const mimeType = mimeTypeFromPath(localPath);
-    return {
-      imageUrl: `data:${mimeType};base64,${Buffer.from(bytes).toString("base64")}`,
-      mode: "input_reference.data_url" as const,
-      publicUrl: false,
-    };
-  }
-  const absoluteUrl = toAbsoluteReferenceImageUrl(trimmed);
+const parseDataImage = (value: string) => {
+  const match = value.match(/^data:([^;]+);base64,(.*)$/);
+  if (!match) return null;
+  return {
+    mimeType: match[1] || "image/jpeg",
+    bytes: Buffer.from(match[2] || "", "base64"),
+  };
+};
+
+const dimensionsFromSize = (size: "720x1280" | "1280x720") => {
+  const [width, height] = size.split("x").map(Number);
+  return { width, height };
+};
+
+async function resizeReferenceImageForSora(inputBuffer: Buffer, targetSize: "720x1280" | "1280x720") {
+  const { width, height } = dimensionsFromSize(targetSize);
+  const source = sharp(inputBuffer);
+  const metadata = await source.metadata();
+  const output = await source
+    .resize(width, height, {
+      fit: "cover",
+      position: "centre",
+    })
+    .jpeg({ quality: 92 })
+    .toBuffer();
+  log("REFERENCE_IMAGE_RESIZE", {
+    originalWidth: metadata.width ?? 0,
+    originalHeight: metadata.height ?? 0,
+    targetWidth: width,
+    targetHeight: height,
+    outputMime: "image/jpeg",
+    outputBytes: output.length,
+    fit: "cover",
+  });
+  return `data:image/jpeg;base64,${output.toString("base64")}`;
+}
+
+async function readReferenceImageBytes(value: string) {
+  const dataImage = parseDataImage(value);
+  if (dataImage) return dataImage.bytes;
+  const localPath = localUploadPathFromReference(value);
+  if (localPath) return readFile(localPath);
+  const absoluteUrl = toAbsoluteReferenceImageUrl(value);
   if (!isLikelyPublicUrl(absoluteUrl)) {
     throw new Error("Sora2 参考图必须是本地上传文件、data URL 或公网可访问 URL，不能使用 127.0.0.1/localhost");
   }
+  const response = await fetch(absoluteUrl);
+  if (!response.ok) {
+    throw new Error(`Sora2 参考图读取失败 status=${response.status}`);
+  }
+  return Buffer.from(await response.arrayBuffer());
+};
+
+async function resolveSoraReferenceImage(value: string | undefined, targetSize: "720x1280" | "1280x720") {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  const bytes = await readReferenceImageBytes(trimmed);
+  const imageUrl = await resizeReferenceImageForSora(Buffer.from(bytes), targetSize);
   return {
-    imageUrl: absoluteUrl,
-    mode: "input_reference.public_url" as const,
-    publicUrl: true,
+    imageUrl,
+    mode: "input_reference.data_url" as const,
+    publicUrl: false,
   };
 }
 
@@ -269,7 +297,7 @@ export async function createSora2Task(payload: CreateVideoRequest): Promise<{ ta
   const size = payload.size === "720x1280" ? "720x1280" : "1280x720";
   const model = process.env.SORA2_MODEL || "sora-2";
   const inputImage = (payload.images || []).find((item) => typeof item === "string" && item.trim().length > 0);
-  const referenceImage = await resolveSoraReferenceImage(inputImage);
+  const referenceImage = await resolveSoraReferenceImage(inputImage, size);
   const createPath = getCreatePath();
   const url = `${getBaseUrl()}${createPath.startsWith("/") ? "" : "/"}${createPath}`;
   const createBody: Record<string, unknown> = {
