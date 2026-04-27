@@ -129,7 +129,7 @@ async function resolveSoraReferenceImage(value?: string) {
   if (trimmed.startsWith("data:image/")) {
     return {
       imageUrl: trimmed,
-      mode: "input_reference.image_url.data_url" as const,
+      mode: "input_reference.data_url" as const,
       publicUrl: false,
     };
   }
@@ -139,7 +139,7 @@ async function resolveSoraReferenceImage(value?: string) {
     const mimeType = mimeTypeFromPath(localPath);
     return {
       imageUrl: `data:${mimeType};base64,${Buffer.from(bytes).toString("base64")}`,
-      mode: "input_reference.image_url.data_url" as const,
+      mode: "input_reference.data_url" as const,
       publicUrl: false,
     };
   }
@@ -149,7 +149,7 @@ async function resolveSoraReferenceImage(value?: string) {
   }
   return {
     imageUrl: absoluteUrl,
-    mode: "input_reference.image_url.public_url" as const,
+    mode: "input_reference.public_url" as const,
     publicUrl: true,
   };
 }
@@ -279,9 +279,7 @@ export async function createSora2Task(payload: CreateVideoRequest): Promise<{ ta
     size,
   };
   if (referenceImage) {
-    createBody.input_reference = {
-      image_url: referenceImage.imageUrl,
-    };
+    createBody.input_reference = referenceImage.imageUrl;
   }
   const requestFields = Object.keys(createBody);
   const body = JSON.stringify(createBody);
@@ -306,7 +304,7 @@ export async function createSora2Task(payload: CreateVideoRequest): Promise<{ ta
     headers: maskHeaders(headers),
     imagePayloadMeta: referenceImage
       ? {
-          fieldName: "input_reference.image_url",
+          fieldName: "input_reference",
           mode: referenceImage.mode,
           valuePreview: urlPreview(referenceImage.imageUrl, 80),
         }
