@@ -103,9 +103,12 @@ const resolveYunwuApiKey = (apiModel: string) => {
   };
 };
 
-const resolveYunwuEndpoint = (apiModel: string) => {
+const resolveYunwuEndpoint = (apiModel: string, mode: YunwuImageMode) => {
   if (apiModel === GEMINI_IMAGE_MODEL) {
     return joinUrl(getBaseUrl(), `/v1beta/models/${GEMINI_IMAGE_MODEL}:generateContent`);
+  }
+  if (mode === "image-to-image") {
+    return joinUrl(getBaseUrl(), "/v1/images/edits");
   }
   return joinUrl(getBaseUrl(), "/v1/images/generations");
 };
@@ -216,8 +219,8 @@ const shouldRetryImageError = (message: string) => {
 const resolveGptImage2Size = (aspectRatio: string, imageSize: string) => {
   if (imageSize === "1K") {
     if (aspectRatio === "1:1") return "1024x1024";
-    if (aspectRatio === "16:9") return "1536x864";
-    return "864x1536";
+    if (aspectRatio === "16:9") return "1536x1024";
+    return "1024x1536";
   }
   if (imageSize === "2K") {
     if (aspectRatio === "9:16") {
@@ -229,12 +232,13 @@ const resolveGptImage2Size = (aspectRatio: string, imageSize: string) => {
   if (aspectRatio === "1:1") {
     throw new Error("image2模型暂不支持该比例");
   }
-  if (aspectRatio === "16:9") return "4096x2304";
-  return "2304x4096";
+  if (aspectRatio === "16:9") return "3840x2160";
+  return "2160x3840";
 };
 
 const createRequestBody = (params: {
   apiModel: string;
+  mode: YunwuImageMode;
   prompt: string;
   aspectRatio: string;
   imageSize: string;
@@ -265,6 +269,26 @@ const createRequestBody = (params: {
     };
   }
   const size = resolveGptImage2Size(params.aspectRatio, params.imageSize);
+  if (params.mode === "image-to-image") {
+    if (!params.referenceImageInlineData) {
+      throw new Error("image2 图生图缺少参考图文件");
+    }
+    const formData = new FormData();
+    const bytes = new Uint8Array(Buffer.from(params.referenceImageInlineData.data, "base64"));
+    const blob = new Blob([bytes], { type: params.referenceImageInlineData.mimeType });
+    formData.append("image", blob, `reference.${fileExtFromContentType(params.referenceImageInlineData.mimeType)}`);
+    formData.append("prompt", params.prompt);
+    formData.append("model", params.apiModel);
+    formData.append("n", "1");
+    formData.append("size", size);
+    formData.append("quality", "high");
+    return {
+      body: formData,
+      size,
+      bodyKeys: ["image", "prompt", "model", "n", "size", "quality"],
+      isFormData: true,
+    };
+  }
   return {
     body: {
       model: params.apiModel,
@@ -273,6 +297,8 @@ const createRequestBody = (params: {
       size,
     } as Record<string, unknown>,
     size,
+    bodyKeys: ["model", "prompt", "n", "size"],
+    isFormData: false,
   };
 };
 
@@ -311,12 +337,13 @@ export async function generateYunwuImage(params: GenerateYunwuImageParams): Prom
     throw new Error(apiModel === GPT_IMAGE_2_MODEL ? "缺少 YUNWU_IMAGE2_API_KEY 或 YUNWU_API_KEY，请在服务端环境变量配置" : "缺少 YUNWU_API_KEY，请在服务端环境变量配置");
   }
   const mode: YunwuImageMode = params.referenceImageUrl ? "image-to-image" : "text-to-image";
-  const endpoint = resolveYunwuEndpoint(apiModel);
+  const endpoint = resolveYunwuEndpoint(apiModel, mode);
   const aspectRatio = normalizeAspectRatio(params.ratio);
   const imageSize = normalizeImageSize(params.imageSize);
   const referenceImageInlineData = await resolveReferenceImageInlineData(params.referenceImageUrl);
-  const { body, size } = createRequestBody({
+  const { body, size, bodyKeys, isFormData } = createRequestBody({
     apiModel,
+    mode,
     prompt: params.prompt,
     aspectRatio,
     imageSize,
@@ -333,7 +360,7 @@ export async function generateYunwuImage(params: GenerateYunwuImageParams): Prom
         displayModel,
         apiModel,
         endpoint,
-        requestBodyKeys: Object.keys(body),
+        ...(isFormData ? { formDataKeys: bodyKeys } : { requestBodyKeys: bodyKeys }),
         hasDedicatedImage2Key,
         attempt,
         maxAttempts,
@@ -341,17 +368,24 @@ export async function generateYunwuImage(params: GenerateYunwuImageParams): Prom
         imageSize,
         size,
         hasReferenceImage: Boolean(params.referenceImageUrl),
+        timeoutMs: 0,
         promptPreview: params.prompt.slice(0, 120),
       });
 
+      const requestBody = isFormData ? (body as FormData) : JSON.stringify(body as Record<string, unknown>);
       const response = await fetch(endpoint, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify(body),
+        headers: isFormData
+          ? {
+              Authorization: `Bearer ${apiKey}`,
+              Accept: "application/json",
+            }
+          : {
+              Authorization: `Bearer ${apiKey}`,
+              "Content-Type": "application/json",
+              Accept: "application/json",
+            },
+        body: requestBody,
       });
       const rawText = await response.text();
       const contentType = response.headers.get("content-type") || "";

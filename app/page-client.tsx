@@ -1124,9 +1124,9 @@ export default function Home() {
   const currentChannelEnabled = mode === "image" ? pricing.image_enabled : pricing.video_enabled;
   const imageModelRestrictionMessage =
     mode === "image" && imageModel === "image2" && imageSize === "2K" && ratio === "9:16"
-      ? "image2模型暂不支持该比例"
+      ? "image2模型暂不支持该比例/分辨率组合"
       : mode === "image" && imageModel === "image2" && imageSize === "4K" && ratio === "1:1"
-        ? "image2模型暂不支持该比例"
+        ? "image2模型暂不支持该比例/分辨率组合"
         : "";
 
   const makeTaskId = (taskId: number) => `TASK-${String(taskId).padStart(3, "0")}`;
@@ -1436,6 +1436,15 @@ export default function Home() {
     if (!mounted) return;
     localStorage.setItem("quark_image_model", imageModel);
   }, [imageModel, mounted]);
+
+  useEffect(() => {
+    if (!mounted || mode !== "image" || imageModel !== "image2") return;
+    const unsupported = (imageSize === "2K" && ratio === "9:16") || (imageSize === "4K" && ratio === "1:1");
+    if (unsupported) {
+      setImageSize("1K");
+      setRatio("9:16");
+    }
+  }, [imageModel, imageSize, mode, mounted, ratio]);
 
   useEffect(() => {
     if (!mounted) return;
@@ -1857,7 +1866,7 @@ export default function Home() {
                     key={item.value}
                     onClick={() => {
                       if (disabled) {
-                        showToast("image2模型暂不支持该比例");
+                        showToast("image2模型暂不支持该比例/分辨率组合");
                         return;
                       }
                       setRatio(item.value);
@@ -1895,7 +1904,7 @@ export default function Home() {
                           key={item}
                           onClick={() => {
                             if (disabled) {
-                              showToast("image2模型暂不支持该比例");
+                              showToast("image2模型暂不支持该比例/分辨率组合");
                               return;
                             }
                             setImageSize(item);
