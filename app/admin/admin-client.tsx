@@ -44,7 +44,29 @@ type PricingConfig = {
   image2_4K: number;
 };
 
+type VideoRecord = {
+  id: string;
+  taskId: string;
+  videoId: string | null;
+  userId: string;
+  userEmail: string;
+  topic: string;
+  agentName: string;
+  seconds: string;
+  publishedAt: string;
+  status: "成功" | "生成中" | "失败" | "待处理";
+  upscaleStatus: "未超分" | "超分中" | "超分成功" | "超分失败";
+  canDownload: boolean;
+  downloadUrl: string | null;
+};
+
 const formatMoney = (value: unknown) => Number(value || 0).toFixed(2);
+
+const formatDateTime = (value: string) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value || "-";
+  return date.toLocaleString("zh-CN", { hour12: false });
+};
 
 const emptyAgent: ManagedAgent = {
   id: "",
@@ -74,6 +96,14 @@ export default function AdminClient() {
   const [userPage, setUserPage] = useState(1);
   const [grantUser, setGrantUser] = useState<AdminUser | null>(null);
   const [grantAgentIds, setGrantAgentIds] = useState<string[]>([]);
+  const [passwordUser, setPasswordUser] = useState<AdminUser | null>(null);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [videoRecords, setVideoRecords] = useState<VideoRecord[]>([]);
+  const [videoRecordSearch, setVideoRecordSearch] = useState("");
+  const [videoRecordPage, setVideoRecordPage] = useState(1);
+  const [videoRecordTotal, setVideoRecordTotal] = useState(0);
+  const [videoRecordTotalPages, setVideoRecordTotalPages] = useState(1);
 
   const privateAgents = agents.filter((agent) => agent.visibility === "private");
   const filteredUsers = users.filter((user) => {
@@ -114,11 +144,34 @@ export default function AdminClient() {
     setPricing(json.data.pricing);
   };
 
+  const loadVideoRecords = async () => {
+    const params = new URLSearchParams({
+      page: String(videoRecordPage),
+      pageSize: "20",
+    });
+    if (videoRecordSearch.trim()) {
+      params.set("q", videoRecordSearch.trim());
+    }
+    const res = await fetch(`/api/admin/video-records?${params.toString()}`, { cache: "no-store" });
+    const json = await res.json();
+    if (!res.ok) {
+      setMessage(json?.message || "加载视频任务历史失败");
+      return;
+    }
+    setVideoRecords(Array.isArray(json.items) ? json.items : []);
+    setVideoRecordTotal(Number(json.total || 0));
+    setVideoRecordTotalPages(Math.max(1, Number(json.totalPages || 1)));
+  };
+
   useEffect(() => {
     void loadUsers();
     void loadAgents();
     void loadPricing();
   }, []);
+
+  useEffect(() => {
+    void loadVideoRecords();
+  }, [videoRecordPage, videoRecordSearch]);
 
   const patchUser = async (id: string, body: Record<string, unknown>) => {
     const res = await fetch(`/api/admin/users/${id}`, {
@@ -132,6 +185,37 @@ export default function AdminClient() {
       return;
     }
     setMessage("操作成功");
+    await loadUsers();
+  };
+
+  const savePassword = async () => {
+    if (!passwordUser) return;
+    if (!newPassword) {
+      setMessage("新密码不能为空");
+      return;
+    }
+    if (newPassword.length < 6) {
+      setMessage("新密码至少 6 位");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setMessage("两次输入的密码不一致");
+      return;
+    }
+    const res = await fetch(`/api/admin/users/${passwordUser.id}/password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: newPassword }),
+    });
+    const json = await res.json();
+    if (!res.ok || !json?.success) {
+      setMessage(json?.message || "修改密码失败");
+      return;
+    }
+    setPasswordUser(null);
+    setNewPassword("");
+    setConfirmPassword("");
+    setMessage("密码已更新");
     await loadUsers();
   };
 
@@ -199,13 +283,19 @@ export default function AdminClient() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-semibold">管理员后台</h1>
-            <p className="text-sm text-gray-500">用户、智能体与价格配置</p>
+            <p className="text-sm text-gray-500">用户、智能体、价格配置与视频任务历史记录</p>
           </div>
           <a href="/" className="rounded-full bg-black px-4 py-2 text-sm text-white">返回首页</a>
         </div>
+        <div className="flex flex-wrap gap-2 rounded-3xl border border-gray-200 bg-white p-3 text-sm shadow-sm">
+          <a href="#users" className="rounded-full bg-gray-100 px-4 py-2 text-gray-700">用户管理</a>
+          <a href="#agents" className="rounded-full bg-gray-100 px-4 py-2 text-gray-700">智能体管理</a>
+          <a href="#pricing" className="rounded-full bg-gray-100 px-4 py-2 text-gray-700">价格配置</a>
+          <a href="#video-records" className="rounded-full bg-gray-100 px-4 py-2 text-gray-700">视频任务历史记录</a>
+        </div>
         {message && <div className="rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-700">{message}</div>}
 
-        <section className="rounded-3xl border border-gray-200 bg-white p-5 shadow-sm">
+        <section id="pricing" className="rounded-3xl border border-gray-200 bg-white p-5 shadow-sm">
           <h2 className="mb-4 text-lg font-semibold">价格配置</h2>
           {pricing && (
             <div className="space-y-4">
@@ -239,7 +329,7 @@ export default function AdminClient() {
           )}
         </section>
 
-        <section className="rounded-3xl border border-gray-200 bg-white p-5 shadow-sm">
+        <section id="agents" className="rounded-3xl border border-gray-200 bg-white p-5 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-lg font-semibold">智能体管理</h2>
             <button onClick={() => setEditingAgent(emptyAgent)} className="rounded-full bg-gray-100 px-3 py-1.5 text-xs text-gray-700">新建</button>
@@ -321,7 +411,7 @@ export default function AdminClient() {
           </div>
         </section>
 
-        <section className="overflow-x-auto rounded-3xl border border-gray-200 bg-white shadow-sm">
+        <section id="users" className="overflow-x-auto rounded-3xl border border-gray-200 bg-white shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
             <h2 className="text-lg font-semibold">用户管理</h2>
             <input
@@ -372,6 +462,16 @@ export default function AdminClient() {
                       >
                         授权智能体
                       </button>
+                      <button
+                        onClick={() => {
+                          setPasswordUser(user);
+                          setNewPassword("");
+                          setConfirmPassword("");
+                        }}
+                        className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700"
+                      >
+                        修改密码
+                      </button>
                     </div>
                     <div className="flex gap-2">
                       <input value={deltas[user.id] ?? ""} onChange={(event) => setDeltas((prev) => ({ ...prev, [user.id]: event.target.value }))} placeholder="+10 或 -5" className="w-24 rounded-full border border-gray-200 px-3 py-1 text-xs outline-none" />
@@ -398,6 +498,72 @@ export default function AdminClient() {
             <button onClick={() => setUserPage((prev) => Math.max(1, prev - 1))} disabled={userPage <= 1} className="rounded-full bg-gray-100 px-3 py-1 disabled:opacity-40">上一页</button>
             <span>第 {userPage} / {userTotalPages} 页，共 {filteredUsers.length} 个用户</span>
             <button onClick={() => setUserPage((prev) => Math.min(userTotalPages, prev + 1))} disabled={userPage >= userTotalPages} className="rounded-full bg-gray-100 px-3 py-1 disabled:opacity-40">下一页</button>
+          </div>
+        </section>
+
+        <section id="video-records" className="overflow-x-auto rounded-3xl border border-gray-200 bg-white shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
+            <div>
+              <h2 className="text-lg font-semibold">视频任务历史记录</h2>
+              <p className="text-xs text-gray-500">仅展示视频任务，按发布时间倒序排列</p>
+            </div>
+            <input
+              value={videoRecordSearch}
+              onChange={(event) => {
+                setVideoRecordSearch(event.target.value);
+                setVideoRecordPage(1);
+              }}
+              placeholder="搜索用户 ID / 邮箱"
+              className="rounded-full border border-gray-200 bg-gray-50 px-4 py-2 text-sm outline-none"
+            />
+          </div>
+          <table className="min-w-full text-left text-sm">
+            <thead className="bg-gray-50 text-xs text-gray-500">
+              <tr>
+                <th className="px-4 py-3">用户ID</th>
+                <th className="px-4 py-3">用户邮箱</th>
+                <th className="px-4 py-3">主题</th>
+                <th className="px-4 py-3">所属智能体</th>
+                <th className="px-4 py-3">秒数</th>
+                <th className="px-4 py-3">发布时间</th>
+                <th className="px-4 py-3">状态</th>
+                <th className="px-4 py-3">超分状态</th>
+                <th className="px-4 py-3">下载按钮</th>
+              </tr>
+            </thead>
+            <tbody>
+              {videoRecords.length === 0 ? (
+                <tr className="border-t border-gray-100">
+                  <td className="px-4 py-6 text-center text-sm text-gray-500" colSpan={9}>暂无视频任务记录</td>
+                </tr>
+              ) : videoRecords.map((record) => (
+                <tr key={record.id} className="border-t border-gray-100 align-top">
+                  <td className="px-4 py-3">{record.userId}</td>
+                  <td className="px-4 py-3">{record.userEmail}</td>
+                  <td className="max-w-xs px-4 py-3">
+                    <div className="line-clamp-2">{record.topic}</div>
+                    <div className="mt-1 text-[10px] text-gray-400">任务 {record.taskId}{record.videoId ? ` / 视频 ${record.videoId}` : ""}</div>
+                  </td>
+                  <td className="px-4 py-3">{record.agentName}</td>
+                  <td className="px-4 py-3">{record.seconds}</td>
+                  <td className="px-4 py-3 whitespace-nowrap">{formatDateTime(record.publishedAt)}</td>
+                  <td className="px-4 py-3">{record.status}</td>
+                  <td className="px-4 py-3">{record.upscaleStatus}</td>
+                  <td className="px-4 py-3">
+                    {record.canDownload && record.downloadUrl ? (
+                      <a href={record.downloadUrl} className="rounded-full bg-black px-3 py-1 text-xs text-white">下载</a>
+                    ) : (
+                      <button disabled className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-400">下载</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="flex items-center justify-end gap-3 border-t border-gray-100 px-5 py-4 text-sm text-gray-600">
+            <button onClick={() => setVideoRecordPage((prev) => Math.max(1, prev - 1))} disabled={videoRecordPage <= 1} className="rounded-full bg-gray-100 px-3 py-1 disabled:opacity-40">上一页</button>
+            <span>第 {videoRecordPage} / {videoRecordTotalPages} 页，共 {videoRecordTotal} 条记录</span>
+            <button onClick={() => setVideoRecordPage((prev) => Math.min(videoRecordTotalPages, prev + 1))} disabled={videoRecordPage >= videoRecordTotalPages} className="rounded-full bg-gray-100 px-3 py-1 disabled:opacity-40">下一页</button>
           </div>
         </section>
       </div>
@@ -439,6 +605,46 @@ export default function AdminClient() {
               >
                 保存授权
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {passwordUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={() => setPasswordUser(null)}>
+          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-xl" onClick={(event) => event.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <div className="text-lg font-semibold">修改密码</div>
+                <div className="text-xs text-gray-500">{passwordUser.email} / {passwordUser.id}</div>
+              </div>
+              <button onClick={() => setPasswordUser(null)} className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700">关闭</button>
+            </div>
+            <div className="space-y-3">
+              <label className="block text-sm text-gray-700">
+                <span className="mb-1 block text-xs text-gray-500">新密码</span>
+                <input
+                  type="password"
+                  value={newPassword}
+                  onChange={(event) => setNewPassword(event.target.value)}
+                  className={`${fieldClass} w-full`}
+                  autoComplete="new-password"
+                />
+              </label>
+              <label className="block text-sm text-gray-700">
+                <span className="mb-1 block text-xs text-gray-500">确认新密码</span>
+                <input
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(event) => setConfirmPassword(event.target.value)}
+                  className={`${fieldClass} w-full`}
+                  autoComplete="new-password"
+                />
+              </label>
+              <p className="text-xs text-gray-400">新密码不能为空，建议至少 6 位。</p>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button onClick={() => setPasswordUser(null)} className="rounded-full bg-gray-100 px-4 py-2 text-sm text-gray-700">取消</button>
+              <button onClick={() => void savePassword()} className="rounded-full bg-black px-4 py-2 text-sm text-white">保存</button>
             </div>
           </div>
         </div>

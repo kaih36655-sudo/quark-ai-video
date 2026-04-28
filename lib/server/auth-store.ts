@@ -192,6 +192,20 @@ export async function updateUser(id: string, patch: Partial<Pick<AppUser, "role"
   return next;
 }
 
+export async function updateUserPassword(id: string, password: string) {
+  const users = await listUsers();
+  const index = users.findIndex((user) => user.id === id);
+  if (index < 0) return null;
+  const next: AppUser = {
+    ...users[index],
+    passwordHash: hashPassword(password),
+    updatedAt: new Date().toISOString(),
+  };
+  users[index] = next;
+  await writeJsonArray(USERS_FILE, users);
+  return next;
+}
+
 export async function addBalanceLog(payload: Omit<BalanceLog, "id" | "createdAt">) {
   const logs = await readJsonArray<BalanceLog>(BALANCE_LOGS_FILE);
   const now = new Date().toISOString();
