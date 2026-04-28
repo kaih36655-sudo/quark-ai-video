@@ -210,6 +210,7 @@ export default function Home() {
   const [remixVideoFile, setRemixVideoFile] = useState<File | null>(null);
   const [remixVideoDuration, setRemixVideoDuration] = useState<number | null>(null);
   const [remixUserHint, setRemixUserHint] = useState("");
+  const [remixOutputLanguage, setRemixOutputLanguage] = useState<"zh" | "en" | "ja">("zh");
   const [remixGenerateReferenceImage, setRemixGenerateReferenceImage] = useState(false);
   const [remixAnalysisLoading, setRemixAnalysisLoading] = useState(false);
   const [remixReferenceImageLoading, setRemixReferenceImageLoading] = useState(false);
@@ -846,6 +847,11 @@ export default function Home() {
     return output;
   };
 
+  const truncateSourceTaskText = (text: string, maxLength = 20) => {
+    const chars = Array.from(text.trim());
+    return chars.length > maxLength ? `${chars.slice(0, maxLength).join("")}...` : chars.join("");
+  };
+
   const getUpscaleStatusLabel = (status?: "idle" | "queued" | "pending" | "processing" | "success" | "failed") => {
     if (status === "success") return "超分成功";
     if (status === "failed") return "超分失败";
@@ -1283,6 +1289,7 @@ export default function Home() {
     formData.append("video", remixVideoFile);
     formData.append("targetSeconds", String(targetSeconds));
     formData.append("ratio", ratio === "9:16" ? "9:16" : "16:9");
+    formData.append("outputLanguage", remixOutputLanguage);
     if (remixUserHint.trim()) {
       formData.append("userHint", remixUserHint.trim());
     }
@@ -2165,6 +2172,24 @@ export default function Home() {
                   </span>
                 </label>
 
+                <label className="mb-3 block">
+                  <span className={isDark ? "mb-1 block text-xs font-medium text-gray-300" : "mb-1 block text-xs font-medium text-gray-600"}>输出语言</span>
+                  <select
+                    value={remixOutputLanguage}
+                    onChange={(event) => setRemixOutputLanguage(event.target.value as "zh" | "en" | "ja")}
+                    disabled={remixAnalysisLoading || remixReferenceImageLoading}
+                    className={
+                      isDark
+                        ? "w-full rounded-xl border border-gray-700 bg-[#141417] px-3 py-2 text-sm text-gray-100 outline-none disabled:opacity-60"
+                        : "w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 outline-none disabled:opacity-60"
+                    }
+                  >
+                    <option value="zh">中文</option>
+                    <option value="en">英文</option>
+                    <option value="ja">日文</option>
+                  </select>
+                </label>
+
                 <label className={isDark ? "mb-3 flex items-start gap-2 rounded-2xl border border-gray-700 bg-[#141417] p-3 text-sm text-gray-200" : "mb-3 flex items-start gap-2 rounded-2xl border border-gray-200 bg-white p-3 text-sm text-gray-700"}>
                   <input
                     type="checkbox"
@@ -2193,7 +2218,12 @@ export default function Home() {
                           : "rounded-full bg-black px-4 py-2 text-sm font-medium text-white"
                     }
                   >
-                    {remixAnalysisLoading ? "分析中，请耐心等待..." : "分析并生成复刻提示词"}
+                    {remixAnalysisLoading ? (
+                      <span className="inline-flex items-center gap-2">
+                        <span>分析中请稍后</span>
+                        <span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                      </span>
+                    ) : "分析并生成复刻提示词"}
                   </button>
                   {remixAnalysisResult && (
                     <span className={isDark ? "text-sm text-emerald-300" : "text-sm text-emerald-600"}>
@@ -2777,8 +2807,11 @@ export default function Home() {
                         <span className={isDark ? "rounded-full border border-gray-700/70 bg-gray-800/80 px-2 py-0.5 text-[10px] font-medium text-gray-400" : "rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[10px] font-medium text-gray-500"}>
                           发布时间：{formatTaskPublishTime(createdAt)}
                         </span>
-                        <span className={isDark ? "rounded-full border border-gray-700/70 bg-gray-800/80 px-2 py-0.5 text-[10px] font-medium text-gray-400" : "rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[10px] font-medium text-gray-500"}>
-                          来源任务：{fromTaskPrompt}
+                        <span
+                          title={`来源任务：${fromTaskPrompt}`}
+                          className={isDark ? "inline-block max-w-[180px] truncate whitespace-nowrap rounded-full border border-gray-700/70 bg-gray-800/80 px-2 py-0.5 text-[10px] font-medium text-gray-400" : "inline-block max-w-[180px] truncate whitespace-nowrap rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[10px] font-medium text-gray-500"}
+                        >
+                          来源任务：{truncateSourceTaskText(fromTaskPrompt)}
                         </span>
                         <span className={isDark ? "rounded-full border border-gray-700/70 bg-gray-800/80 px-2 py-0.5 text-[10px] font-medium text-gray-400" : "rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[10px] font-medium text-gray-500"}>
                           类型：{kind === "schedule" ? "定时任务" : "普通任务"}

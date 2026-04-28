@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export type VideoRemixJobStatus = "pending" | "running" | "success" | "failed";
+export type VideoRemixOutputLanguage = "zh" | "en" | "ja";
 
 export type VideoRemixJob = {
   id: string;
@@ -14,6 +15,7 @@ export type VideoRemixJob = {
   duration: number | null;
   targetSeconds: 4 | 8 | 12;
   ratio: "9:16" | "16:9";
+  outputLanguage: VideoRemixOutputLanguage;
   hasUserHint: boolean;
   userHint: string;
   generateReferenceImage: boolean;

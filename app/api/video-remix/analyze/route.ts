@@ -91,6 +91,11 @@ const normalizeRatio = (value: FormDataEntryValue | null) => {
   return value === "9:16" ? "9:16" : "16:9";
 };
 
+const normalizeOutputLanguage = (value: FormDataEntryValue | null) => {
+  if (value === "en" || value === "ja") return value;
+  return "zh";
+};
+
 const resolveMimeType = (file: File) => {
   const ext = path.extname(file.name).toLowerCase();
   const mimeFromExt = mimeByExt[ext];
@@ -361,6 +366,7 @@ export async function POST(req: NextRequest) {
     const file = formData.get("video");
     const targetSeconds = parseTargetSeconds(formData.get("targetSeconds"));
     const ratio = normalizeRatio(formData.get("ratio"));
+    const outputLanguage = normalizeOutputLanguage(formData.get("outputLanguage"));
     const userHint = pickText(formData.get("userHint")).trim();
     const generateReferenceImage = formData.get("generateReferenceImage") === "true";
 
@@ -385,6 +391,7 @@ export async function POST(req: NextRequest) {
       fileSize: file.size,
       targetSeconds,
       ratio,
+      outputLanguage,
       hasUserHint: Boolean(userHint),
     });
 
@@ -422,6 +429,7 @@ export async function POST(req: NextRequest) {
       duration: probe.duration,
       targetSeconds,
       ratio,
+      outputLanguage,
       hasUserHint: Boolean(userHint),
       userHint,
       generateReferenceImage,
@@ -441,6 +449,7 @@ export async function POST(req: NextRequest) {
       fileSize: file.size,
       targetSeconds,
       ratio,
+      outputLanguage,
       generateReferenceImage,
     });
 

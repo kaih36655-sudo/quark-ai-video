@@ -76,10 +76,23 @@ const shouldRetryImageError = (message: string) => {
   );
 };
 
+const outputLanguageInstruction = (language?: VideoRemixJob["outputLanguage"]) => {
+  if (language === "en") {
+    return "Output language: English. Both analysis and prompt must be written strictly in English. Do not mix Chinese, Japanese, or other languages.";
+  }
+  if (language === "ja") {
+    return "出力言語：日本語。analysis と prompt は必ず日本語のみで書いてください。中国語・英語などを混在させないでください。";
+  }
+  return "输出语言：中文。analysis 和 prompt 必须严格使用中文，不要中英混杂，也不要夹杂日文或其他语言。";
+};
+
 const buildInstruction = (job: VideoRemixJob) => {
   const ratioLabel = job.ratio === "9:16" ? "9:16竖屏" : "16:9横屏";
   const userHint = job.userHint ? `\n用户主动填写的复刻补充要求：${job.userHint}` : "\n用户没有填写复刻补充要求。";
   return `你是短视频提示词复刻专家。请先忠实识别用户上传视频本身的内容，再生成适配 Sora2 的最终视频生成提示词。目标生成时长为 ${job.targetSeconds} 秒，比例为 ${ratioLabel}。
+
+${outputLanguageInstruction(job.outputLanguage)}
+请严格使用用户选择的输出语言，不要中英混杂。返回 JSON 中 analysis 和 prompt 都必须使用该语言。
 
 核心规则：
 1. 默认不要改变原视频主题、商品类别、场景类别或叙事主体。
