@@ -127,10 +127,20 @@ async function probeDuration(filePath: string) {
 
 const buildInstruction = (params: { targetSeconds: 4 | 8 | 12; ratio: string; userHint: string }) => {
   const ratioLabel = params.ratio === "9:16" ? "9:16竖屏" : "16:9横屏";
-  const userHint = params.userHint ? `\n用户额外要求：${params.userHint}` : "";
-  return `你是短视频提示词复刻专家。请分析用户上传的视频，提取镜头节奏、画面风格、主体动作、叙事结构、情绪氛围，并生成适配 Sora2 的最终视频生成提示词。目标生成时长为 ${params.targetSeconds} 秒，比例为 ${ratioLabel}。要求不要复制原视频中的品牌、Logo、水印、人物身份或版权元素，只复刻结构、节奏、风格和表现方式。最终提示词必须完整适配目标秒数，避免叙事未完就结束，也避免叙事过早结束后画面无持续价值。
+  const userHint = params.userHint ? `\n用户主动填写的复刻补充要求：${params.userHint}` : "\n用户没有填写复刻补充要求。";
+  return `你是短视频提示词复刻专家。请先忠实识别用户上传视频本身的内容，再生成适配 Sora2 的最终视频生成提示词。目标生成时长为 ${params.targetSeconds} 秒，比例为 ${ratioLabel}。
 
-最终 prompt 必须包含：目标秒数、比例、0-1s/1-3s 等分段镜头节奏、画面主体、动作、风格、构图、光线、情绪，以及禁止字幕/水印/Logo/品牌/原人物身份的约束。
+核心规则：
+1. 默认不要改变原视频主题、商品类别、场景类别或叙事主体。
+2. 必须保留原视频的核心主体、商品类型、场景类型、商业目的、带货逻辑和卖点表达方式。
+3. 如果原视频是厨房工具带货视频，输出也必须是厨房工具带货视频的复刻提示词；如果是其他商品/场景，也应保持原商品类别和场景类别。
+4. 只复刻镜头结构、节奏、画面风格、运动方式、卖点呈现、情绪氛围和叙事结构。
+5. 不复制品牌、Logo、水印、原字幕、人脸身份、明确版权元素。
+6. 不要把主题改成外部旧文案或用户输入框里的其他内容。
+7. 只有当“复刻补充要求”明确要求改成某个主题/品类时，才允许主题迁移；否则必须忠实保持原视频核心主体和业务类型。
+8. 最终提示词必须完整适配目标秒数，避免叙事未完就结束，也避免叙事过早结束后画面无持续价值。
+
+最终 prompt 必须包含：目标秒数、比例、0-1s/1-3s 等分段镜头节奏、画面主体、商品/人物/场景、动作、风格、构图、光线、情绪、卖点结构，以及禁止字幕/水印/Logo/品牌/原人物身份的约束。
 4秒要快速闭环；8秒要有清晰起承转合；12秒可以有更完整的递进。${userHint}
 
 请只输出 JSON：{"analysis":"string","prompt":"string"}`;
@@ -153,7 +163,25 @@ const parseAnalysisJson = (text: string) => {
   const withoutFence = trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
   const match = withoutFence.match(/\{[\s\S]*\}/);
   const jsonText = match ? match[0] : withoutFence;
-  const parsed = JSON.parse(jsonText) as { analysis?: unknown; prompt?: unknown };
+  let parsed: { analysis?: unknown; prompt?: unknown };
+  try {
+    parsed = JSON.parse(jsonText) as { analysis?: unknown; prompt?: unknown };
+  } catch {
+    const promptMatch =
+      withoutFence.match(/"prompt"\s*:\s*"([\s\S]*?)"\s*(?:[,}])/i) ||
+      withoutFence.match(/prompt\s*[:：]\s*([\s\S]+)$/i);
+    const analysisMatch =
+      withoutFence.match(/"analysis"\s*:\s*"([\s\S]*?)"\s*,\s*"prompt"/i) ||
+      withoutFence.match(/analysis\s*[:：]\s*([\s\S]*?)(?:prompt\s*[:：]|$)/i);
+    const fallbackPrompt = promptMatch?.[1]?.replace(/\\"/g, "\"").trim() || "";
+    if (!fallbackPrompt) {
+      throw new Error("Gemini 输出 JSON 解析失败且未提取到 prompt");
+    }
+    parsed = {
+      analysis: analysisMatch?.[1]?.replace(/\\"/g, "\"").trim() || "",
+      prompt: fallbackPrompt,
+    };
+  }
   return {
     analysis: pickText(parsed.analysis).trim(),
     prompt: pickText(parsed.prompt).trim(),
@@ -351,6 +379,7 @@ export async function POST(req: NextRequest) {
       fileSize: file.size,
       targetSeconds,
       ratio,
+      hasUserHint: Boolean(userHint),
     });
 
     const bytes = Buffer.from(await file.arrayBuffer());
@@ -409,7 +438,10 @@ export async function POST(req: NextRequest) {
       attempt,
       duration: probe.duration,
       targetSeconds,
+      promptLength: parsed.prompt.length,
+      analysisLength: parsed.analysis.length,
       promptPreview: parsed.prompt.slice(0, 160),
+      usedUserHint: Boolean(userHint),
     });
 
     return NextResponse.json({

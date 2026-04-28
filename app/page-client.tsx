@@ -209,10 +209,12 @@ export default function Home() {
   const [referenceImageName, setReferenceImageName] = useState("");
   const [remixVideoFile, setRemixVideoFile] = useState<File | null>(null);
   const [remixVideoDuration, setRemixVideoDuration] = useState<number | null>(null);
+  const [remixUserHint, setRemixUserHint] = useState("");
   const [remixAnalysisLoading, setRemixAnalysisLoading] = useState(false);
   const [remixAnalysisResult, setRemixAnalysisResult] = useState<{ analysis: string; prompt: string; duration: number | null } | null>(null);
   const [timingDate, setTimingDate] = useState("");
   const [timingTime, setTimingTime] = useState("");
+  const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const remixVideoInputRef = useRef<HTMLInputElement | null>(null);
   const timingDateInputRef = useRef<HTMLInputElement | null>(null);
@@ -1244,8 +1246,8 @@ export default function Home() {
     formData.append("video", remixVideoFile);
     formData.append("targetSeconds", String(targetSeconds));
     formData.append("ratio", ratio === "9:16" ? "9:16" : "16:9");
-    if (prompt.trim()) {
-      formData.append("userHint", prompt.trim());
+    if (remixUserHint.trim()) {
+      formData.append("userHint", remixUserHint.trim());
     }
     setRemixAnalysisLoading(true);
     void (async () => {
@@ -1271,6 +1273,23 @@ export default function Home() {
         setRemixAnalysisLoading(false);
       }
     })();
+  };
+
+  const handleUseRemixPrompt = () => {
+    if (!remixAnalysisResult?.prompt) return;
+    setPrompt(remixAnalysisResult.prompt);
+    requestAnimationFrame(() => {
+      promptInputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      promptInputRef.current?.focus();
+    });
+  };
+
+  const handleCopyRemixPrompt = () => {
+    if (!remixAnalysisResult?.prompt) return;
+    void navigator.clipboard.writeText(remixAnalysisResult.prompt).then(
+      () => showToast("复刻提示词已复制"),
+      () => showToast("复制失败，请手动复制")
+    );
   };
 
   const handleRemoveReferenceImage = () => {
@@ -1851,6 +1870,7 @@ export default function Home() {
           <input ref={fileInputRef} type="file" accept="image/*" onChange={handleReferenceUpload} className="hidden" />
           <input ref={remixVideoInputRef} type="file" accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm" onChange={handleRemixVideoUpload} className="hidden" />
           <textarea
+            ref={promptInputRef}
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             placeholder={isRemixMode ? "上传参考视频并分析后，AI 会在这里填入适用于 Sora2 的复刻提示词..." : "输入你的创意，例如：新员工入职手足无措，生成 3 条搞笑办公室短视频..."}
@@ -2005,6 +2025,7 @@ export default function Home() {
                   </div>
                   <button
                     onClick={() => remixVideoInputRef.current?.click()}
+                    disabled={remixAnalysisLoading}
                     className={isDark ? "rounded-full bg-white px-4 py-2 text-sm font-medium text-black" : "rounded-full bg-black px-4 py-2 text-sm font-medium text-white"}
                   >
                     选择参考视频
@@ -2023,6 +2044,7 @@ export default function Home() {
                       </div>
                       <button
                         onClick={handleRemoveRemixVideo}
+                        disabled={remixAnalysisLoading}
                         className={isDark ? "rounded-full bg-gray-700 px-3 py-1.5 text-xs text-gray-100" : "rounded-full bg-gray-100 px-3 py-1.5 text-xs text-gray-700"}
                       >
                         移除
@@ -2034,6 +2056,24 @@ export default function Home() {
                     还未上传参考视频，请先选择文件后点击分析。
                   </div>
                 )}
+
+                <label className="mb-3 block">
+                  <span className={isDark ? "mb-1 block text-xs font-medium text-gray-300" : "mb-1 block text-xs font-medium text-gray-600"}>复刻补充要求（可选）</span>
+                  <input
+                    value={remixUserHint}
+                    onChange={(event) => setRemixUserHint(event.target.value)}
+                    disabled={remixAnalysisLoading}
+                    placeholder="例如：保持原视频卖点结构，但改成更适合小红书风格"
+                    className={
+                      isDark
+                        ? "w-full rounded-xl border border-gray-700 bg-[#141417] px-3 py-2 text-sm text-gray-100 outline-none placeholder:text-gray-500 disabled:opacity-60"
+                        : "w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 outline-none placeholder:text-gray-400 disabled:opacity-60"
+                    }
+                  />
+                  <span className={isDark ? "mt-1 block text-[11px] text-gray-500" : "mt-1 block text-[11px] text-gray-400"}>
+                    不填写时，AI 将只依据上传视频本身识别主体、商品、场景和带货结构。
+                  </span>
+                </label>
 
                 <div className="flex flex-wrap items-center gap-3">
                   <button
@@ -2047,7 +2087,7 @@ export default function Home() {
                           : "rounded-full bg-black px-4 py-2 text-sm font-medium text-white"
                     }
                   >
-                    {remixAnalysisLoading ? "分析中..." : "分析并生成复刻提示词"}
+                    {remixAnalysisLoading ? "分析中，请耐心等待..." : "分析并生成复刻提示词"}
                   </button>
                   {remixAnalysisResult && (
                     <span className={isDark ? "text-sm text-emerald-300" : "text-sm text-emerald-600"}>
@@ -2055,11 +2095,37 @@ export default function Home() {
                     </span>
                   )}
                 </div>
+                {remixAnalysisLoading && (
+                  <div className={isDark ? "mt-2 text-xs leading-5 text-amber-300" : "mt-2 text-xs leading-5 text-amber-600"}>
+                    视频理解通常需要几十秒，较大视频可能需要 3-5 分钟，请勿重复点击。
+                  </div>
+                )}
 
-                {remixAnalysisResult?.analysis && (
-                  <div className={isDark ? "mt-3 rounded-2xl border border-gray-700 bg-[#141417] p-3 text-xs leading-5 text-gray-300" : "mt-3 rounded-2xl border border-gray-200 bg-white p-3 text-xs leading-5 text-gray-600"}>
-                    <div className="mb-1 font-semibold">AI 分析摘要</div>
-                    <div>{remixAnalysisResult.analysis}</div>
+                {remixAnalysisResult && (
+                  <div className={isDark ? "mt-4 rounded-2xl border border-emerald-500/40 bg-emerald-950/20 p-4 text-sm text-gray-200" : "mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-gray-700"}>
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                      <div className="text-base font-semibold">AI复刻提示词已生成</div>
+                      <div className="flex flex-wrap gap-2">
+                        <button onClick={handleUseRemixPrompt} className={isDark ? "rounded-full bg-white px-3 py-1.5 text-xs font-medium text-black" : "rounded-full bg-black px-3 py-1.5 text-xs font-medium text-white"}>
+                          使用此提示词
+                        </button>
+                        <button onClick={handleCopyRemixPrompt} className={isDark ? "rounded-full bg-gray-700 px-3 py-1.5 text-xs font-medium text-gray-100" : "rounded-full bg-white px-3 py-1.5 text-xs font-medium text-gray-700"}>
+                          复制提示词
+                        </button>
+                      </div>
+                    </div>
+                    {remixAnalysisResult.analysis && (
+                      <div className="mb-3">
+                        <div className="mb-1 text-xs font-semibold">analysis 摘要</div>
+                        <div className={isDark ? "text-xs leading-5 text-gray-300" : "text-xs leading-5 text-gray-600"}>{remixAnalysisResult.analysis}</div>
+                      </div>
+                    )}
+                    <div>
+                      <div className="mb-1 text-xs font-semibold">最终 prompt</div>
+                      <pre className={isDark ? "max-h-56 overflow-y-auto whitespace-pre-wrap rounded-xl bg-[#111114] p-3 text-xs leading-5 text-gray-200" : "max-h-56 overflow-y-auto whitespace-pre-wrap rounded-xl bg-white p-3 text-xs leading-5 text-gray-700"}>
+                        {remixAnalysisResult.prompt}
+                      </pre>
+                    </div>
                   </div>
                 )}
               </div>
