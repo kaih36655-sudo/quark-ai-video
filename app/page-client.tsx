@@ -207,9 +207,14 @@ export default function Home() {
   const [referenceImageData, setReferenceImageData] = useState<string | null>(null);
   const [referenceImageThumbData, setReferenceImageThumbData] = useState<string | null>(null);
   const [referenceImageName, setReferenceImageName] = useState("");
+  const [remixVideoFile, setRemixVideoFile] = useState<File | null>(null);
+  const [remixVideoDuration, setRemixVideoDuration] = useState<number | null>(null);
+  const [remixAnalysisLoading, setRemixAnalysisLoading] = useState(false);
+  const [remixAnalysisResult, setRemixAnalysisResult] = useState<{ analysis: string; prompt: string; duration: number | null } | null>(null);
   const [timingDate, setTimingDate] = useState("");
   const [timingTime, setTimingTime] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const remixVideoInputRef = useRef<HTMLInputElement | null>(null);
   const timingDateInputRef = useRef<HTMLInputElement | null>(null);
   const timingTimeInputRef = useRef<HTMLInputElement | null>(null);
   const scheduleTimersRef = useRef<Record<number, number>>({});
@@ -623,9 +628,10 @@ export default function Home() {
     const useReference = typeof refEnabled === "boolean" ? refEnabled : hasReferenceImage;
     const useReferenceName = refName ?? referenceImageName;
     const useReferenceThumbData = refThumbData ?? referenceImageThumbData;
+    const isCurrentRemixMode = mode === "remix";
     const isCurrentAgentMode = mode === "agent" || mode === "agent_image";
     const isCurrentImageMode = mode === "image" || mode === "agent_image";
-    const submitMode = mode === "agent_image" ? "image" : mode;
+    const submitMode = mode === "agent_image" ? "image" : isCurrentRemixMode ? "normal" : mode;
     const activeAgentId = taskAgentId ?? (isCurrentAgentMode ? selectedAgent?.id : undefined);
     const activeAgentName = taskAgentName ?? (isCurrentAgentMode ? selectedAgent?.name : undefined);
     const activeAgentAccess = taskAgentAccess ?? (isCurrentAgentMode ? selectedAgent?.access : undefined);
@@ -646,8 +652,8 @@ export default function Home() {
       imageModel: isCurrentImageMode ? imageModel : undefined,
       count: effectiveCount,
       agentId: activeAgentId,
-      referenceImageUrl: useReference ? referenceImageData ?? undefined : undefined,
-      referenceImageName: useReference ? useReferenceName || undefined : undefined,
+      referenceImageUrl: useReference && !isCurrentRemixMode ? referenceImageData ?? undefined : undefined,
+      referenceImageName: useReference && !isCurrentRemixMode ? useReferenceName || undefined : undefined,
     };
     setIsGenerating(true);
     setGenerateProgress(10);
@@ -714,6 +720,10 @@ export default function Home() {
       showToast(imageModelRestrictionMessage);
       return;
     }
+    if (mode === "remix" && !remixAnalysisResult) {
+      showToast("请先分析并生成复刻提示词");
+      return;
+    }
     if (mode === "agent" && (!selectedAgent || !selectedAgentApplicable)) {
       showToast("请先选择视频智能体");
       return;
@@ -732,6 +742,10 @@ export default function Home() {
   const handleCreateScheduledTask = async () => {
     if (!prompt.trim()) {
       showToast("请先输入提示词");
+      return;
+    }
+    if (mode === "remix" && !remixAnalysisResult) {
+      showToast("请先分析并生成复刻提示词");
       return;
     }
     if (!timingDate || !timingTime) {
@@ -755,8 +769,9 @@ export default function Home() {
       showToast("当前智能体尚未获得授权，无法执行任务");
       return;
     }
+    const isCurrentRemixMode = mode === "remix";
     const isCurrentImageMode = mode === "image" || mode === "agent_image";
-    const submitMode = mode === "agent_image" ? "image" : mode;
+    const submitMode = mode === "agent_image" ? "image" : isCurrentRemixMode ? "normal" : mode;
     const createRes = await fetch("/api/tasks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -769,8 +784,8 @@ export default function Home() {
         imageModel: isCurrentImageMode ? imageModel : undefined,
         count: generateCount,
         agentId: mode === "agent" || mode === "agent_image" ? selectedAgent?.id : undefined,
-        referenceImageUrl: hasReferenceImage ? referenceImageData ?? undefined : undefined,
-        referenceImageName: hasReferenceImage ? referenceImageName || undefined : undefined,
+        referenceImageUrl: hasReferenceImage && !isCurrentRemixMode ? referenceImageData ?? undefined : undefined,
+        referenceImageName: hasReferenceImage && !isCurrentRemixMode ? referenceImageName || undefined : undefined,
         scheduledAt: new Date(targetTs).toISOString(),
       }),
     });
@@ -1110,6 +1125,142 @@ export default function Home() {
     })();
   };
 
+  const getRemixTargetSeconds = () => {
+    if (duration === "4s") return 4;
+    if (duration === "8s") return 8;
+    return 12;
+  };
+
+  const getRemixDurationRange = () => {
+    const targetSeconds = getRemixTargetSeconds();
+    if (targetSeconds === 4) return { min: 3, max: 6, hint: "建议上传 3-6 秒视频", message: "请上传 3-6 秒的视频用于复刻 4 秒视频" };
+    if (targetSeconds === 8) return { min: 6, max: 10, hint: "建议上传 6-10 秒视频", message: "请上传 6-10 秒的视频用于复刻 8 秒视频" };
+    return { min: 10, max: 16, hint: "建议上传 10-16 秒视频", message: "请上传 10-16 秒的视频用于复刻 12 秒视频" };
+  };
+
+  const isValidRemixVideoFile = (file: File) => {
+    const name = file.name.toLowerCase();
+    const allowedByName = name.endsWith(".mp4") || name.endsWith(".mov") || name.endsWith(".webm");
+    const allowedByType = ["video/mp4", "video/quicktime", "video/webm"].includes(file.type);
+    return allowedByName && (!file.type || allowedByType);
+  };
+
+  const readVideoDuration = (file: File) => {
+    return new Promise<number | null>((resolve) => {
+      const url = URL.createObjectURL(file);
+      const video = document.createElement("video");
+      const cleanup = () => URL.revokeObjectURL(url);
+      video.preload = "metadata";
+      video.onloadedmetadata = () => {
+        const seconds = Number(video.duration);
+        cleanup();
+        resolve(Number.isFinite(seconds) ? seconds : null);
+      };
+      video.onerror = () => {
+        cleanup();
+        resolve(null);
+      };
+      video.src = url;
+    });
+  };
+
+  const handleRemixVideoUpload = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setRemixAnalysisResult(null);
+    setRemixVideoDuration(null);
+    if (!isValidRemixVideoFile(file)) {
+      showToast("仅支持 mp4 / mov / webm 视频");
+      event.target.value = "";
+      return;
+    }
+    if (file.size > 50 * 1024 * 1024) {
+      showToast("参考视频最大 50MB");
+      event.target.value = "";
+      return;
+    }
+    setRemixVideoFile(file);
+    void (async () => {
+      const seconds = await readVideoDuration(file);
+      setRemixVideoDuration(seconds);
+      if (seconds !== null) {
+        const range = getRemixDurationRange();
+        if (seconds < range.min || seconds > range.max) {
+          showToast(range.message);
+        } else {
+          showToast("参考视频已选择");
+        }
+      } else {
+        showToast("参考视频已选择，时长将在后端校验");
+      }
+    })();
+  };
+
+  const handleRemoveRemixVideo = () => {
+    setRemixVideoFile(null);
+    setRemixVideoDuration(null);
+    setRemixAnalysisResult(null);
+    if (remixVideoInputRef.current) {
+      remixVideoInputRef.current.value = "";
+    }
+  };
+
+  const handleAnalyzeRemixVideo = () => {
+    if (!isLoggedIn) {
+      showToast("请先登录后再分析视频");
+      router.push("/login");
+      return;
+    }
+    if (!remixVideoFile) {
+      showToast("请先上传参考视频");
+      return;
+    }
+    if (!isValidRemixVideoFile(remixVideoFile)) {
+      showToast("仅支持 mp4 / mov / webm 视频");
+      return;
+    }
+    if (remixVideoFile.size > 50 * 1024 * 1024) {
+      showToast("参考视频最大 50MB");
+      return;
+    }
+    const targetSeconds = getRemixTargetSeconds();
+    const range = getRemixDurationRange();
+    if (remixVideoDuration !== null && (remixVideoDuration < range.min || remixVideoDuration > range.max)) {
+      showToast(range.message);
+      return;
+    }
+    const formData = new FormData();
+    formData.append("video", remixVideoFile);
+    formData.append("targetSeconds", String(targetSeconds));
+    formData.append("ratio", ratio === "9:16" ? "9:16" : "16:9");
+    if (prompt.trim()) {
+      formData.append("userHint", prompt.trim());
+    }
+    setRemixAnalysisLoading(true);
+    void (async () => {
+      try {
+        const res = await fetch("/api/video-remix/analyze", { method: "POST", body: formData });
+        const json = await res.json();
+        if (!res.ok || !json?.ok || !json?.prompt) {
+          showToast(json?.message || "分析视频失败");
+          return;
+        }
+        const nextPrompt = String(json.prompt);
+        setPrompt(nextPrompt);
+        setRemixAnalysisResult({
+          analysis: String(json.analysis || ""),
+          prompt: nextPrompt,
+          duration: typeof json.duration === "number" ? json.duration : null,
+        });
+        showToast("AI已生成复刻提示词，可编辑后点击开始生成视频。");
+      } catch {
+        showToast("分析视频失败");
+      } finally {
+        setRemixAnalysisLoading(false);
+      }
+    })();
+  };
+
   const handleRemoveReferenceImage = () => {
     setReferenceImageData(null);
     setReferenceImageThumbData(null);
@@ -1130,10 +1281,13 @@ export default function Home() {
   };
 
   const selectedAgent = agentProfiles.find((agent) => agent.id === selectedAgentId) ?? null;
+  const isRemixMode = mode === "remix";
   const isImageMode = mode === "image" || mode === "agent_image";
   const isAgentMode = mode === "agent" || mode === "agent_image";
   const modeLabel =
-    mode === "agent"
+    isRemixMode
+      ? "爆款视频复刻"
+      : mode === "agent"
       ? "智能体批量视频"
       : mode === "normal"
         ? "通用视频"
@@ -1683,10 +1837,11 @@ export default function Home() {
 
         <div className={isDark ? "w-full max-w-4xl rounded-[28px] border border-gray-800 bg-[#121214] p-4 shadow-sm md:p-5" : "w-full max-w-4xl rounded-[28px] border border-gray-200 bg-white p-4 shadow-sm md:p-5"}>
           <input ref={fileInputRef} type="file" accept="image/*" onChange={handleReferenceUpload} className="hidden" />
+          <input ref={remixVideoInputRef} type="file" accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm" onChange={handleRemixVideoUpload} className="hidden" />
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            placeholder="输入你的创意，例如：新员工入职手足无措，生成 3 条搞笑办公室短视频..."
+            placeholder={isRemixMode ? "上传参考视频并分析后，AI 会在这里填入适用于 Sora2 的复刻提示词..." : "输入你的创意，例如：新员工入职手足无措，生成 3 条搞笑办公室短视频..."}
             className={isDark ? "h-44 w-full resize-none rounded-2xl border border-gray-800 bg-[#18181b] p-5 text-sm leading-6 outline-none placeholder:text-gray-500 md:h-48" : "h-44 w-full resize-none rounded-2xl border border-gray-200 bg-gray-50 p-5 text-sm leading-6 outline-none placeholder:text-gray-400 md:h-48"}
           />
           <div className="mt-2 flex justify-end">
@@ -1705,23 +1860,25 @@ export default function Home() {
           <div className="mt-4 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex flex-wrap items-center gap-2">
-                <button
-                  onClick={handleToggleReferenceImage}
-                  className={
-                    hasReferenceImage
-                      ? isDark
-                        ? "rounded-full bg-white px-4 py-2 text-sm font-medium text-black"
-                        : "rounded-full bg-black px-4 py-2 text-sm font-medium text-white"
-                      : isDark
-                        ? "rounded-full bg-gray-800 px-4 py-2 text-sm font-medium text-gray-100"
-                        : "rounded-full bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700"
-                  }
-                >
-                  {hasReferenceImage ? "已添加参考图" : "上传参考图"}
-                </button>
+                {!isRemixMode && (
+                  <button
+                    onClick={handleToggleReferenceImage}
+                    className={
+                      hasReferenceImage
+                        ? isDark
+                          ? "rounded-full bg-white px-4 py-2 text-sm font-medium text-black"
+                          : "rounded-full bg-black px-4 py-2 text-sm font-medium text-white"
+                        : isDark
+                          ? "rounded-full bg-gray-800 px-4 py-2 text-sm font-medium text-gray-100"
+                          : "rounded-full bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700"
+                    }
+                  >
+                    {hasReferenceImage ? "已添加参考图" : "上传参考图"}
+                  </button>
+                )}
 
                 <div className={isDark ? "rounded-full bg-gray-800 px-4 py-2 text-sm text-gray-100" : "rounded-full bg-gray-100 px-4 py-2 text-sm text-gray-700"}>
-                  {isImageMode ? "图像模式" : "视频模式"}
+                  {isRemixMode ? "复刻视频模式" : isImageMode ? "图像模式" : "视频模式"}
                 </div>
               </div>
 
@@ -1730,7 +1887,7 @@ export default function Home() {
               </div>
             </div>
 
-            {hasReferenceImage && referenceImageData && (
+            {!isRemixMode && hasReferenceImage && referenceImageData && (
               <div className={isDark ? "rounded-2xl border border-gray-800 bg-[#18181b] p-3" : "rounded-2xl border border-gray-200 bg-gray-50 p-3"}>
                 <div className="flex flex-wrap items-center gap-3">
                   {(() => {
@@ -1768,6 +1925,17 @@ export default function Home() {
             </div>
 
             <div className="flex flex-wrap items-center gap-3">
+              <button
+                onClick={() => {
+                  setMode("remix");
+                  setSelectedAgentId(null);
+                  if (ratio === "1:1") setRatio("16:9");
+                }}
+                className={`rounded-full px-4 py-2 text-sm transition ${pillClass(mode === "remix")}`}
+              >
+                爆款视频复刻
+              </button>
+
               <button
                 onClick={() => {
                   setMode("agent");
@@ -1810,6 +1978,80 @@ export default function Home() {
                 通用图片
               </button>
             </div>
+
+            {isRemixMode && (
+              <div className={isDark ? "rounded-2xl border border-gray-800 bg-[#18181b] p-4" : "rounded-2xl border border-gray-200 bg-gray-50 p-4"}>
+                <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold">上传参考视频</div>
+                    <p className={isDark ? "mt-1 max-w-2xl text-xs leading-5 text-gray-400" : "mt-1 max-w-2xl text-xs leading-5 text-gray-500"}>
+                      上传参考视频，AI 将分析镜头节奏、画面风格、人物动作和叙事结构，生成适用于 Sora2 的复刻提示词。
+                    </p>
+                    <p className={isDark ? "mt-1 text-xs text-gray-400" : "mt-1 text-xs text-gray-500"}>
+                      支持 mp4 / mov / webm，最大 50MB。当前目标 {duration}，{getRemixDurationRange().hint}。
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => remixVideoInputRef.current?.click()}
+                    className={isDark ? "rounded-full bg-white px-4 py-2 text-sm font-medium text-black" : "rounded-full bg-black px-4 py-2 text-sm font-medium text-white"}
+                  >
+                    选择参考视频
+                  </button>
+                </div>
+
+                {remixVideoFile ? (
+                  <div className={isDark ? "mb-3 rounded-2xl border border-gray-700 bg-[#141417] p-3 text-sm text-gray-200" : "mb-3 rounded-2xl border border-gray-200 bg-white p-3 text-sm text-gray-700"}>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate font-medium">{remixVideoFile.name}</div>
+                        <div className={isDark ? "mt-1 text-xs text-gray-400" : "mt-1 text-xs text-gray-500"}>
+                          {(remixVideoFile.size / 1024 / 1024).toFixed(2)} MB
+                          {remixVideoDuration !== null ? ` / ${remixVideoDuration.toFixed(1)} 秒` : " / 时长将在后端校验"}
+                        </div>
+                      </div>
+                      <button
+                        onClick={handleRemoveRemixVideo}
+                        className={isDark ? "rounded-full bg-gray-700 px-3 py-1.5 text-xs text-gray-100" : "rounded-full bg-gray-100 px-3 py-1.5 text-xs text-gray-700"}
+                      >
+                        移除
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className={isDark ? "mb-3 rounded-2xl border border-dashed border-gray-700 p-4 text-sm text-gray-400" : "mb-3 rounded-2xl border border-dashed border-gray-300 p-4 text-sm text-gray-500"}>
+                    还未上传参考视频，请先选择文件后点击分析。
+                  </div>
+                )}
+
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    onClick={handleAnalyzeRemixVideo}
+                    disabled={remixAnalysisLoading}
+                    className={
+                      remixAnalysisLoading
+                        ? "cursor-not-allowed rounded-full bg-gray-300 px-4 py-2 text-sm font-medium text-gray-500"
+                        : isDark
+                          ? "rounded-full bg-white px-4 py-2 text-sm font-medium text-black"
+                          : "rounded-full bg-black px-4 py-2 text-sm font-medium text-white"
+                    }
+                  >
+                    {remixAnalysisLoading ? "分析中..." : "分析并生成复刻提示词"}
+                  </button>
+                  {remixAnalysisResult && (
+                    <span className={isDark ? "text-sm text-emerald-300" : "text-sm text-emerald-600"}>
+                      AI已生成复刻提示词，可编辑后点击开始生成视频。
+                    </span>
+                  )}
+                </div>
+
+                {remixAnalysisResult?.analysis && (
+                  <div className={isDark ? "mt-3 rounded-2xl border border-gray-700 bg-[#141417] p-3 text-xs leading-5 text-gray-300" : "mt-3 rounded-2xl border border-gray-200 bg-white p-3 text-xs leading-5 text-gray-600"}>
+                    <div className="mb-1 font-semibold">AI 分析摘要</div>
+                    <div>{remixAnalysisResult.analysis}</div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {isAgentMode && (
               <div className={isDark ? "rounded-2xl border border-gray-800 bg-[#18181b] p-3" : "rounded-2xl border border-gray-200 bg-gray-50 p-3"}>
@@ -1903,7 +2145,10 @@ export default function Home() {
                 ["4s", "8s", "12s"].map((item) => (
                   <button
                     key={item}
-                    onClick={() => setDuration(item)}
+                    onClick={() => {
+                      setDuration(item);
+                      if (isRemixMode) setRemixAnalysisResult(null);
+                    }}
                     className={`rounded-full px-4 py-2 text-sm transition ${pillClass(duration === item)}`}
                   >
                     {item}
@@ -1925,6 +2170,7 @@ export default function Home() {
                         return;
                       }
                       setRatio(item.value);
+                      if (isRemixMode) setRemixAnalysisResult(null);
                     }}
                     className={`rounded-full px-4 py-2 text-sm transition ${disabled ? "cursor-not-allowed bg-gray-100 text-gray-400 opacity-60" : pillClass(ratio === item.value)}`}
                   >
