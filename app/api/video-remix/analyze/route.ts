@@ -12,6 +12,10 @@ const execFileAsync = promisify(execFile);
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
 const MODEL = "gemini-3.1-pro-preview";
 const ENDPOINT = `https://yunwu.ai/v1beta/models/${MODEL}:generateContent`;
+const MAX_ATTEMPTS = 3;
+const RETRY_DELAYS_MS = [3000, 8000];
+const NORMAL_TIMEOUT_MS = 180_000;
+const LARGE_VIDEO_TIMEOUT_MS = 300_000;
 
 const mimeByExt: Record<string, string> = {
   ".mp4": "video/mp4",
@@ -29,11 +33,52 @@ const log = (stage: string, payload: Record<string, unknown>) => {
   console.log(`[VIDEO_REMIX][${stage}]`, JSON.stringify(payload));
 };
 
+class LoggedAnalyzeError extends Error {
+  finalLogged = true;
+}
+
 const asObject = (value: unknown): Record<string, unknown> | null => {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
 };
 
 const pickText = (value: unknown) => (typeof value === "string" ? value : "");
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const stringifyUnknown = (value: unknown) => {
+  if (value instanceof Error) return value.message;
+  if (typeof value === "string") return value;
+  if (value === null || typeof value === "undefined") return "";
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
+
+const shouldRetryGeminiError = (params: { status?: number | null; reason: string }) => {
+  const status = params.status ?? null;
+  const lower = params.reason.toLowerCase();
+  if (status === 400 || status === 401 || status === 403 || status === 404) return false;
+  return (
+    status === 429 ||
+    (typeof status === "number" && status >= 500) ||
+    lower.includes("429") ||
+    lower.includes("status=429") ||
+    lower.includes("上游已饱和") ||
+    lower.includes("too many requests") ||
+    lower.includes("rate limit") ||
+    lower.includes("status=5") ||
+    lower.includes("fetch failed") ||
+    lower.includes("network") ||
+    lower.includes("timeout") ||
+    lower.includes("aborterror") ||
+    lower.includes("空内容") ||
+    lower.includes("未返回 prompt") ||
+    lower.includes("未返回复刻提示词") ||
+    lower.includes("json 解析失败")
+  );
+};
 
 const parseTargetSeconds = (value: FormDataEntryValue | null): 4 | 8 | 12 | null => {
   const num = Number(value);
@@ -115,6 +160,166 @@ const parseAnalysisJson = (text: string) => {
   };
 };
 
+async function requestGeminiWithRetry(params: {
+  apiKey: string;
+  body: Record<string, unknown>;
+  videoBase64Length: number;
+  fileName: string;
+  fileSize: number;
+  targetSeconds: 4 | 8 | 12;
+  ratio: string;
+  duration: number | null;
+}) {
+  const timeoutMs = params.fileSize > 20 * 1024 * 1024 ? LARGE_VIDEO_TIMEOUT_MS : NORMAL_TIMEOUT_MS;
+  let lastReason = "Gemini 分析失败";
+  let lastStatus: number | null = null;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      log("GEMINI_REQUEST", {
+        attempt,
+        maxAttempts: MAX_ATTEMPTS,
+        endpoint: ENDPOINT,
+        model: MODEL,
+        fileSize: params.fileSize,
+        targetSeconds: params.targetSeconds,
+        ratio: params.ratio,
+        timeoutMs,
+        hasVideoBase64: true,
+        base64PreviewLength: Math.min(params.videoBase64Length, 80),
+      });
+
+      const response = await fetch(ENDPOINT, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${params.apiKey}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(params.body),
+        signal: controller.signal,
+      });
+      const rawText = await response.text();
+      const contentType = response.headers.get("content-type") || "";
+      lastStatus = response.status;
+      log("GEMINI_RESPONSE", {
+        attempt,
+        maxAttempts: MAX_ATTEMPTS,
+        ok: response.ok,
+        status: response.status,
+        contentType,
+        rawPreview: rawText.slice(0, 1200),
+      });
+
+      if (!response.ok) {
+        let parsedError = "";
+        try {
+          const errorJson = JSON.parse(rawText) as Record<string, unknown>;
+          parsedError = stringifyUnknown(asObject(errorJson.error)?.message || errorJson.message || errorJson.error);
+        } catch {
+          parsedError = rawText.slice(0, 300);
+        }
+        lastReason = parsedError ? `Gemini 分析失败 status=${response.status}: ${parsedError}` : `Gemini 分析失败 status=${response.status}`;
+        throw new Error(lastReason);
+      }
+
+      let json: Record<string, unknown> | null = null;
+      try {
+        json = JSON.parse(rawText) as Record<string, unknown>;
+      } catch {
+        lastReason = rawText ? "Gemini 响应 JSON 解析失败，raw 内容存在" : "Gemini 响应 JSON 解析失败";
+        throw new Error(lastReason);
+      }
+
+      const text = extractTextFromGemini(json);
+      if (!text) {
+        lastReason = "模型返回空内容";
+        throw new Error(lastReason);
+      }
+
+      try {
+        const parsed = parseAnalysisJson(text);
+        if (!parsed.prompt) {
+          lastReason = "Gemini 未返回 prompt";
+          throw new Error(lastReason);
+        }
+        return { parsed, attempt };
+      } catch (error) {
+        lastReason = stringifyUnknown(error) || "Gemini 输出 JSON 解析失败";
+        if (!lastReason.includes("未返回 prompt")) {
+          lastReason = `Gemini 输出 JSON 解析失败: ${lastReason}`;
+        }
+        throw new Error(lastReason);
+      }
+    } catch (error) {
+      const errorName = error instanceof Error ? error.name : "Error";
+      const errorMessage = error instanceof Error ? error.message : stringifyUnknown(error);
+      const errorCauseMessage = error instanceof Error ? stringifyUnknown(error.cause) : "";
+      const isTimeout = errorName === "AbortError" || controller.signal.aborted;
+      lastReason = isTimeout ? `timeout after ${timeoutMs}ms` : errorMessage || lastReason;
+      if (isTimeout) {
+        log("ANALYZE_TIMEOUT", {
+          attempt,
+          maxAttempts: MAX_ATTEMPTS,
+          timeoutMs,
+          fileName: params.fileName,
+          fileSize: params.fileSize,
+          duration: params.duration,
+          targetSeconds: params.targetSeconds,
+          ratio: params.ratio,
+        });
+      }
+      if (!lastReason.startsWith("Gemini 分析失败 status=") && !lastReason.includes("JSON 解析失败") && lastReason !== "模型返回空内容" && lastReason !== "Gemini 未返回 prompt") {
+        log("FETCH_ERROR", {
+          attempt,
+          maxAttempts: MAX_ATTEMPTS,
+          endpoint: ENDPOINT,
+          model: MODEL,
+          errorName,
+          errorMessage,
+          errorCauseMessage,
+          timeoutMs,
+        });
+      }
+
+      const retryable = shouldRetryGeminiError({ status: lastStatus, reason: lastReason || errorMessage });
+      if (retryable && attempt < MAX_ATTEMPTS) {
+        const delayMs = RETRY_DELAYS_MS[attempt - 1] ?? 0;
+        log("RETRY", {
+          attempt,
+          maxAttempts: MAX_ATTEMPTS,
+          delayMs,
+          reason: lastReason,
+          status: lastStatus,
+          retryable: true,
+        });
+        if (delayMs > 0) {
+          await delay(delayMs);
+        }
+        continue;
+      }
+
+      log("ANALYZE_FAILED", {
+        maxAttempts: MAX_ATTEMPTS,
+        finalReason: lastReason,
+        lastStatus,
+      });
+      throw new LoggedAnalyzeError(lastReason);
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  log("ANALYZE_FAILED", {
+    maxAttempts: MAX_ATTEMPTS,
+    finalReason: lastReason,
+    lastStatus,
+  });
+  throw new LoggedAnalyzeError(lastReason);
+}
+
 export async function POST(req: NextRequest) {
   let tempPath: string | null = null;
   try {
@@ -189,50 +394,19 @@ export async function POST(req: NextRequest) {
       ],
     };
 
-    log("GEMINI_REQUEST", {
-      endpoint: ENDPOINT,
-      model: MODEL,
-      hasVideoBase64: true,
-      base64PreviewLength: Math.min(videoBase64.length, 80),
+    const { parsed, attempt } = await requestGeminiWithRetry({
+      apiKey,
+      body,
+      videoBase64Length: videoBase64.length,
+      fileName: file.name,
+      fileSize: file.size,
+      targetSeconds,
+      ratio,
+      duration: probe.duration,
     });
-
-    const response = await fetch(ENDPOINT, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-    const rawText = await response.text();
-    const contentType = response.headers.get("content-type") || "";
-    log("GEMINI_RESPONSE", {
-      ok: response.ok,
-      status: response.status,
-      contentType,
-      rawPreview: rawText.slice(0, 1200),
-    });
-    if (!response.ok) {
-      throw new Error(`Gemini 分析失败 status=${response.status}`);
-    }
-
-    let json: Record<string, unknown> | null = null;
-    try {
-      json = JSON.parse(rawText) as Record<string, unknown>;
-    } catch {
-      json = null;
-    }
-    const text = extractTextFromGemini(json);
-    if (!text) {
-      throw new Error("Gemini 未返回分析文本");
-    }
-    const parsed = parseAnalysisJson(text);
-    if (!parsed.prompt) {
-      throw new Error("Gemini 未返回复刻提示词");
-    }
 
     log("ANALYZE_SUCCESS", {
+      attempt,
       duration: probe.duration,
       targetSeconds,
       promptPreview: parsed.prompt.slice(0, 160),
@@ -247,7 +421,9 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "分析失败";
-    log("ANALYZE_FAILED", { reason: message });
+    if (!(error instanceof LoggedAnalyzeError)) {
+      log("ANALYZE_FAILED", { maxAttempts: MAX_ATTEMPTS, finalReason: message, lastStatus: null });
+    }
     const status = message === "请先登录" || message === "账号已被禁用" ? 401 : 500;
     return NextResponse.json({ ok: false, message }, { status });
   } finally {

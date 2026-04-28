@@ -1205,6 +1205,17 @@ export default function Home() {
     }
   };
 
+  const getRemixAnalyzeErrorMessage = (message: string) => {
+    const lower = message.toLowerCase();
+    if (lower.includes("429") || message.includes("上游已饱和") || lower.includes("rate limit")) {
+      return "当前视频分析通道繁忙，请稍后重试，或换一个更短的视频。";
+    }
+    if (lower.includes("timeout")) {
+      return "视频分析超时，请换一个更短的视频或稍后重试。";
+    }
+    return message || "分析视频失败";
+  };
+
   const handleAnalyzeRemixVideo = () => {
     if (!isLoggedIn) {
       showToast("请先登录后再分析视频");
@@ -1242,7 +1253,7 @@ export default function Home() {
         const res = await fetch("/api/video-remix/analyze", { method: "POST", body: formData });
         const json = await res.json();
         if (!res.ok || !json?.ok || !json?.prompt) {
-          showToast(json?.message || "分析视频失败");
+          showToast(getRemixAnalyzeErrorMessage(String(json?.message || "")));
           return;
         }
         const nextPrompt = String(json.prompt);
@@ -1253,8 +1264,9 @@ export default function Home() {
           duration: typeof json.duration === "number" ? json.duration : null,
         });
         showToast("AI已生成复刻提示词，可编辑后点击开始生成视频。");
-      } catch {
-        showToast("分析视频失败");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "";
+        showToast(getRemixAnalyzeErrorMessage(message));
       } finally {
         setRemixAnalysisLoading(false);
       }
