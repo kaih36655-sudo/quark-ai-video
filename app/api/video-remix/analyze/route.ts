@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { writeFile, unlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import crypto from "node:crypto";
+import { mkdir, writeFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { requireCurrentUser } from "@/lib/server/auth";
+import { createVideoRemixJob, VIDEO_REMIX_UPLOADS_DIR, type VideoRemixJob } from "@/lib/server/video-remix-store";
+import { runVideoRemixJob } from "@/lib/server/video-remix-runner";
 
 export const runtime = "nodejs";
 
@@ -360,6 +362,7 @@ export async function POST(req: NextRequest) {
     const targetSeconds = parseTargetSeconds(formData.get("targetSeconds"));
     const ratio = normalizeRatio(formData.get("ratio"));
     const userHint = pickText(formData.get("userHint")).trim();
+    const generateReferenceImage = formData.get("generateReferenceImage") === "true";
 
     if (!(file instanceof File)) {
       return NextResponse.json({ ok: false, message: "请上传参考视频" }, { status: 400 });
@@ -385,8 +388,10 @@ export async function POST(req: NextRequest) {
       hasUserHint: Boolean(userHint),
     });
 
+    await mkdir(VIDEO_REMIX_UPLOADS_DIR, { recursive: true });
     const bytes = Buffer.from(await file.arrayBuffer());
-    tempPath = path.join(tmpdir(), `quark-remix-${Date.now()}-${Math.random().toString(36).slice(2)}${path.extname(file.name).toLowerCase()}`);
+    const jobId = `remix_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
+    tempPath = path.join(VIDEO_REMIX_UPLOADS_DIR, `${jobId}${path.extname(file.name).toLowerCase()}`);
     await writeFile(tempPath, bytes);
 
     const range = durationRanges[targetSeconds];
@@ -400,60 +405,51 @@ export async function POST(req: NextRequest) {
       ffprobeAvailable: probe.ffprobeAvailable,
     });
     if (probe.duration !== null && !passed) {
+      await unlink(tempPath).catch(() => undefined);
+      tempPath = null;
       return NextResponse.json({ ok: false, message: range.message, duration: probe.duration }, { status: 400 });
     }
 
-    const apiKey = process.env.YUNWU_API_KEY || "";
-    if (!apiKey) {
-      throw new Error("缺少 YUNWU_API_KEY，请在服务端环境变量配置");
-    }
-
-    const videoBase64 = bytes.toString("base64");
-    const body = {
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { text: buildInstruction({ targetSeconds, ratio, userHint }) },
-            {
-              inline_data: {
-                mime_type: mimeType,
-                data: videoBase64,
-              },
-            },
-          ],
-        },
-      ],
+    const now = new Date().toISOString();
+    const job: VideoRemixJob = {
+      id: jobId,
+      userId: user.id,
+      status: "pending",
+      fileName: file.name,
+      filePath: tempPath,
+      mimeType,
+      fileSize: file.size,
+      duration: probe.duration,
+      targetSeconds,
+      ratio,
+      hasUserHint: Boolean(userHint),
+      userHint,
+      generateReferenceImage,
+      analysis: "",
+      prompt: "",
+      referenceImageUrl: "",
+      referenceImageError: "",
+      error: "",
+      createdAt: now,
+      updatedAt: now,
     };
-
-    const { parsed, attempt } = await requestGeminiWithRetry({
-      apiKey,
-      body,
-      videoBase64Length: videoBase64.length,
+    await createVideoRemixJob(job);
+    log("JOB_CREATED", {
+      jobId,
+      userId: user.id,
       fileName: file.name,
       fileSize: file.size,
       targetSeconds,
       ratio,
-      duration: probe.duration,
+      generateReferenceImage,
     });
 
-    log("ANALYZE_SUCCESS", {
-      attempt,
-      duration: probe.duration,
-      targetSeconds,
-      promptLength: parsed.prompt.length,
-      analysisLength: parsed.analysis.length,
-      promptPreview: parsed.prompt.slice(0, 160),
-      usedUserHint: Boolean(userHint),
+    void runVideoRemixJob(jobId).catch((error) => {
+      const message = error instanceof Error ? error.message : "分析任务启动失败";
+      log("JOB_FAILED", { jobId, error: message });
     });
-
-    return NextResponse.json({
-      ok: true,
-      duration: probe.duration,
-      targetSeconds,
-      analysis: parsed.analysis,
-      prompt: parsed.prompt,
-    });
+    tempPath = null;
+    return NextResponse.json({ ok: true, jobId, status: "pending" });
   } catch (error) {
     const message = error instanceof Error ? error.message : "分析失败";
     if (!(error instanceof LoggedAnalyzeError)) {

@@ -1286,35 +1286,69 @@ export default function Home() {
     if (remixUserHint.trim()) {
       formData.append("userHint", remixUserHint.trim());
     }
-    const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), 600_000);
+    formData.append("generateReferenceImage", remixGenerateReferenceImage ? "true" : "false");
     setRemixAnalysisLoading(true);
+    setRemixReferenceImageLoading(remixGenerateReferenceImage);
     void (async () => {
       try {
-        const res = await fetch("/api/video-remix/analyze", { method: "POST", body: formData, signal: controller.signal });
+        const res = await fetch("/api/video-remix/analyze", { method: "POST", body: formData });
         const json = await res.json();
-        if (!res.ok || !json?.ok || !json?.prompt) {
+        if (!res.ok || !json?.ok || !json?.jobId) {
           showToast(getRemixAnalyzeErrorMessage(String(json?.message || "")));
           return;
         }
-        const nextPrompt = String(json.prompt);
-        setPrompt(nextPrompt);
-        setRemixAnalysisResult({
-          analysis: String(json.analysis || ""),
-          prompt: nextPrompt,
-          duration: typeof json.duration === "number" ? json.duration : null,
-        });
-        showToast("AI已生成复刻提示词，可编辑后点击开始生成视频。");
-        if (remixGenerateReferenceImage) {
-          showToast("正在从原视频生成参考图...");
-          await generateRemixReferenceImage(nextPrompt);
+        const jobId = String(json.jobId);
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < 600_000) {
+          await new Promise((resolve) => window.setTimeout(resolve, 5000));
+          const pollRes = await fetch(`/api/video-remix/jobs/${encodeURIComponent(jobId)}`, { cache: "no-store" });
+          const pollJson = await pollRes.json();
+          if (!pollRes.ok || !pollJson?.ok || !pollJson?.job) {
+            throw new Error(String(pollJson?.message || "查询分析任务失败"));
+          }
+          const job = pollJson.job as {
+            status?: string;
+            analysis?: string;
+            prompt?: string;
+            referenceImageUrl?: string;
+            referenceImageError?: string;
+            error?: string;
+          };
+          if (job.status === "success" && job.prompt) {
+            const nextPrompt = String(job.prompt);
+            setPrompt(nextPrompt);
+            setRemixAnalysisResult({
+              analysis: String(job.analysis || ""),
+              prompt: nextPrompt,
+              duration: remixVideoDuration,
+            });
+            if (job.referenceImageUrl) {
+              const imageUrl = String(job.referenceImageUrl);
+              setRemixGeneratedReferenceImageUrl(imageUrl);
+              setReferenceImageData(imageUrl);
+              setReferenceImageThumbData(imageUrl);
+              setReferenceImageName("原视频抽帧参考图");
+              setHasReferenceImage(true);
+              showToast("参考图已生成，可直接用于图生视频");
+            } else if (job.referenceImageError) {
+              showToast("复刻提示词已生成，但参考图生成失败，可手动上传参考图继续生成");
+            } else {
+              showToast("AI已生成复刻提示词，可编辑后点击开始生成视频。");
+            }
+            return;
+          }
+          if (job.status === "failed") {
+            showToast(getRemixAnalyzeErrorMessage(String(job.error || "分析视频失败")));
+            return;
+          }
         }
+        showToast("视频分析等待超时，请稍后刷新或换一个更短的视频重试。");
       } catch (error) {
-        const message = error instanceof Error && error.name === "AbortError" ? "timeout" : error instanceof Error ? error.message : "";
+        const message = error instanceof Error ? error.message : "";
         showToast(getRemixAnalyzeErrorMessage(message));
       } finally {
-        window.clearTimeout(timeoutId);
         setRemixAnalysisLoading(false);
+        setRemixReferenceImageLoading(false);
       }
     })();
   };
