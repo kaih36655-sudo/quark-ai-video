@@ -14,8 +14,8 @@ const MODEL = "gemini-3.1-pro-preview";
 const ENDPOINT = `https://yunwu.ai/v1beta/models/${MODEL}:generateContent`;
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAYS_MS = [3000, 8000];
-const NORMAL_TIMEOUT_MS = 180_000;
-const LARGE_VIDEO_TIMEOUT_MS = 300_000;
+const NORMAL_TIMEOUT_MS = 300_000;
+const LARGE_VIDEO_TIMEOUT_MS = 600_000;
 
 const mimeByExt: Record<string, string> = {
   ".mp4": "video/mp4",
@@ -351,6 +351,9 @@ async function requestGeminiWithRetry(params: {
 export async function POST(req: NextRequest) {
   let tempPath: string | null = null;
   try {
+    req.signal.addEventListener("abort", () => {
+      log("CLIENT_ABORTED", { endpoint: "/api/video-remix/analyze" });
+    }, { once: true });
     const user = await requireCurrentUser();
     const formData = await req.formData();
     const file = formData.get("video");

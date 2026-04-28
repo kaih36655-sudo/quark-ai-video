@@ -9,6 +9,9 @@ type GenerateYunwuImageParams = {
   ratio?: string;
   imageSize?: "1K" | "2K" | "4K";
   imageModel?: "image2" | "banana2";
+  maxAttempts?: number;
+  retryDelaysMs?: number[];
+  logParsedJson?: boolean;
 };
 
 type GenerateYunwuImageResult = {
@@ -350,8 +353,8 @@ export async function generateYunwuImage(params: GenerateYunwuImageParams): Prom
     referenceImageInlineData,
   });
 
-  const maxAttempts = 3;
-  const retryDelaysMs = [2000, 5000];
+  const maxAttempts = params.maxAttempts ?? 3;
+  const retryDelaysMs = params.retryDelaysMs ?? [2000, 5000];
   let lastErrorMessage = "图片生成失败";
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
@@ -400,7 +403,7 @@ export async function generateYunwuImage(params: GenerateYunwuImageParams): Prom
         ok: response.ok,
         contentType,
         rawPreview: rawText.slice(0, 1200),
-        parsedJson: json,
+        parsedJson: params.logParsedJson === false ? "[omitted]" : json,
       });
       if (!response.ok || !json) {
         const parsedError = json?.error || json?.message;
