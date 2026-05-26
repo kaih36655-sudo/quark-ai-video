@@ -1925,6 +1925,32 @@ export default function Home() {
     if (tag.includes("公开")) return isDark ? "rounded-full border border-emerald-300/20 bg-emerald-300/10 px-2 py-0.5 text-[10px] font-medium text-emerald-200" : "rounded-full border border-emerald-100 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700";
     return isDark ? "rounded-full border border-slate-400/20 bg-slate-400/10 px-2 py-0.5 text-[10px] font-medium text-slate-300" : "rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-medium text-slate-600";
   };
+  const glassPanelClass = isDark
+    ? "rounded-[30px] border border-white/10 bg-white/[0.045] shadow-[0_24px_70px_rgba(0,0,0,0.34)] backdrop-blur-xl"
+    : "rounded-[30px] border border-white/80 bg-white/76 shadow-[0_24px_70px_rgba(79,70,229,0.12)] backdrop-blur-xl";
+  const surfaceCardClass = isDark
+    ? "rounded-[24px] border border-white/10 bg-white/[0.055] shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-indigo-400/40 hover:bg-white/[0.075] hover:shadow-[0_18px_42px_rgba(0,0,0,0.34)]"
+    : "rounded-[24px] border border-white/75 bg-white/86 shadow-md shadow-indigo-100/50 backdrop-blur transition-all duration-200 hover:-translate-y-0.5 hover:border-indigo-200 hover:shadow-[0_18px_42px_rgba(79,70,229,0.15)]";
+  const softChipClass = isDark
+    ? "rounded-full border border-white/10 bg-white/[0.06] px-2.5 py-1 text-[11px] font-medium text-gray-300"
+    : "rounded-full border border-indigo-100 bg-white/85 px-2.5 py-1 text-[11px] font-medium text-slate-600 shadow-sm shadow-indigo-100/40";
+  const inputPillClass = isDark
+    ? "rounded-full border border-white/10 bg-white/[0.06] px-4 py-2 text-xs text-gray-100 outline-none placeholder:text-gray-500 transition focus:border-indigo-400/60 focus:ring-4 focus:ring-indigo-400/10"
+    : "rounded-full border border-indigo-100 bg-white/85 px-4 py-2 text-xs text-slate-700 outline-none shadow-sm placeholder:text-slate-400 transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100/70";
+  const smallSecondaryButtonClass = isDark
+    ? "rounded-full border border-white/10 bg-white/[0.06] px-3 py-1.5 text-xs font-medium text-gray-100 transition hover:-translate-y-0.5 hover:border-indigo-400/40 hover:bg-white/[0.09]"
+    : "rounded-full border border-indigo-100 bg-white/85 px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm shadow-indigo-100/50 transition hover:-translate-y-0.5 hover:border-indigo-200 hover:bg-indigo-50/70";
+  const primaryMiniButtonClass = isDark
+    ? "rounded-full bg-gradient-to-r from-indigo-400 via-violet-400 to-sky-400 px-3 py-1.5 text-xs font-semibold text-white shadow-md shadow-indigo-950/30 transition hover:-translate-y-0.5 hover:brightness-110"
+    : "rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-sky-500 px-3 py-1.5 text-xs font-semibold text-white shadow-md shadow-indigo-200/70 transition hover:-translate-y-0.5 hover:brightness-105";
+  const filterChipClass = (active: boolean) =>
+    active ? primaryMiniButtonClass : smallSecondaryButtonClass;
+  const upscaleBadgeClass = (status?: string) => {
+    if (status === "success") return isDark ? "rounded-full border border-emerald-300/20 bg-emerald-300/10 px-2.5 py-1 text-[11px] font-medium text-emerald-200" : "rounded-full border border-emerald-100 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700";
+    if (status === "failed") return isDark ? "rounded-full border border-rose-300/20 bg-rose-300/10 px-2.5 py-1 text-[11px] font-medium text-rose-200" : "rounded-full border border-rose-100 bg-rose-50 px-2.5 py-1 text-[11px] font-medium text-rose-700";
+    if (status === "processing" || status === "pending" || status === "queued") return isDark ? "rounded-full border border-amber-300/20 bg-amber-300/10 px-2.5 py-1 text-[11px] font-medium text-amber-200" : "rounded-full border border-amber-100 bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-700";
+    return softChipClass;
+  };
 
   if (!mounted) return null;
 
@@ -2668,14 +2694,27 @@ export default function Home() {
         </div>
 
         {(isGenerating || videoRecords.length > 0) && (
-          <div className="mt-8 w-full max-w-4xl space-y-3 max-h-[720px] overflow-y-auto pr-1">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <div className={isDark ? "text-sm font-medium text-gray-200" : "text-sm font-medium text-gray-700"}>
-                  作品管理区
+          <div className={`mt-8 w-full max-w-5xl p-4 md:p-5 ${glassPanelClass}`}>
+            <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
+              <div className="min-w-0">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 via-violet-500 to-sky-500 text-sm font-semibold text-white shadow-md shadow-indigo-200/60">
+                    库
+                  </div>
+                  <div>
+                    <div className="text-base font-semibold">作品管理区</div>
+                    <div className={isDark ? "mt-0.5 text-xs text-gray-400" : "mt-0.5 text-xs text-slate-500"}>
+                      生成结果、占位状态和历史作品集中管理
+                    </div>
+                  </div>
                 </div>
-                <div className={isDark ? "mt-1 text-sm text-gray-400" : "mt-1 text-sm text-gray-500"}>
-                  当前显示 {pagedVisibleResults.length} / 筛选后 {visibleResults.length} / 总计 {videoRecords.length} 条作品，当前收藏 {visibleFavoriteCount} 条，模式：{modeLabel}，参考图：{hasReferenceImage ? "已添加" : "未添加"}
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <span className={softChipClass}>当前显示 {pagedVisibleResults.length}</span>
+                  <span className={softChipClass}>筛选后 {visibleResults.length}</span>
+                  <span className={softChipClass}>总计 {videoRecords.length}</span>
+                  <span className={softChipClass}>收藏 {visibleFavoriteCount}</span>
+                  <span className={softChipClass}>模式：{modeLabel}</span>
+                  <span className={softChipClass}>参考图：{hasReferenceImage ? "已添加" : "未添加"}</span>
                 </div>
               </div>
 
@@ -2684,20 +2723,12 @@ export default function Home() {
                   value={resultSearch}
                   onChange={(e) => setResultSearch(e.target.value)}
                   placeholder="搜索作品关键词"
-                  className={
-                    isDark
-                      ? "rounded-full border border-white/10 bg-white/[0.05] px-3 py-1.5 text-xs text-gray-100 outline-none placeholder:text-gray-500 focus:border-indigo-400/60"
-                      : "rounded-full border border-indigo-100 bg-white/80 px-3 py-1.5 text-xs text-slate-700 outline-none shadow-sm placeholder:text-slate-400 focus:border-indigo-300"
-                  }
+                  className={inputPillClass}
                 />
                 <select
                   value={resultSort}
                   onChange={(e) => setResultSort(e.target.value as "latest" | "earliest" | "successOnly" | "failedOnly")}
-                  className={
-                    isDark
-                      ? "rounded-full border border-white/10 bg-white/[0.05] px-3 py-1.5 text-xs text-gray-100 outline-none focus:border-indigo-400/60"
-                      : "rounded-full border border-indigo-100 bg-white/80 px-3 py-1.5 text-xs text-slate-700 outline-none shadow-sm focus:border-indigo-300"
-                  }
+                  className={inputPillClass}
                 >
                   <option value="latest">最新优先</option>
                   <option value="earliest">最早优先</option>
@@ -2706,28 +2737,14 @@ export default function Home() {
                 </select>
                 <button
                   onClick={() => setResultFilter("all")}
-                  className={
-                    resultFilter === "all"
-                      ? isDark
-                        ? "rounded-full bg-gradient-to-r from-indigo-500 to-sky-500 px-4 py-2 text-xs font-semibold text-white shadow-sm shadow-indigo-200"
-                        : "rounded-full bg-gradient-to-r from-indigo-500 to-sky-500 px-4 py-2 text-xs font-semibold text-white shadow-sm shadow-indigo-200"
-                      : isDark
-                        ? "rounded-full bg-gray-800 px-4 py-2 text-xs font-medium text-gray-100"
-                        : "rounded-full bg-gray-100 px-4 py-2 text-xs font-medium text-gray-700"
-                  }
+                  className={filterChipClass(resultFilter === "all")}
                 >
                   全部
                 </button>
 
                 <button
                   onClick={() => setResultFilter("favorites")}
-                  className={
-                    resultFilter === "favorites"
-                      ? "rounded-full bg-amber-300 px-4 py-2 text-xs font-semibold text-amber-950 shadow-sm"
-                      : isDark
-                        ? "rounded-full bg-gray-800 px-4 py-2 text-xs font-medium text-gray-100"
-                        : "rounded-full bg-gray-100 px-4 py-2 text-xs font-medium text-gray-700"
-                  }
+                  className={resultFilter === "favorites" ? "rounded-full border border-amber-200 bg-amber-100 px-3 py-1.5 text-xs font-semibold text-amber-800 shadow-sm shadow-amber-100 transition hover:-translate-y-0.5" : smallSecondaryButtonClass}
                 >
                   已收藏
                 </button>
@@ -2740,13 +2757,13 @@ export default function Home() {
               </div>
             </div>
             {isGenerating && (
-              <div className={isDark ? "rounded-2xl border border-gray-800 bg-[#121214] p-4" : "rounded-2xl border border-gray-200 bg-white p-4"}>
+              <div className={isDark ? "mb-3 rounded-2xl border border-violet-400/20 bg-violet-400/[0.06] p-4" : "mb-3 rounded-2xl border border-violet-100 bg-violet-50/70 p-4 shadow-sm shadow-violet-100/60"}>
                 <div className={isDark ? "mb-2 text-sm text-gray-300" : "mb-2 text-sm text-gray-600"}>
                   正在生成，请稍候... 当前进度 {generateProgress}%
                 </div>
                 <div className={isDark ? "h-2 overflow-hidden rounded-full bg-gray-800" : "h-2 overflow-hidden rounded-full bg-gray-200"}>
                   <div
-                    className="h-full rounded-full bg-black transition-all duration-300"
+                    className="h-full rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-sky-500 transition-all duration-300"
                     style={{ width: `${generateProgress}%` }}
                   />
                 </div>
@@ -2754,7 +2771,7 @@ export default function Home() {
             )}
 
             {pagedVisibleResults.length === 0 ? (
-              <div className={isDark ? "rounded-2xl border border-gray-800 bg-[#121214] p-4 text-sm text-gray-400" : "rounded-2xl border border-gray-200 bg-white p-4 text-sm text-gray-500"}>
+              <div className={isDark ? "rounded-2xl border border-white/10 bg-white/[0.05] p-4 text-sm text-gray-400" : "rounded-2xl border border-white/70 bg-white/75 p-4 text-sm text-slate-500 shadow-sm"}>
                 {resultSearchKeyword
                   ? "没有匹配到相关记录"
                   : resultFilter === "favorites"
@@ -2766,11 +2783,7 @@ export default function Home() {
             ) : pagedVisibleResults.map(({ item, id, taskId, mediaType, title, prompt: fromTaskPrompt, isFavorite, status, isLatestDone, cost, seconds, duration: videoDuration, upscaleStatus, upscaleErrorMessage, hasReferenceImage: taskHasRef, referenceImageName, referenceImageThumbData: taskRefThumbData, coverData, videoUrl, ratio: videoRatio, size: videoSize, imageSize: resultImageSize, imageModel, displayModel, imageModelLabel, apiModel, kind, scheduledAt, createdAt, taskStatus, agentName, isPlaceholder }) => (
               <div
                 key={id}
-                className={
-                  isDark
-                    ? "relative rounded-3xl border border-white/10 bg-white/[0.05] p-3 text-sm shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-indigo-400/40 hover:bg-white/[0.07] hover:shadow-[0_18px_34px_rgba(0,0,0,0.32)]"
-                    : "relative rounded-3xl border border-white/80 bg-white/88 p-3 text-sm shadow-md shadow-indigo-100/50 backdrop-blur transition-all duration-200 hover:-translate-y-0.5 hover:border-indigo-200 hover:shadow-[0_18px_38px_rgba(79,70,229,0.13)]"
-                }
+                className={`relative p-3 text-sm ${surfaceCardClass}`}
               >
                 <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
                   <div className="flex items-start gap-3">
@@ -2819,17 +2832,17 @@ export default function Home() {
 
                     <div className="min-w-0 space-y-2.5">
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <span className={isDark ? "rounded-full bg-gray-800/90 px-2.5 py-1 text-[11px] font-medium text-gray-300" : "rounded-full bg-gray-100 px-2.5 py-1 text-[11px] font-medium text-gray-600"}>
+                        <span className={softChipClass}>
                           {makeTaskId(taskId)}
                         </span>
-                        <span className={isDark ? "rounded-full bg-gray-800/90 px-2.5 py-1 text-[11px] font-medium text-gray-300" : "rounded-full bg-gray-100 px-2.5 py-1 text-[11px] font-medium text-gray-600"}>
+                        <span className={softChipClass}>
                           消耗：¥{formatMoney(cost)}
                         </span>
                         <span className={getStatusClass(status)}>
                           {statusLabelMap[status]}
                         </span>
                         {mediaType === "video" && (
-                          <span className={upscaleStatus === "success" ? "rounded-full border border-emerald-400/70 bg-emerald-500/90 px-2.5 py-1 text-[11px] font-medium text-white" : upscaleStatus === "failed" ? "rounded-full border border-rose-400/70 bg-rose-500/90 px-2.5 py-1 text-[11px] font-medium text-white" : upscaleStatus === "processing" || upscaleStatus === "pending" || upscaleStatus === "queued" ? "rounded-full border border-amber-400/70 bg-amber-500/90 px-2.5 py-1 text-[11px] font-medium text-white" : isDark ? "rounded-full border border-gray-700/70 bg-gray-800/90 px-2.5 py-1 text-[11px] font-medium text-gray-300" : "rounded-full border border-gray-200 bg-gray-100 px-2.5 py-1 text-[11px] font-medium text-gray-600"}>
+                          <span className={upscaleBadgeClass(upscaleStatus)}>
                             {getUpscaleStatusLabel(upscaleStatus)}
                           </span>
                         )}
@@ -2842,7 +2855,7 @@ export default function Home() {
                             ↻
                           </button>
                         )}
-                        {isLatestDone && <span className="rounded-full border border-indigo-400/70 bg-indigo-500/90 px-2.5 py-1 text-[11px] font-medium text-white">最新完成</span>}
+                        {isLatestDone && <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[11px] font-semibold text-indigo-700 shadow-sm">最新完成</span>}
                       </div>
 
                       {(() => {
@@ -2884,36 +2897,36 @@ export default function Home() {
                       })()}
 
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <span className={isDark ? "rounded-full border border-gray-700/70 bg-gray-800/80 px-2 py-0.5 text-[10px] font-medium text-gray-400" : "rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[10px] font-medium text-gray-500"}>
+                        <span className={softChipClass}>
                           {mediaType === "image" ? `分辨率：${getImageSizeLabel(resultImageSize || videoSize)}` : `时长：${getDurationLabel(seconds, videoDuration)}`}
                         </span>
                         {mediaType === "image" && (
-                          <span className={isDark ? "rounded-full border border-gray-700/70 bg-gray-800/80 px-2 py-0.5 text-[10px] font-medium text-gray-400" : "rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[10px] font-medium text-gray-500"}>
+                          <span className={softChipClass}>
                             模型：{formatImageModelLabel({ mediaType, imageModel, displayModel, imageModelLabel, apiModel })}
                           </span>
                         )}
-                        <span className={isDark ? "rounded-full border border-gray-700/70 bg-gray-800/80 px-2 py-0.5 text-[10px] font-medium text-gray-400" : "rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[10px] font-medium text-gray-500"}>
+                        <span className={softChipClass}>
                           比例：{getRatioLabel(videoRatio, videoSize)}
                         </span>
-                        <span className={isDark ? "rounded-full border border-gray-700/70 bg-gray-800/80 px-2 py-0.5 text-[10px] font-medium text-gray-400" : "rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[10px] font-medium text-gray-500"}>
+                        <span className={softChipClass}>
                           发布时间：{formatTaskPublishTime(createdAt)}
                         </span>
                         <span
                           title={`来源任务：${fromTaskPrompt}`}
-                          className={isDark ? "inline-block max-w-[180px] truncate whitespace-nowrap rounded-full border border-gray-700/70 bg-gray-800/80 px-2 py-0.5 text-[10px] font-medium text-gray-400" : "inline-block max-w-[180px] truncate whitespace-nowrap rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[10px] font-medium text-gray-500"}
+                          className={`inline-block max-w-[180px] truncate whitespace-nowrap ${softChipClass}`}
                         >
                           来源任务：{truncateSourceTaskText(fromTaskPrompt)}
                         </span>
-                        <span className={isDark ? "rounded-full border border-gray-700/70 bg-gray-800/80 px-2 py-0.5 text-[10px] font-medium text-gray-400" : "rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[10px] font-medium text-gray-500"}>
+                        <span className={softChipClass}>
                           类型：{kind === "schedule" ? "定时任务" : "普通任务"}
                         </span>
                         {agentName && (
-                          <span className={isDark ? "rounded-full border border-gray-700/70 bg-gray-800/80 px-2 py-0.5 text-[10px] font-medium text-gray-400" : "rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[10px] font-medium text-gray-500"}>
+                          <span className={softChipClass}>
                             智能体：{agentName}
                           </span>
                         )}
                         {scheduledAt && (
-                          <span className={isDark ? "rounded-full border border-gray-700/70 bg-gray-800/80 px-2 py-0.5 text-[10px] font-medium text-gray-400" : "rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[10px] font-medium text-gray-500"}>
+                          <span className={softChipClass}>
                             {taskStatus === "waiting" ? `预计执行：${new Date(scheduledAt).toLocaleString()}` : `执行时间：${new Date(scheduledAt).toLocaleString()}`}
                           </span>
                         )}
@@ -2922,7 +2935,7 @@ export default function Home() {
                   </div>
 
                   <div className="flex w-full max-w-[360px] flex-col items-end gap-2.5 md:w-[360px]">
-                    <div className={isDark ? "w-full rounded-2xl border border-gray-800/90 bg-[#151519] p-2 shadow-inner shadow-black/15" : "w-full rounded-2xl border border-gray-200 bg-gray-50/80 p-2 shadow-inner shadow-gray-200/60"}>
+                    <div className={isDark ? "w-full rounded-2xl border border-white/10 bg-black/15 p-2 shadow-inner shadow-black/15" : "w-full rounded-2xl border border-indigo-100 bg-indigo-50/45 p-2 shadow-inner shadow-indigo-100/50"}>
                     <div className="grid w-full grid-cols-3 gap-2.5">
                       <button
                         onClick={() => {
@@ -2950,22 +2963,14 @@ export default function Home() {
                             referenceImageName,
                           });
                         }}
-                        className={
-                          isDark
-                            ? `w-full whitespace-nowrap rounded-full border border-gray-700 px-3 py-1.5 text-center text-xs font-medium transition-all duration-200 ${isPlaceholder ? "cursor-not-allowed bg-gray-900 text-gray-500" : "bg-gray-800 text-gray-100 hover:bg-gray-700 hover:shadow-sm"}`
-                            : `w-full whitespace-nowrap rounded-full border border-gray-200 px-3 py-1.5 text-center text-xs font-medium transition-all duration-200 ${isPlaceholder ? "cursor-not-allowed bg-gray-50 text-gray-400" : "bg-gray-100 text-gray-700 hover:bg-white hover:shadow-sm"}`
-                        }
+                        className={`w-full whitespace-nowrap text-center ${isPlaceholder ? "cursor-not-allowed rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-400" : smallSecondaryButtonClass}`}
                       >
                         预览
                       </button>
 
                       <button
                         onClick={() => handleRegenerate(taskId)}
-                        className={
-                          isDark
-                            ? "w-full whitespace-nowrap rounded-full border border-gray-700 bg-gray-800 px-3 py-1.5 text-center text-xs font-medium text-gray-100 transition-all duration-200 hover:bg-gray-700 hover:shadow-sm"
-                            : "w-full whitespace-nowrap rounded-full border border-gray-200 bg-gray-100 px-3 py-1.5 text-center text-xs font-medium text-gray-700 transition-all duration-200 hover:bg-white hover:shadow-sm"
-                        }
+                        className={`w-full whitespace-nowrap text-center ${smallSecondaryButtonClass}`}
                       >
                         重新生成
                       </button>
@@ -2978,18 +2983,14 @@ export default function Home() {
                           }
                           void handleDownload({ id, item, title, taskId, mediaType, videoUrl, status });
                         }}
-                        className={
-                          isDark
-                            ? `w-full whitespace-nowrap rounded-full border border-white/15 px-3 py-1.5 text-center text-xs font-semibold transition-all duration-200 ${isPlaceholder ? "cursor-not-allowed bg-gray-800 text-gray-500" : "bg-white text-black hover:bg-gray-100 hover:shadow-sm"}`
-                            : `w-full whitespace-nowrap rounded-full px-3 py-1.5 text-center text-xs font-semibold transition-all duration-200 ${isPlaceholder ? "cursor-not-allowed bg-gray-200 text-gray-400" : "bg-black text-white hover:bg-gray-900 hover:shadow-sm"}`
-                        }
+                        className={`w-full whitespace-nowrap text-center ${isPlaceholder ? "cursor-not-allowed rounded-full bg-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-400" : primaryMiniButtonClass}`}
                       >
                         下载
                       </button>
 
                       <button
                         onClick={() => handleCopy(item, id)}
-                        className={`w-full whitespace-nowrap text-center ${dangerButtonClass}`}
+                        className={`w-full whitespace-nowrap text-center ${smallSecondaryButtonClass}`}
                       >
                         {copiedTaskId === id ? "已复制✓" : "复制文案"}
                       </button>
@@ -3004,10 +3005,8 @@ export default function Home() {
                         }}
                         className={
                           isFavorite
-                            ? "w-full whitespace-nowrap rounded-full bg-yellow-400 px-3 py-1.5 text-center text-xs font-medium text-black transition duration-200 hover:brightness-95 hover:shadow-sm"
-                            : isDark
-                              ? "w-full whitespace-nowrap rounded-full border border-gray-700 bg-gray-800 px-3 py-1.5 text-center text-xs font-medium text-gray-100 transition duration-200 hover:bg-gray-700 hover:shadow-sm"
-                              : "w-full whitespace-nowrap rounded-full border border-gray-200 bg-gray-100 px-3 py-1.5 text-center text-xs font-medium text-gray-700 transition duration-200 hover:bg-white hover:shadow-sm"
+                            ? "w-full whitespace-nowrap rounded-full border border-amber-200 bg-amber-100 px-3 py-1.5 text-center text-xs font-semibold text-amber-800 shadow-sm transition hover:-translate-y-0.5"
+                            : `w-full whitespace-nowrap text-center ${smallSecondaryButtonClass}`
                         }
                       >
                         {isFavorite ? "已收藏" : "收藏"}
@@ -3021,11 +3020,7 @@ export default function Home() {
                           }
                           handleDeleteResult(id);
                         }}
-                        className={
-                          isDark
-                            ? "w-full whitespace-nowrap rounded-full border border-gray-700 bg-gray-800 px-3 py-1.5 text-center text-xs font-medium text-gray-100 transition duration-200 hover:bg-gray-700 hover:shadow-sm"
-                            : "w-full whitespace-nowrap rounded-full border border-gray-200 bg-gray-100 px-3 py-1.5 text-center text-xs font-medium text-gray-700 transition duration-200 hover:bg-white hover:shadow-sm"
-                        }
+                        className={`w-full whitespace-nowrap text-center ${dangerButtonClass}`}
                       >
                         删除
                       </button>
@@ -3035,7 +3030,7 @@ export default function Home() {
                     {kind === "schedule" && taskStatus === "waiting" && (
                       <button
                         onClick={() => handleCancelScheduledTask(taskId)}
-                        className={isDark ? "rounded-full bg-gray-700 px-3 py-1.5 text-xs font-medium text-gray-100 transition hover:brightness-125" : "rounded-full bg-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:brightness-95"}
+                        className={dangerButtonClass}
                       >
                         取消定时
                       </button>
@@ -3073,21 +3068,21 @@ export default function Home() {
               </div>
             ))}
             {visibleResults.length > PAGE_SIZE && (
-              <div className="flex items-center justify-end gap-2">
+              <div className="mt-4 flex items-center justify-end gap-2">
                 <button
                   onClick={() => setResultPage((prev) => Math.max(1, prev - 1))}
                   disabled={resultPage <= 1}
-                  className={isDark ? "rounded-full bg-gray-800 px-3 py-2 text-xs text-gray-100 disabled:opacity-40" : "rounded-full bg-gray-100 px-3 py-2 text-xs text-gray-700 disabled:opacity-40"}
+                  className={`${smallSecondaryButtonClass} disabled:cursor-not-allowed disabled:opacity-40`}
                 >
                   上一页
                 </button>
-                <span className={isDark ? "text-xs text-gray-400" : "text-xs text-gray-500"}>
+                <span className={softChipClass}>
                   第 {resultPage} / {resultTotalPages} 页
                 </span>
                 <button
                   onClick={() => setResultPage((prev) => Math.min(resultTotalPages, prev + 1))}
                   disabled={resultPage >= resultTotalPages}
-                  className={isDark ? "rounded-full bg-gray-800 px-3 py-2 text-xs text-gray-100 disabled:opacity-40" : "rounded-full bg-gray-100 px-3 py-2 text-xs text-gray-700 disabled:opacity-40"}
+                  className={`${smallSecondaryButtonClass} disabled:cursor-not-allowed disabled:opacity-40`}
                 >
                   下一页
                 </button>
@@ -3098,70 +3093,71 @@ export default function Home() {
 
         {isTaskDrawerOpen && (
           <div
-            className="fixed inset-0 z-40 flex justify-end bg-black/40"
+            className="fixed inset-0 z-40 flex justify-end bg-slate-950/50 backdrop-blur-sm"
             onClick={() => setIsTaskDrawerOpen(false)}
           >
             <div
               onClick={(e) => e.stopPropagation()}
               className={
                 isDark
-                  ? "flex h-full w-full max-w-lg flex-col overflow-hidden border-l border-gray-800 bg-[#121214] p-4 shadow-[0_24px_48px_rgba(0,0,0,0.38)] transition-all duration-300"
-                  : "flex h-full w-full max-w-lg flex-col overflow-hidden border-l border-gray-200 bg-white p-4 shadow-[0_20px_38px_rgba(15,23,42,0.16)] transition-all duration-300"
+                  ? "flex h-full w-full max-w-xl flex-col overflow-hidden border-l border-white/10 bg-[#0d0e16]/90 p-4 shadow-[0_30px_90px_rgba(0,0,0,0.5)] backdrop-blur-xl transition-all duration-300"
+                  : "flex h-full w-full max-w-xl flex-col overflow-hidden border-l border-white/70 bg-white/90 p-4 shadow-[0_30px_90px_rgba(79,70,229,0.18)] backdrop-blur-xl transition-all duration-300"
               }
             >
               <div className="mb-3 shrink-0 space-y-2.5">
                 <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-base font-semibold">任务记录</div>
-                    <div className={isDark ? "mt-0.5 text-xs text-gray-400" : "mt-0.5 text-xs text-gray-500"}>
-                      共 {tasks.length} 条任务，收藏 {favorites.length} 条
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 via-violet-500 to-sky-500 text-sm font-semibold text-white shadow-md shadow-indigo-200/60">
+                      记
+                    </div>
+                    <div>
+                      <div className="text-base font-semibold">任务记录</div>
+                      <div className={isDark ? "mt-0.5 text-xs text-gray-400" : "mt-0.5 text-xs text-slate-500"}>
+                        共 {tasks.length} 条任务，收藏 {favorites.length} 条
+                      </div>
                     </div>
                   </div>
                   <button
                     onClick={() => setIsTaskDrawerOpen(false)}
-                    className={
-                      isDark
-                        ? "rounded-full bg-gray-800 px-3 py-1.5 text-xs text-gray-100"
-                        : "rounded-full bg-gray-100 px-3 py-1.5 text-xs text-gray-700"
-                    }
+                    className={smallSecondaryButtonClass}
                   >
                     关闭
                   </button>
                 </div>
 
-                <div className={isDark ? "rounded-2xl border border-gray-800 bg-[#18181b] p-3 shadow-inner shadow-black/10" : "rounded-2xl border border-gray-200 bg-gray-50 p-3 shadow-inner shadow-gray-200/70"}>
+                <div className={isDark ? "rounded-3xl border border-white/10 bg-white/[0.045] p-3 shadow-inner shadow-black/10" : "rounded-3xl border border-white/80 bg-white/70 p-3 shadow-inner shadow-indigo-100/70"}>
                   <div className="grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
-                    <div className={isDark ? "rounded-xl border border-gray-800/70 bg-[#141417] px-2.5 py-2" : "rounded-xl border border-gray-200 bg-white px-2.5 py-2"}>
+                    <div className={isDark ? "rounded-2xl border border-indigo-300/15 bg-indigo-300/10 px-2.5 py-2" : "rounded-2xl border border-indigo-100 bg-indigo-50/80 px-2.5 py-2 shadow-sm"}>
                       <div className={isDark ? "text-[11px] text-gray-400" : "text-[11px] text-gray-500"}>今日生成</div>
-                      <div className="mt-0.5 text-base font-semibold tracking-wide">{todayGeneratedCount}</div>
+                      <div className="mt-0.5 text-lg font-semibold tracking-wide">{todayGeneratedCount}</div>
                     </div>
-                    <div className={isDark ? "rounded-xl border border-gray-800/70 bg-[#141417] px-2.5 py-2" : "rounded-xl border border-gray-200 bg-white px-2.5 py-2"}>
+                    <div className={isDark ? "rounded-2xl border border-sky-300/15 bg-sky-300/10 px-2.5 py-2" : "rounded-2xl border border-sky-100 bg-sky-50/80 px-2.5 py-2 shadow-sm"}>
                       <div className={isDark ? "text-[11px] text-gray-400" : "text-[11px] text-gray-500"}>累计生成</div>
-                      <div className="mt-0.5 text-base font-semibold tracking-wide">{totalGeneratedCount}</div>
+                      <div className="mt-0.5 text-lg font-semibold tracking-wide">{totalGeneratedCount}</div>
                     </div>
-                    <div className={isDark ? "rounded-xl border border-gray-800/70 bg-[#141417] px-2.5 py-2" : "rounded-xl border border-gray-200 bg-white px-2.5 py-2"}>
+                    <div className={isDark ? "rounded-2xl border border-amber-300/15 bg-amber-300/10 px-2.5 py-2" : "rounded-2xl border border-amber-100 bg-amber-50/80 px-2.5 py-2 shadow-sm"}>
                       <div className={isDark ? "text-[11px] text-gray-400" : "text-[11px] text-gray-500"}>已收藏</div>
-                      <div className="mt-0.5 text-base font-semibold tracking-wide">{favorites.length}</div>
+                      <div className="mt-0.5 text-lg font-semibold tracking-wide">{favorites.length}</div>
                     </div>
-                    <div className={isDark ? "rounded-xl border border-gray-800/70 bg-[#141417] px-2.5 py-2" : "rounded-xl border border-gray-200 bg-white px-2.5 py-2"}>
+                    <div className={isDark ? "rounded-2xl border border-violet-300/15 bg-violet-300/10 px-2.5 py-2" : "rounded-2xl border border-violet-100 bg-violet-50/80 px-2.5 py-2 shadow-sm"}>
                       <div className={isDark ? "text-[11px] text-gray-400" : "text-[11px] text-gray-500"}>累计消耗</div>
-                      <div className="mt-0.5 text-base font-semibold tracking-wide">¥{totalCost}</div>
+                      <div className="mt-0.5 text-lg font-semibold tracking-wide">¥{totalCost}</div>
                     </div>
-                    <div className={isDark ? "rounded-xl border border-gray-800/70 bg-[#141417] px-2.5 py-2" : "rounded-xl border border-gray-200 bg-white px-2.5 py-2"}>
+                    <div className={isDark ? "rounded-2xl border border-emerald-300/15 bg-emerald-300/10 px-2.5 py-2" : "rounded-2xl border border-emerald-100 bg-emerald-50/80 px-2.5 py-2 shadow-sm"}>
                       <div className={isDark ? "text-[11px] text-gray-400" : "text-[11px] text-gray-500"}>成功任务</div>
-                      <div className="mt-0.5 text-base font-semibold tracking-wide">{successTaskCount}</div>
+                      <div className="mt-0.5 text-lg font-semibold tracking-wide">{successTaskCount}</div>
                     </div>
-                    <div className={isDark ? "rounded-xl border border-gray-800/70 bg-[#141417] px-2.5 py-2" : "rounded-xl border border-gray-200 bg-white px-2.5 py-2"}>
+                    <div className={isDark ? "rounded-2xl border border-rose-300/15 bg-rose-300/10 px-2.5 py-2" : "rounded-2xl border border-rose-100 bg-rose-50/80 px-2.5 py-2 shadow-sm"}>
                       <div className={isDark ? "text-[11px] text-gray-400" : "text-[11px] text-gray-500"}>失败任务</div>
-                      <div className="mt-0.5 text-base font-semibold tracking-wide">{failedTaskCount}</div>
+                      <div className="mt-0.5 text-lg font-semibold tracking-wide">{failedTaskCount}</div>
                     </div>
-                    <div className={isDark ? "rounded-xl border border-gray-800/70 bg-[#141417] px-2.5 py-2" : "rounded-xl border border-gray-200 bg-white px-2.5 py-2"}>
+                    <div className={isDark ? "rounded-2xl border border-slate-300/15 bg-slate-300/10 px-2.5 py-2" : "rounded-2xl border border-slate-200 bg-slate-50/80 px-2.5 py-2 shadow-sm"}>
                       <div className={isDark ? "text-[11px] text-gray-400" : "text-[11px] text-gray-500"}>定时任务</div>
-                      <div className="mt-0.5 text-base font-semibold tracking-wide">{scheduledTaskCount}</div>
+                      <div className="mt-0.5 text-lg font-semibold tracking-wide">{scheduledTaskCount}</div>
                     </div>
-                    <div className={isDark ? "rounded-xl border border-gray-800/70 bg-[#141417] px-2.5 py-2" : "rounded-xl border border-gray-200 bg-white px-2.5 py-2"}>
+                    <div className={isDark ? "rounded-2xl border border-cyan-300/15 bg-cyan-300/10 px-2.5 py-2" : "rounded-2xl border border-cyan-100 bg-cyan-50/80 px-2.5 py-2 shadow-sm"}>
                       <div className={isDark ? "text-[11px] text-gray-400" : "text-[11px] text-gray-500"}>成功率</div>
-                      <div className="mt-0.5 text-base font-semibold tracking-wide">{successRate}</div>
+                      <div className="mt-0.5 text-lg font-semibold tracking-wide">{successRate}</div>
                     </div>
                   </div>
                 </div>
@@ -3176,11 +3172,7 @@ export default function Home() {
                       }
                     }}
                     placeholder="搜索任务内容"
-                    className={
-                      isDark
-                        ? "flex-1 rounded-xl border border-gray-800 bg-[#18181b] px-3 py-1.5 text-xs text-gray-100 outline-none placeholder:text-gray-500"
-                        : "flex-1 rounded-xl border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs text-gray-700 outline-none placeholder:text-gray-400"
-                    }
+                    className={`flex-1 ${inputPillClass}`}
                   />
 
                   <button
@@ -3188,11 +3180,7 @@ export default function Home() {
                       setTaskSearch("");
                       showToast("已显示全部任务");
                     }}
-                    className={
-                      isDark
-                        ? "rounded-full bg-gray-800 px-3 py-1.5 text-xs font-medium text-gray-100"
-                        : "rounded-full bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700"
-                    }
+                    className={smallSecondaryButtonClass}
                   >
                     清空
                   </button>
@@ -3201,82 +3189,44 @@ export default function Home() {
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     onClick={() => setTaskDrawerFilter("all")}
-                    className={
-                      taskDrawerFilter === "all"
-                        ? isDark
-                          ? "rounded-full bg-white px-3 py-1.5 text-xs font-medium text-black"
-                          : "rounded-full bg-black px-3 py-1.5 text-xs font-medium text-white"
-                        : isDark
-                          ? "rounded-full bg-gray-800 px-3 py-1.5 text-xs font-medium text-gray-100"
-                          : "rounded-full bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700"
-                    }
+                    className={filterChipClass(taskDrawerFilter === "all")}
                   >
                     全部
                   </button>
                   <button
                     onClick={() => setTaskDrawerFilter("favorites")}
-                    className={
-                      taskDrawerFilter === "favorites"
-                        ? "rounded-full bg-yellow-400 px-3 py-1.5 text-xs font-medium text-black"
-                        : isDark
-                          ? "rounded-full bg-gray-800 px-3 py-1.5 text-xs font-medium text-gray-100"
-                          : "rounded-full bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700"
-                    }
+                    className={taskDrawerFilter === "favorites" ? "rounded-full border border-amber-200 bg-amber-100 px-3 py-1.5 text-xs font-semibold text-amber-800 shadow-sm" : smallSecondaryButtonClass}
                   >
                     仅收藏
                   </button>
                   <button
                     onClick={() => setTaskDrawerFilter("generating")}
-                    className={
-                      taskDrawerFilter === "generating"
-                        ? "rounded-full bg-yellow-400 px-3 py-1.5 text-xs font-medium text-black"
-                        : isDark
-                          ? "rounded-full bg-gray-800 px-3 py-1.5 text-xs font-medium text-gray-100"
-                          : "rounded-full bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700"
-                    }
+                    className={taskDrawerFilter === "generating" ? "rounded-full border border-violet-200 bg-violet-100 px-3 py-1.5 text-xs font-semibold text-violet-800 shadow-sm" : smallSecondaryButtonClass}
                   >
                     生成中
                   </button>
                   <button
                     onClick={() => setTaskDrawerFilter("success")}
-                    className={
-                      taskDrawerFilter === "success"
-                        ? "rounded-full bg-green-500 px-3 py-1.5 text-xs font-medium text-white"
-                        : isDark
-                          ? "rounded-full bg-gray-800 px-3 py-1.5 text-xs font-medium text-gray-100"
-                          : "rounded-full bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700"
-                    }
+                    className={taskDrawerFilter === "success" ? "rounded-full border border-emerald-200 bg-emerald-100 px-3 py-1.5 text-xs font-semibold text-emerald-800 shadow-sm" : smallSecondaryButtonClass}
                   >
                     已完成
                   </button>
                   <button
                     onClick={() => setTaskDrawerFilter("failed")}
-                    className={
-                      taskDrawerFilter === "failed"
-                        ? "rounded-full bg-red-500 px-3 py-1.5 text-xs font-medium text-white"
-                        : isDark
-                          ? "rounded-full bg-gray-800 px-3 py-1.5 text-xs font-medium text-gray-100"
-                          : "rounded-full bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700"
-                    }
+                    className={taskDrawerFilter === "failed" ? "rounded-full border border-rose-200 bg-rose-100 px-3 py-1.5 text-xs font-semibold text-rose-800 shadow-sm" : smallSecondaryButtonClass}
                   >
                     失败
                   </button>
                   <button
                     onClick={() => setTaskDrawerFilter("waiting")}
-                    className={
-                      taskDrawerFilter === "waiting"
-                        ? "rounded-full bg-gray-500 px-3 py-1.5 text-xs font-medium text-white"
-                        : isDark
-                          ? "rounded-full bg-gray-800 px-3 py-1.5 text-xs font-medium text-gray-100"
-                          : "rounded-full bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700"
-                    }
+                    className={taskDrawerFilter === "waiting" ? "rounded-full border border-slate-200 bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm" : smallSecondaryButtonClass}
                   >
                     定时中
                   </button>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1.5 text-xs text-gray-200" : "rounded-full bg-gray-100 px-3 py-1.5 text-xs text-gray-700"}>
+                  <span className={softChipClass}>
                     已选 {selectedTaskIds.length} 条
                   </span>
                   <button
@@ -3287,13 +3237,13 @@ export default function Home() {
                   </button>
                   <button
                     onClick={() => handleBatchFavorite(true)}
-                    className={isDark ? "rounded-full bg-gray-800 px-3 py-1.5 text-xs font-medium text-gray-100" : "rounded-full bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700"}
+                    className={smallSecondaryButtonClass}
                   >
                     批量收藏
                   </button>
                   <button
                     onClick={() => handleBatchFavorite(false)}
-                    className={isDark ? "rounded-full bg-gray-800 px-3 py-1.5 text-xs font-medium text-gray-100" : "rounded-full bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700"}
+                    className={smallSecondaryButtonClass}
                   >
                     批量取消收藏
                   </button>
@@ -3325,50 +3275,46 @@ export default function Home() {
                         type="checkbox"
                         checked={selectedTaskIds.includes(id)}
                         onChange={() => handleToggleSelectedTask(id)}
-                        className="mt-3 h-4 w-4 rounded border-gray-400"
+                        className="mt-3 h-4 w-4 rounded border-indigo-200 accent-indigo-500"
                       />
                       <div
                         onClick={() => setTaskDetailId(id)}
-                        className={
-                          isDark
-                            ? "flex-1 cursor-pointer rounded-2xl border border-gray-800 bg-[#18181b] p-3 transition-all duration-200 hover:-translate-y-0.5 hover:border-gray-700 hover:bg-[#1f1f24] hover:shadow-[0_10px_20px_rgba(0,0,0,0.22)]"
-                            : "flex-1 cursor-pointer rounded-2xl border border-gray-200 bg-gray-50 p-3 transition-all duration-200 hover:-translate-y-0.5 hover:border-gray-300 hover:bg-white hover:shadow-[0_10px_18px_rgba(15,23,42,0.08)]"
-                        }
+                        className={`flex-1 cursor-pointer p-3 ${surfaceCardClass}`}
                       >
                       <div className="space-y-2">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className={isDark ? "rounded-full bg-gray-700 px-2.5 py-1 text-xs text-gray-200" : "rounded-full bg-white px-2.5 py-1 text-xs text-gray-600"}>
+                          <span className={softChipClass}>
                             {makeTaskId(id)}
                           </span>
-                          <span className={isDark ? "rounded-full bg-gray-700 px-2.5 py-1 text-xs text-gray-200" : "rounded-full bg-white px-2.5 py-1 text-xs text-gray-600"}>
+                          <span className={isFavorite ? "rounded-full border border-amber-200 bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800" : softChipClass}>
                             {isFavorite ? "已收藏" : "未收藏"}
                           </span>
                           <span className={getStatusClass(status)}>
                             {statusLabelMap[status]}
                           </span>
-                          <span className={isDark ? "rounded-full bg-gray-700 px-2.5 py-1 text-xs text-gray-200" : "rounded-full bg-white px-2.5 py-1 text-xs text-gray-600"}>
+                          <span className={softChipClass}>
                             {kind === "schedule" ? "定时任务" : "普通任务"}
                           </span>
-                          <span className={isDark ? "rounded-full bg-gray-700 px-2.5 py-1 text-xs text-gray-200" : "rounded-full bg-white px-2.5 py-1 text-xs text-gray-600"}>
+                          <span className={softChipClass}>
                             消耗 ¥{formatMoney(cost)}
                           </span>
-                          <span className={isDark ? "rounded-full bg-gray-700 px-2.5 py-1 text-xs text-gray-200" : "rounded-full bg-white px-2.5 py-1 text-xs text-gray-600"}>
+                          <span className={softChipClass}>
                             作品：{totalVideos}（成功 {successVideos} / 失败 {failedVideos}）
                           </span>
                           {agentName && (
-                            <span className={isDark ? "rounded-full bg-gray-700 px-2.5 py-1 text-xs text-gray-200" : "rounded-full bg-white px-2.5 py-1 text-xs text-gray-600"}>
+                            <span className={softChipClass}>
                               智能体：{agentName}
                             </span>
                           )}
                           {agentName && (
-                            <span className={isDark ? "rounded-full bg-gray-700 px-2.5 py-1 text-xs text-gray-200" : "rounded-full bg-white px-2.5 py-1 text-xs text-gray-600"}>
+                            <span className={softChipClass}>
                               权限：{agentAccess === "restricted" ? "授权智能体" : "公开可用"}
                             </span>
                           )}
-                          <span className={isDark ? "rounded-full bg-gray-700 px-2.5 py-1 text-xs text-gray-200" : "rounded-full bg-white px-2.5 py-1 text-xs text-gray-600"}>
+                          <span className={softChipClass}>
                             参考图：{taskHasRef ? "已添加" : "未添加"}
                           </span>
-                          {isLatestDone && <span className="rounded-full border border-indigo-400/70 bg-indigo-500/90 px-3 py-1 text-xs font-medium text-white">最新完成</span>}
+                          {isLatestDone && <span className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700 shadow-sm">最新完成</span>}
                         </div>
                         <div className="flex items-start gap-2">
                           <div
@@ -3386,11 +3332,11 @@ export default function Home() {
                         </div>
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <div className="flex flex-wrap items-center gap-2">
-                            <span className={isDark ? "rounded-full bg-gray-700 px-2.5 py-1 text-xs text-gray-200" : "rounded-full bg-white px-2.5 py-1 text-xs text-gray-600"}>
+                            <span className={softChipClass}>
                               发布时间：{formatTaskPublishTime(createdAt)}
                             </span>
                             {scheduledAt && (
-                              <span className={isDark ? "rounded-full bg-gray-700 px-2.5 py-1 text-xs text-gray-200" : "rounded-full bg-white px-2.5 py-1 text-xs text-gray-600"}>
+                              <span className={softChipClass}>
                                 {status === "waiting" ? `预计执行：${new Date(scheduledAt).toLocaleString()}` : `执行：${formatTaskPublishTime(scheduledAt)}`}
                               </span>
                             )}
@@ -3401,11 +3347,7 @@ export default function Home() {
                                 e.stopPropagation();
                                 handleOpenPreviewFromDrawer(id);
                               }}
-                              className={
-                                isDark
-                                  ? "rounded-full bg-gray-700 px-3 py-1.5 text-xs font-medium text-gray-100 transition hover:brightness-125"
-                                  : "rounded-full bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:brightness-95"
-                              }
+                              className={smallSecondaryButtonClass}
                             >
                               预览
                             </button>
@@ -3414,11 +3356,7 @@ export default function Home() {
                                 e.stopPropagation();
                                 void handleCopy(item, id);
                               }}
-                              className={
-                                isDark
-                                  ? "rounded-full bg-gray-700 px-3 py-1.5 text-xs font-medium text-gray-100 transition hover:brightness-125"
-                                  : "rounded-full bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:brightness-95"
-                              }
+                              className={smallSecondaryButtonClass}
                             >
                               {copiedTaskId === id ? "已复制✓" : "复制"}
                             </button>
@@ -3429,10 +3367,8 @@ export default function Home() {
                               }}
                               className={
                                 isFavorite
-                                  ? "rounded-full bg-yellow-400 px-3 py-1.5 text-xs font-medium text-black"
-                                  : isDark
-                                    ? "rounded-full bg-gray-700 px-3 py-1.5 text-xs font-medium text-gray-100"
-                                    : "rounded-full bg-white px-3 py-1.5 text-xs font-medium text-gray-700"
+                                  ? "rounded-full border border-amber-200 bg-amber-100 px-3 py-1.5 text-xs font-semibold text-amber-800"
+                                  : smallSecondaryButtonClass
                               }
                             >
                               {isFavorite ? "取消收藏" : "收藏"}
@@ -3452,7 +3388,7 @@ export default function Home() {
                                   e.stopPropagation();
                                   handleCancelScheduledTask(id);
                                 }}
-                                className={isDark ? "rounded-full bg-gray-700 px-3 py-1.5 text-xs font-medium text-gray-100 transition hover:brightness-125" : "rounded-full bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:brightness-95"}
+                                className={dangerButtonClass}
                               >
                                 取消定时
                               </button>
@@ -3465,22 +3401,22 @@ export default function Home() {
                   ))
                 )}
               </div>
-              <div className={isDark ? "shrink-0 border-t border-gray-800/90 bg-[#121214] pb-[max(8px,env(safe-area-inset-bottom))] pt-3" : "shrink-0 border-t border-gray-200 bg-white pb-[max(8px,env(safe-area-inset-bottom))] pt-3"}>
+              <div className={isDark ? "shrink-0 border-t border-white/10 bg-[#0d0e16]/80 pb-[max(8px,env(safe-area-inset-bottom))] pt-3 backdrop-blur" : "shrink-0 border-t border-white/70 bg-white/75 pb-[max(8px,env(safe-area-inset-bottom))] pt-3 backdrop-blur"}>
                 <div className="flex items-center justify-end gap-2">
                   <button
                     onClick={() => setDrawerPage((prev) => Math.max(1, prev - 1))}
                     disabled={drawerPage <= 1}
-                    className={isDark ? "rounded-full bg-gray-800 px-3 py-2 text-xs text-gray-100 disabled:opacity-40" : "rounded-full bg-gray-100 px-3 py-2 text-xs text-gray-700 disabled:opacity-40"}
+                    className={`${smallSecondaryButtonClass} disabled:cursor-not-allowed disabled:opacity-40`}
                   >
                     上一页
                   </button>
-                  <span className={isDark ? "text-xs text-gray-400" : "text-xs text-gray-500"}>
+                  <span className={softChipClass}>
                     第 {Math.min(drawerPage, drawerTotalPages)} / {drawerTotalPages} 页
                   </span>
                   <button
                     onClick={() => setDrawerPage((prev) => Math.min(drawerTotalPages, prev + 1))}
                     disabled={drawerPage >= drawerTotalPages}
-                    className={isDark ? "rounded-full bg-gray-800 px-3 py-2 text-xs text-gray-100 disabled:opacity-40" : "rounded-full bg-gray-100 px-3 py-2 text-xs text-gray-700 disabled:opacity-40"}
+                    className={`${smallSecondaryButtonClass} disabled:cursor-not-allowed disabled:opacity-40`}
                   >
                     下一页
                   </button>
@@ -3492,15 +3428,15 @@ export default function Home() {
         )}
         {previewVideo && (
           <div
-            className="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 px-4"
+            className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/55 px-4 backdrop-blur-sm"
             onClick={() => setPreviewVideo(null)}
           >
             <div
               onClick={(e) => e.stopPropagation()}
               className={
                 isDark
-                  ? `w-full ${previewVideo.mediaType === "image" ? "max-h-[90vh] max-w-[70vw] overflow-hidden p-4" : "max-w-lg p-6"} rounded-3xl border border-gray-800 bg-[#121214] shadow-xl`
-                  : `w-full ${previewVideo.mediaType === "image" ? "max-h-[90vh] max-w-[70vw] overflow-hidden p-4" : "max-w-lg p-6"} rounded-3xl border border-gray-200 bg-white shadow-xl`
+                  ? `w-full ${previewVideo.mediaType === "image" ? "max-h-[90vh] max-w-[min(92vw,980px)] overflow-hidden p-5" : "max-w-xl p-6"} rounded-[28px] border border-white/10 bg-[#10111a]/92 shadow-[0_30px_100px_rgba(0,0,0,0.55)] backdrop-blur-xl`
+                  : `w-full ${previewVideo.mediaType === "image" ? "max-h-[90vh] max-w-[min(92vw,980px)] overflow-hidden p-5" : "max-w-xl p-6"} rounded-[28px] border border-white/75 bg-white/92 shadow-[0_30px_100px_rgba(79,70,229,0.22)] backdrop-blur-xl`
               }
             >
               {!previewVideo ? (
@@ -3510,11 +3446,7 @@ export default function Home() {
                   <div className="flex justify-end">
                     <button
                       onClick={() => setPreviewVideo(null)}
-                      className={
-                        isDark
-                          ? "rounded-full bg-gray-800 px-3 py-1 text-sm text-gray-100"
-                          : "rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-700"
-                      }
+                      className={smallSecondaryButtonClass}
                     >
                       关闭
                     </button>
@@ -3522,28 +3454,27 @@ export default function Home() {
                 </div>
               ) : (
                 <>
-              <div className="mb-4 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="text-lg font-semibold">{previewVideo.mediaType === "image" ? "图片预览" : "视频预览"}</div>
-                  <span className={isDark ? "rounded-full bg-gray-800 px-2 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-2 py-1 text-xs text-gray-600"}>
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 via-violet-500 to-sky-500 text-sm font-semibold text-white shadow-md shadow-indigo-200/60">
+                    {previewVideo.mediaType === "image" ? "图" : "播"}
+                  </div>
+                  <div className="mr-1 text-lg font-semibold">{previewVideo.mediaType === "image" ? "图片预览" : "视频预览"}</div>
+                  <span className={softChipClass}>
                     {makeTaskId(previewVideo.taskId)}
                   </span>
                   <span className={getStatusClass(previewVideo.status as TaskStatus)}>
                     {statusLabelMap[previewVideo.status as TaskStatus]}
                   </span>
                   {previewVideo.mediaType !== "image" && (
-                    <span className={previewVideo.upscaleStatus === "success" ? "rounded-full border border-emerald-400/70 bg-emerald-500/90 px-2 py-1 text-xs font-medium text-white" : previewVideo.upscaleStatus === "failed" ? "rounded-full border border-rose-400/70 bg-rose-500/90 px-2 py-1 text-xs font-medium text-white" : previewVideo.upscaleStatus === "processing" || previewVideo.upscaleStatus === "pending" || previewVideo.upscaleStatus === "queued" ? "rounded-full border border-amber-400/70 bg-amber-500/90 px-2 py-1 text-xs font-medium text-white" : isDark ? "rounded-full border border-gray-700/70 bg-gray-800/90 px-2 py-1 text-xs font-medium text-gray-300" : "rounded-full border border-gray-200 bg-gray-100 px-2 py-1 text-xs font-medium text-gray-600"}>
+                    <span className={upscaleBadgeClass(previewVideo.upscaleStatus)}>
                       {getUpscaleStatusLabel(previewVideo.upscaleStatus)}
                     </span>
                   )}
                 </div>
                 <button
                   onClick={() => setPreviewVideo(null)}
-                  className={
-                    isDark
-                      ? "rounded-full bg-gray-800 px-3 py-1 text-sm text-gray-100"
-                      : "rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-700"
-                  }
+                  className={smallSecondaryButtonClass}
                 >
                   关闭
                 </button>
@@ -3552,37 +3483,37 @@ export default function Home() {
               <div className={previewVideo.mediaType === "image" ? "max-h-[calc(90vh-5.5rem)] space-y-4 overflow-y-auto pr-1" : "space-y-4"}>
                 {previewVideo.mediaType === "image" && (
                   <div className="flex flex-wrap items-center justify-end gap-2">
-                    <span className={isDark ? "text-xs text-gray-400" : "text-xs text-gray-500"}>
+                    <span className={softChipClass}>
                       缩放：{Math.round(imagePreviewScale * 100)}%
                     </span>
                     <button
                       onClick={() => setImagePreviewScale((prev) => Math.min(3, Number((prev + 0.25).toFixed(2))))}
-                      className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700"}
+                      className={smallSecondaryButtonClass}
                     >
                       放大
                     </button>
                     <button
                       onClick={() => setImagePreviewScale((prev) => Math.max(0.5, Number((prev - 0.25).toFixed(2))))}
-                      className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700"}
+                      className={smallSecondaryButtonClass}
                     >
                       缩小
                     </button>
                     <button
                       onClick={() => setImagePreviewScale(1)}
-                      className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700"}
+                      className={smallSecondaryButtonClass}
                     >
                       重置
                     </button>
                     <span className={isDark ? "mx-1 h-5 w-px bg-gray-700" : "mx-1 h-5 w-px bg-gray-200"} />
                     <button
                       onClick={() => void handleDownload(previewVideo)}
-                      className={isDark ? "rounded-full border border-white/15 bg-white px-3 py-1 text-xs font-semibold text-black" : "rounded-full bg-black px-3 py-1 text-xs font-semibold text-white"}
+                      className={primaryMiniButtonClass}
                     >
                       下载
                     </button>
                     <button
                       onClick={() => handleCopy(previewVideo.item)}
-                      className={isDark ? "rounded-full border border-gray-700 bg-gray-800 px-3 py-1 text-xs font-medium text-gray-100" : "rounded-full border border-gray-200 bg-gray-100 px-3 py-1 text-xs font-medium text-gray-700"}
+                      className={smallSecondaryButtonClass}
                     >
                       {isPreviewCopied ? "已复制✓" : "复制文案"}
                     </button>
@@ -3592,11 +3523,11 @@ export default function Home() {
                   className={
                     previewVideo.mediaType === "image"
                       ? isDark
-                        ? "relative max-h-[60vh] overflow-auto rounded-2xl border border-gray-800 bg-[#18181b]"
-                        : "relative max-h-[60vh] overflow-auto rounded-2xl border border-gray-200 bg-gray-50"
+                        ? "relative max-h-[60vh] overflow-auto rounded-2xl border border-white/10 bg-[#171822] shadow-inner shadow-black/20"
+                        : "relative max-h-[60vh] overflow-auto rounded-2xl border border-indigo-100 bg-[linear-gradient(45deg,rgba(226,232,240,.55)_25%,transparent_25%,transparent_75%,rgba(226,232,240,.55)_75%),linear-gradient(45deg,rgba(226,232,240,.55)_25%,transparent_25%,transparent_75%,rgba(226,232,240,.55)_75%)] bg-[length:20px_20px] bg-[position:0_0,10px_10px] shadow-inner shadow-indigo-100/60"
                       : isDark
-                        ? "relative h-52 overflow-hidden rounded-2xl border border-gray-800 bg-[#18181b]"
-                        : "relative h-52 overflow-hidden rounded-2xl border border-gray-200 bg-gray-50"
+                        ? "relative h-60 overflow-hidden rounded-2xl border border-white/10 bg-[#080910] shadow-lg shadow-black/30"
+                        : "relative h-60 overflow-hidden rounded-2xl border border-slate-900/10 bg-slate-950 shadow-lg shadow-indigo-200/30"
                   }
                 >
                   {previewVideo.videoUrl ? (
@@ -3631,37 +3562,37 @@ export default function Home() {
 
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
+                    <span className={softChipClass}>
                       预览状态：可查看
                     </span>
-                    <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
+                    <span className={softChipClass}>
                       消耗：¥{formatMoney(previewVideo.cost)}
                     </span>
                     {previewVideo.mediaType === "image" ? (
                       <>
-                        <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
+                        <span className={softChipClass}>
                           分辨率：{getImageSizeLabel(previewVideo.imageSize || previewVideo.size)}
                         </span>
-                        <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
+                        <span className={softChipClass}>
                           模型：{formatImageModelLabel(previewVideo)}
                         </span>
                       </>
                     ) : (
-                      <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
+                      <span className={softChipClass}>
                         时长：{getDurationLabel(previewVideo.seconds, previewVideo.duration)}
                       </span>
                     )}
-                    <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
+                    <span className={softChipClass}>
                       比例：{getRatioLabel(previewVideo.ratio, previewVideo.size)}
                     </span>
-                    <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
+                    <span className={softChipClass}>
                       参考图：{previewVideo.hasReferenceImage ? `已添加${previewVideo.referenceImageName ? `（${previewVideo.referenceImageName}）` : ""}` : "未添加"}
                     </span>
                     {previewVideo.mediaType !== "image" && previewVideo.upscaleStatus === "failed" && (
                       <button
                         onClick={() => handleRetryUpscale(previewVideo.id)}
                         title={previewVideo.upscaleErrorMessage || "仅重试超分"}
-                        className="rounded-full bg-emerald-500 px-3 py-1 text-xs font-medium text-white transition hover:brightness-110"
+                        className={primaryMiniButtonClass}
                       >
                         重试超分
                       </button>
@@ -3671,8 +3602,8 @@ export default function Home() {
                   <div
                     className={
                       isDark
-                        ? "rounded-2xl border border-gray-800 bg-[#18181b] p-4 text-sm leading-6 text-gray-100"
-                        : "rounded-2xl border border-gray-200 bg-gray-50 p-4 text-sm leading-6 text-gray-700"
+                        ? "rounded-2xl border border-white/10 bg-white/[0.045] p-4 text-sm leading-6 text-gray-100 shadow-inner shadow-black/15"
+                        : "rounded-2xl border border-indigo-100 bg-slate-50/80 p-4 text-sm leading-6 text-slate-700 shadow-inner shadow-indigo-100/40"
                     }
                   >
                     <div className={isDark ? "mb-2 text-xs font-medium text-gray-400" : "mb-2 text-xs font-medium text-gray-500"}>
@@ -3687,8 +3618,8 @@ export default function Home() {
                     onClick={() => void handleDownload(previewVideo)}
                     className={
                       isDark
-                        ? "rounded-full border border-white/15 bg-white px-4 py-2 text-sm font-semibold text-black"
-                        : "rounded-full bg-black px-4 py-2 text-sm font-semibold text-white"
+                        ? primaryActionClass
+                        : primaryActionClass
                     }
                   >
                     下载
@@ -3697,8 +3628,8 @@ export default function Home() {
                     onClick={() => handleCopy(previewVideo.item)}
                     className={
                       isDark
-                        ? "rounded-full border border-gray-700 bg-gray-800 px-4 py-2 text-sm font-medium text-gray-100"
-                        : "rounded-full border border-gray-200 bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700"
+                        ? secondaryButtonClass
+                        : secondaryButtonClass
                     }
                   >
                     {isPreviewCopied ? "已复制✓" : "复制文案"}
@@ -3713,7 +3644,7 @@ export default function Home() {
 
         {referencePreviewOpen && referencePreviewData && (
           <div
-            className="fixed inset-0 z-[95] flex items-center justify-center bg-black/60 px-4"
+            className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-950/60 px-4 backdrop-blur-sm"
             onClick={() => {
               setReferencePreviewOpen(false);
               setReferencePreviewData(null);
@@ -3721,7 +3652,7 @@ export default function Home() {
           >
             <div
               onClick={(e) => e.stopPropagation()}
-              className={isDark ? "w-full max-w-3xl rounded-3xl border border-gray-800 bg-[#121214] p-5 shadow-xl" : "w-full max-w-3xl rounded-3xl border border-gray-200 bg-white p-5 shadow-xl"}
+              className={isDark ? "w-full max-w-3xl rounded-3xl border border-white/10 bg-[#10111a]/92 p-5 shadow-[0_30px_90px_rgba(0,0,0,0.5)] backdrop-blur-xl" : "w-full max-w-3xl rounded-3xl border border-white/75 bg-white/92 p-5 shadow-[0_30px_90px_rgba(79,70,229,0.2)] backdrop-blur-xl"}
             >
               <div className="mb-3 flex items-center justify-between">
                 <div className="text-sm font-medium">{referencePreviewTitle || "参考图预览"}</div>
@@ -3730,12 +3661,12 @@ export default function Home() {
                     setReferencePreviewOpen(false);
                     setReferencePreviewData(null);
                   }}
-                  className={isDark ? "rounded-full bg-gray-800 px-3 py-1.5 text-xs text-gray-100" : "rounded-full bg-gray-100 px-3 py-1.5 text-xs text-gray-700"}
+                  className={smallSecondaryButtonClass}
                 >
                   关闭
                 </button>
               </div>
-              <div className={isDark ? "max-h-[72vh] overflow-auto rounded-2xl border border-gray-800 bg-[#18181b] p-2" : "max-h-[72vh] overflow-auto rounded-2xl border border-gray-200 bg-gray-50 p-2"}>
+              <div className={isDark ? "max-h-[72vh] overflow-auto rounded-2xl border border-white/10 bg-[#171822] p-2 shadow-inner shadow-black/20" : "max-h-[72vh] overflow-auto rounded-2xl border border-indigo-100 bg-slate-50/80 p-2 shadow-inner shadow-indigo-100/50"}>
                 {(() => {
                   const finalSrc = normalizeReferenceImageSrc(referencePreviewData);
                   return <img src={finalSrc ?? ""} alt="参考图大图预览" className="max-h-[68vh] w-full rounded-xl object-contain" />;
@@ -3747,27 +3678,31 @@ export default function Home() {
 
         {detailTask && (
           <div
-            className="fixed inset-0 z-40 flex items-center justify-center bg-black/55 px-4 transition-all duration-200"
+            className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/55 px-4 backdrop-blur-sm transition-all duration-200"
             onClick={() => setTaskDetailId(null)}
           >
             <div
               onClick={(e) => e.stopPropagation()}
               className={
                 isDark
-                  ? "flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl border border-gray-800/90 bg-[#121214] shadow-[0_28px_58px_rgba(0,0,0,0.4)]"
-                  : "flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-[0_24px_50px_rgba(15,23,42,0.16)]"
+                  ? "flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-3xl border border-white/10 bg-[#10111a]/92 shadow-[0_30px_100px_rgba(0,0,0,0.52)] backdrop-blur-xl"
+                  : "flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-3xl border border-white/75 bg-white/92 shadow-[0_30px_100px_rgba(79,70,229,0.2)] backdrop-blur-xl"
               }
             >
-              <div className={isDark ? "sticky top-0 z-10 flex items-center justify-between border-b border-gray-800 bg-[#121214]/95 px-6 py-4 backdrop-blur" : "sticky top-0 z-10 flex items-center justify-between border-b border-gray-200 bg-white/95 px-6 py-4 backdrop-blur"}>
+              <div className={isDark ? "sticky top-0 z-10 flex items-center justify-between border-b border-white/10 bg-[#10111a]/90 px-6 py-4 backdrop-blur-xl" : "sticky top-0 z-10 flex items-center justify-between border-b border-white/70 bg-white/82 px-6 py-4 backdrop-blur-xl"}>
                 <div className="flex items-center gap-2">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 via-violet-500 to-sky-500 text-sm font-semibold text-white shadow-md shadow-indigo-200/60">
+                    详
+                  </div>
                   <div className="text-lg font-semibold">任务详情</div>
-                  <span className={isDark ? "rounded-full bg-gray-800 px-2 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-2 py-1 text-xs text-gray-600"}>
+                  <span className={softChipClass}>
                     {makeTaskId(detailTask.id)}
                   </span>
+                  <span className={getStatusClass(detailTask.status)}>{statusLabelMap[detailTask.status]}</span>
                 </div>
                 <button
                   onClick={() => setTaskDetailId(null)}
-                  className={isDark ? "rounded-full bg-gray-800 px-3 py-1.5 text-xs text-gray-100" : "rounded-full bg-gray-100 px-3 py-1.5 text-xs text-gray-700"}
+                  className={smallSecondaryButtonClass}
                 >
                   关闭
                 </button>
@@ -3776,59 +3711,63 @@ export default function Home() {
                 <div className="space-y-3">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className={getStatusClass(detailTask.status)}>{statusLabelMap[detailTask.status]}</span>
-                      <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
+                      <span className={softChipClass}>
                         类型：{detailTask.kind === "schedule" ? "定时任务" : "普通任务"}
                       </span>
-                      <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
+                      <span className={softChipClass}>
                         发布时间：{formatTaskPublishTime(detailTask.createdAt)}
                       </span>
-                      <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
+                      <span className={softChipClass}>
                         消耗：¥{formatMoney(detailTask.cost)}
                       </span>
                       {activeDetailVideo?.mediaType === "image" ? (
                         <>
-                          <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
+                          <span className={softChipClass}>
                             分辨率：{getImageSizeLabel(activeDetailVideo.imageSize || activeDetailVideo.size)}
                           </span>
-                          <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
+                          <span className={softChipClass}>
                             模型：{formatImageModelLabel(activeDetailVideo)}
                           </span>
                         </>
                       ) : (
-                        <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
+                        <span className={softChipClass}>
                           时长：{getDurationLabel(activeDetailVideo?.seconds, activeDetailVideo?.duration)}
                         </span>
                       )}
-                      <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
+                      <span className={softChipClass}>
                         比例：{getRatioLabel(activeDetailVideo?.ratio, activeDetailVideo?.size)}
                       </span>
                       {detailTask.agentName && (
-                        <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
+                        <span className={softChipClass}>
                           智能体：{detailTask.agentName}
                         </span>
                       )}
                       {detailTask.agentName && (
-                        <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
+                        <span className={softChipClass}>
                           智能体权限：{detailTask.agentAccess === "restricted" ? "授权智能体" : "公开可用"}
                         </span>
                       )}
-                      <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
+                      <span className={softChipClass}>
                         收藏：{detailVideos.some((video) => favorites.includes(video.id)) ? "是" : "否"}
                       </span>
-                      <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
+                      <span className={softChipClass}>
                         参考图：{detailTask.hasReferenceImage ? "已启用" : "未启用"}
                       </span>
                       {detailTask.scheduledAt && (
-                        <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300" : "rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"}>
+                        <span className={softChipClass}>
                           {detailTask.status === "waiting" ? `预计执行：${new Date(detailTask.scheduledAt).toLocaleString()}` : `执行时间：${new Date(detailTask.scheduledAt).toLocaleString()}`}
                         </span>
                       )}
                     </div>
-                    <div className={isDark ? "rounded-2xl border border-gray-800/90 bg-[#18181b] p-4 text-sm leading-6 text-gray-100 shadow-inner shadow-black/15" : "rounded-2xl border border-gray-200 bg-gray-50 p-4 text-sm leading-6 text-gray-700 shadow-inner shadow-gray-200/70"}>
+                    <div className={isDark ? "rounded-2xl border border-white/10 bg-white/[0.045] p-4 text-sm leading-6 text-gray-100 shadow-inner shadow-black/15" : "rounded-2xl border border-indigo-100 bg-slate-50/80 p-4 text-sm leading-6 text-slate-700 shadow-inner shadow-indigo-100/50"}>
+                      <div className={isDark ? "mb-2 text-xs font-medium text-gray-400" : "mb-2 text-xs font-medium text-slate-500"}>任务主题 / Prompt</div>
                       {detailTask.item}
                     </div>
-                    <div className={isDark ? "rounded-2xl border border-gray-800/90 bg-[#18181b] p-3" : "rounded-2xl border border-gray-200 bg-gray-50 p-3"}>
-                      <div className="mb-2 text-xs font-medium">任务作品（{detailVideos.length}）</div>
+                    <div className={isDark ? "rounded-3xl border border-white/10 bg-white/[0.045] p-3" : "rounded-3xl border border-white/75 bg-white/70 p-3 shadow-inner shadow-indigo-100/50"}>
+                      <div className="mb-2 flex items-center justify-between">
+                        <div className="text-xs font-semibold">任务作品（{detailVideos.length}）</div>
+                        <span className={softChipClass}>点击作品可切换详情</span>
+                      </div>
                       {detailVideos.length === 0 ? (
                         <div className={isDark ? "text-xs text-gray-400" : "text-xs text-gray-500"}>该任务暂无生成作品</div>
                       ) : (
@@ -3837,7 +3776,7 @@ export default function Home() {
                             <div
                               key={video.id}
                               onClick={() => setDetailVideoId(video.id)}
-                              className={isDark ? `cursor-pointer rounded-2xl border p-2.5 transition-all duration-200 ${detailVideoId === video.id ? "border-indigo-400/70 bg-[#1a1a20] shadow-[0_8px_18px_rgba(79,70,229,0.16)]" : "border-gray-700 hover:-translate-y-0.5 hover:border-gray-600 hover:bg-[#1d1d23] hover:shadow-[0_8px_16px_rgba(0,0,0,0.2)]"}` : `cursor-pointer rounded-2xl border p-2.5 transition-all duration-200 ${detailVideoId === video.id ? "border-indigo-300 bg-indigo-50/40 shadow-[0_8px_16px_rgba(99,102,241,0.1)]" : "border-gray-200 bg-white hover:-translate-y-0.5 hover:border-gray-300 hover:shadow-[0_8px_16px_rgba(15,23,42,0.08)]"}`}
+                              className={isDark ? `cursor-pointer rounded-2xl border p-2.5 transition-all duration-200 ${detailVideoId === video.id ? "border-indigo-300/60 bg-indigo-300/10 shadow-[0_12px_28px_rgba(79,70,229,0.2)]" : "border-white/10 bg-white/[0.04] hover:-translate-y-0.5 hover:border-indigo-300/35 hover:bg-white/[0.065] hover:shadow-[0_10px_22px_rgba(0,0,0,0.24)]"}` : `cursor-pointer rounded-2xl border p-2.5 transition-all duration-200 ${detailVideoId === video.id ? "border-indigo-200 bg-gradient-to-r from-indigo-50 via-white to-sky-50 shadow-[0_12px_26px_rgba(99,102,241,0.13)]" : "border-white/80 bg-white/85 hover:-translate-y-0.5 hover:border-indigo-200 hover:shadow-[0_10px_22px_rgba(79,70,229,0.11)]"}`}
                             >
                               <div className="flex items-start gap-2">
                                 <button
@@ -3856,19 +3795,19 @@ export default function Home() {
                                 </button>
                                 <div className="min-w-0 flex-1">
                                   <div className="mb-1 flex flex-wrap items-center gap-2">
-                                    <span className={isDark ? "rounded-full bg-gray-700 px-2 py-0.5 text-xs font-medium text-gray-200" : "rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600"}>
+                                    <span className={softChipClass}>
                                       {video.mediaType === "image" ? "IMAGE" : "VIDEO"}-{String(video.id).padStart(3, "0")}
                                     </span>
                                     <span className={getStatusClass(video.status)}>
                                       {statusLabelMap[video.status]}
                                     </span>
                                     {video.mediaType !== "image" && (
-                                      <span className={video.upscaleStatus === "success" ? "rounded-full border border-emerald-400/70 bg-emerald-500/90 px-2 py-0.5 text-xs font-medium text-white" : video.upscaleStatus === "failed" ? "rounded-full border border-rose-400/70 bg-rose-500/90 px-2 py-0.5 text-xs font-medium text-white" : video.upscaleStatus === "processing" || video.upscaleStatus === "pending" || video.upscaleStatus === "queued" ? "rounded-full border border-amber-400/70 bg-amber-500/90 px-2 py-0.5 text-xs font-medium text-white" : isDark ? "rounded-full border border-gray-600 bg-gray-700 px-2 py-0.5 text-xs font-medium text-gray-200" : "rounded-full border border-gray-200 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600"}>
+                                      <span className={upscaleBadgeClass(video.upscaleStatus)}>
                                         {getUpscaleStatusLabel(video.upscaleStatus)}
                                       </span>
                                     )}
                                     {video.mediaType !== "image" && video.upscaleStatus === "success" && (
-                                      <span className={isDark ? "rounded-full bg-emerald-900/50 px-2 py-0.5 text-xs text-emerald-200" : "rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-700"}>
+                                      <span className={isDark ? "rounded-full border border-emerald-300/20 bg-emerald-300/10 px-2 py-0.5 text-xs text-emerald-200" : "rounded-full border border-emerald-100 bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700"}>
                                         预览/下载：超分视频优先
                                       </span>
                                     )}
@@ -3879,35 +3818,35 @@ export default function Home() {
                                           handleRetryUpscale(video.id);
                                         }}
                                         title={video.upscaleErrorMessage || "仅重试超分"}
-                                        className="rounded-full bg-emerald-500 px-2 py-0.5 text-xs font-medium text-white transition hover:brightness-110"
+                                        className={primaryMiniButtonClass}
                                       >
                                         重试超分
                                       </button>
                                     )}
-                                    <span className={isDark ? "rounded-full bg-gray-700 px-2 py-0.5 text-xs text-gray-200" : "rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600"}>
+                                    <span className={softChipClass}>
                                       比例：{getRatioLabel(video.ratio, video.size)}
                                     </span>
                                     {video.mediaType === "image" && (
-                                      <span className={isDark ? "rounded-full bg-gray-700 px-2 py-0.5 text-xs text-gray-200" : "rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600"}>
+                                      <span className={softChipClass}>
                                         分辨率：{getImageSizeLabel(video.imageSize || video.size)}
                                       </span>
                                     )}
                                   </div>
                                   <div className="mb-2 text-xs leading-5">{video.item}</div>
                                   {video.script && video.script.length > 0 && (
-                                    <div className={isDark ? "mb-2 rounded-xl border border-gray-700 bg-[#141417] p-2" : "mb-2 rounded-xl border border-gray-200 bg-gray-50 p-2"}>
-                                      <div className="mb-1 text-[11px] font-medium">分镜脚本</div>
-                                      <div className="space-y-1">
+                                    <div className={isDark ? "mb-2 rounded-2xl border border-white/10 bg-white/[0.04] p-2.5" : "mb-2 rounded-2xl border border-indigo-100 bg-slate-50/80 p-2.5"}>
+                                      <div className="mb-2 text-[11px] font-semibold">分镜脚本</div>
+                                      <div className="space-y-1.5">
                                         {video.script.map((scene, sceneIndex) => (
-                                          <div key={`${video.id}-scene-${sceneIndex}`} className={isDark ? "text-[11px] text-gray-300" : "text-[11px] text-gray-600"}>
-                                            {sceneIndex + 1}. {scene}
+                                          <div key={`${video.id}-scene-${sceneIndex}`} className={isDark ? "rounded-xl border border-white/10 bg-black/10 px-2 py-1.5 text-[11px] text-gray-300" : "rounded-xl border border-white/80 bg-white/80 px-2 py-1.5 text-[11px] text-slate-600"}>
+                                            <span className="mr-1 font-semibold text-indigo-500">{sceneIndex + 1}.</span>{scene}
                                           </div>
                                         ))}
                                       </div>
                                     </div>
                                   )}
                                   {video.promptText && (
-                                    <div className={isDark ? "mb-2 rounded-xl border border-gray-700 bg-[#141417] p-2" : "mb-2 rounded-xl border border-gray-200 bg-gray-50 p-2"}>
+                                    <div className={isDark ? "mb-2 rounded-2xl border border-white/10 bg-white/[0.04] p-2.5" : "mb-2 rounded-2xl border border-indigo-100 bg-slate-50/80 p-2.5"}>
                                       <div className="mb-1 flex items-center justify-between gap-2">
                                         <span className="text-[11px] font-medium">{video.mediaType === "image" ? "图片提示词" : "视频提示词"}</span>
                                         <button
@@ -3915,7 +3854,7 @@ export default function Home() {
                                             e.stopPropagation();
                                             void handleCopy(video.promptText ?? "", video.id);
                                           }}
-                                          className={isDark ? "rounded-full bg-gray-700 px-2 py-0.5 text-[10px] text-gray-100" : "rounded-full bg-white px-2 py-0.5 text-[10px] text-gray-700"}
+                                          className={smallSecondaryButtonClass}
                                         >
                                           复制提示词
                                         </button>
@@ -3924,10 +3863,10 @@ export default function Home() {
                                     </div>
                                   )}
                                   <div className="flex flex-wrap items-center gap-1.5">
-                                    <button onClick={(e) => { e.stopPropagation(); if (video.isPlaceholder) { showToast("作品生成完成后可预览"); return; } setPreviewVideo(video); }} className={isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>预览</button>
-                                    <button onClick={(e) => { e.stopPropagation(); handleCopy(video.item, video.id); }} className={isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>复制</button>
-                                    <button onClick={(e) => { e.stopPropagation(); if (video.isPlaceholder) { showToast("作品生成完成后可下载"); return; } void handleDownload(video); }} className={isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>下载</button>
-                                    <button onClick={(e) => { e.stopPropagation(); if (video.isPlaceholder) { showToast("作品生成完成后可收藏"); return; } handleToggleFavorite(video.id); }} className={favorites.includes(video.id) ? "rounded-full bg-yellow-400 px-3 py-1 text-xs text-black" : isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>{favorites.includes(video.id) ? "已收藏" : "收藏"}</button>
+                                    <button onClick={(e) => { e.stopPropagation(); if (video.isPlaceholder) { showToast("作品生成完成后可预览"); return; } setPreviewVideo(video); }} className={smallSecondaryButtonClass}>预览</button>
+                                    <button onClick={(e) => { e.stopPropagation(); handleCopy(video.item, video.id); }} className={smallSecondaryButtonClass}>复制</button>
+                                    <button onClick={(e) => { e.stopPropagation(); if (video.isPlaceholder) { showToast("作品生成完成后可下载"); return; } void handleDownload(video); }} className={primaryMiniButtonClass}>下载</button>
+                                    <button onClick={(e) => { e.stopPropagation(); if (video.isPlaceholder) { showToast("作品生成完成后可收藏"); return; } handleToggleFavorite(video.id); }} className={favorites.includes(video.id) ? "rounded-full border border-amber-200 bg-amber-100 px-3 py-1.5 text-xs font-semibold text-amber-800" : smallSecondaryButtonClass}>{favorites.includes(video.id) ? "已收藏" : "收藏"}</button>
                                   </div>
                                 </div>
                               </div>
