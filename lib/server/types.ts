@@ -26,12 +26,13 @@ export type Task = {
   agentName?: string;
   agentAccessType?: "public" | "restricted";
   prompt: string;
-  mode: "agent" | "normal" | "image";
+  mode: "agent" | "normal" | "image" | "medium_video";
   duration: string;
   ratio: string;
   imageSize?: "1K" | "2K" | "4K";
   imageModel?: "image2" | "banana2";
   count: number;
+  mediumVideoSegments?: number;
   status: TaskStatus;
   referenceImageUrl?: string;
   referenceImageName?: string;
@@ -76,6 +77,12 @@ export type Video = {
   displayModel?: string;
   imageModelLabel?: string;
   apiModel?: string;
+  mediumVideo?: boolean;
+  mediumVideoTaskId?: string;
+  chainId?: string;
+  segmentIndex?: number;
+  totalSegments?: number;
+  segmentTitle?: string;
   createdAt: string;
 };
 

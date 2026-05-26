@@ -1,12 +1,13 @@
 import { getStore } from "./store";
 import { tasksRepository, videosRepository } from "./repositories";
 import { Task } from "./types";
-import { generateVideoScript } from "./gpt";
+import { generateMediumVideoSegments, generateVideoScript } from "./gpt";
 import { createSora2Task, downloadSora2Video, querySora2Task } from "./sora2";
 import { runRunningHubUpscaleWithPolling } from "./runninghub";
 import { generateYunwuImage } from "./yunwu-image";
 import { enqueueUpscaleJob } from "./upscale-queue";
 import { extractCoverAt015FromVideoUrl } from "./video-cover-extractor";
+import { checkMediumVideoFrameTools, extractMediumVideoReferenceFrame } from "./medium-video-frame";
 import { adjustUserBalance } from "./auth-store";
 import { getUnitPrice } from "./pricing";
 import { getManagedAgentById } from "./agent-store";
@@ -24,6 +25,9 @@ import {
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const runnerLog = (stage: string, payload: Record<string, unknown>) => {
   console.log(`[TASK_RUNNER][${stage}]`, JSON.stringify(payload));
+};
+const mediumVideoLog = (stage: string, payload: Record<string, unknown>) => {
+  console.log(`[MEDIUM_VIDEO][${stage}]`, JSON.stringify(payload));
 };
 
 const stringifyUnknownError = (value: unknown): string => {
@@ -620,6 +624,407 @@ async function executeTask(taskId: string) {
     });
     return;
   }
+
+  if (task.mode === "medium_video") {
+    const totalSegments = Math.max(1, Math.min(5, Math.floor(task.mediumVideoSegments ?? task.count ?? 1)));
+    const targetSize = task.ratio === "9:16" ? "720x1280" : "1280x720";
+    const targetRatio = task.ratio === "9:16" ? "9:16" : "16:9";
+    const chainId = `medium-video-${task.id}`;
+    let currentReferenceImageUrl = task.referenceImageUrl;
+    let chargedHandled = false;
+
+    const settleSuccessfulMediumCharges = async () => {
+      if (chargedHandled) return;
+      chargedHandled = true;
+      const chargedUnitPrice = await chargeSuccessfulGenerations(task, successCount, unitPrice);
+      updateSuccessfulRecordCosts(successfulRecordIds, chargedUnitPrice);
+    };
+
+    mediumVideoLog("TASK_START", {
+      taskId: task.id,
+      userId: task.userId,
+      totalSegments,
+      ratio: targetRatio,
+      hasInitialReferenceImage: Boolean(task.referenceImageUrl),
+    });
+
+    try {
+    if (totalSegments > 1) {
+      const frameTools = await checkMediumVideoFrameTools();
+      mediumVideoLog("FRAME_TOOL_CHECK", {
+        taskId: task.id,
+        totalSegments,
+        ffmpegAvailable: frameTools.ffmpegAvailable,
+        ffprobeAvailable: frameTools.ffprobeAvailable,
+        error: frameTools.error || "",
+      });
+      if (!frameTools.ffmpegAvailable) {
+        const reason = "服务器缺少 ffmpeg，无法生成多段中视频";
+        tasksRepository.update(taskId, { status: "failed" });
+        mediumVideoLog("TASK_FAILED", {
+          taskId: task.id,
+          failedSegment: 1,
+          reason,
+        });
+        return;
+      }
+    }
+
+    const segmentPrompts = await generateMediumVideoSegments({
+      theme: effectivePrompt,
+      totalSegments,
+      ratio: targetRatio,
+      agentName: task.agentName,
+      agentDescription: agent?.description,
+      hasReferenceImage: Boolean(task.referenceImageUrl),
+      referenceImageName: task.referenceImageName,
+    });
+    mediumVideoLog("PROMPTS_CREATED", {
+      taskId: task.id,
+      totalSegments,
+      promptPreviewList: segmentPrompts.map((segment) => ({
+        segmentIndex: segment.segmentIndex,
+        title: segment.title,
+        promptPreview: segment.prompt.slice(0, 120),
+      })),
+    });
+
+    if (task.referenceImageUrl) {
+      mediumVideoLog("REFERENCE_SKETCH_REQUEST", {
+        taskId: task.id,
+        hasReferenceImage: true,
+      });
+      try {
+        const sketchResult = await generateYunwuImage({
+          prompt:
+            "请基于参考图生成一张适合 Sora2 图生视频使用的参考图。若画面中存在真实人物人脸，请仅将人脸区域处理为清晰自然的素描化/插画化效果，保持人物姿态、服装、场景、商品、构图和光线尽量不变；若画面中没有可识别真实人脸，则保持原图主体、场景和构图基本不变，只做轻微清晰化处理。不要添加文字、水印、Logo，不要改变商品结构，不要改变场景类别。",
+          referenceImageUrl: task.referenceImageUrl,
+          ratio: targetRatio,
+          imageSize: "1K",
+          imageModel: "banana2",
+          maxAttempts: 2,
+          retryDelaysMs: [2000],
+          logParsedJson: false,
+        });
+        currentReferenceImageUrl = sketchResult.imageUrl;
+        mediumVideoLog("REFERENCE_SKETCH_SUCCESS", {
+          taskId: task.id,
+          outputUrl: sketchResult.imageUrl,
+        });
+      } catch (error) {
+        mediumVideoLog("REFERENCE_SKETCH_FAILED", {
+          taskId: task.id,
+          reason: stringifyUnknownError(error),
+          fallback: "original_reference",
+        });
+        currentReferenceImageUrl = task.referenceImageUrl;
+      }
+    } else {
+      mediumVideoLog("REFERENCE_SKETCH_REQUEST", {
+        taskId: task.id,
+        hasReferenceImage: false,
+      });
+    }
+
+    const failMediumTask = async (failedSegment: number, reason: string) => {
+      await settleSuccessfulMediumCharges();
+      tasksRepository.update(taskId, { status: "failed" });
+      mediumVideoLog("TASK_FAILED", {
+        taskId: task.id,
+        failedSegment,
+        reason,
+      });
+    };
+
+    for (let index = 0; index < totalSegments; index += 1) {
+      const segmentIndex = index + 1;
+      const segment = segmentPrompts[index] ?? segmentPrompts[segmentPrompts.length - 1];
+      const latestTask = tasksRepository.getById(taskId);
+      if (!latestTask || latestTask.status === "cancelled") {
+        runnerLog("TASK_ABORTED", { taskId, reason: "medium video task removed or cancelled during execution" });
+        return;
+      }
+
+      mediumVideoLog("SEGMENT_START", {
+        taskId: task.id,
+        segmentIndex,
+        totalSegments,
+        hasReferenceImage: Boolean(currentReferenceImageUrl),
+      });
+
+      const soraResult = await runSora2GenerationWithRetry(segment.prompt, "12s", targetRatio, currentReferenceImageUrl);
+      if (!soraResult.success) {
+        failedCount += 1;
+        const errorMessage = soraResult.errorMessage || "中视频片段生成失败";
+        videosRepository.createMany([
+          {
+            taskId: task.id,
+            providerTaskId: soraResult.providerTaskId,
+            title: `中视频片段 ${segmentIndex}/${totalSegments}（失败）`,
+            content: `中视频片段 ${segmentIndex}/${totalSegments}：生成失败｜${errorMessage}`,
+            script: segment.scenes,
+            prompt: segment.prompt,
+            status: "failed" as const,
+            originalCoverUrl: "",
+            originalVideoUrl: "",
+            upscaledVideoUrl: "",
+            upscaledCoverUrl: "",
+            upscaleStatus: "idle" as const,
+            upscaleTaskId: "",
+            upscaleErrorMessage: "",
+            upscaleConsumeMoney: 0,
+            upscaleTaskCostTime: 0,
+            coverUrl: "",
+            previewImageUrl: "",
+            errorMessage,
+            referenceImageUrl: currentReferenceImageUrl,
+            referenceImageName: segmentIndex === 1 ? task.referenceImageName : `上段关键帧 ${segmentIndex - 1}`,
+            cost: 0,
+            seconds: 12,
+            duration: "12s",
+            ratio: targetRatio,
+            size: targetSize,
+            mediumVideo: true,
+            mediumVideoTaskId: task.id,
+            chainId,
+            segmentIndex,
+            totalSegments,
+            segmentTitle: segment.title,
+          },
+        ]);
+        await failMediumTask(segmentIndex, errorMessage);
+        return;
+      }
+
+      successCount += 1;
+      const created = videosRepository.createMany([
+        {
+          taskId: task.id,
+          providerTaskId: soraResult.providerTaskId,
+          title: `中视频片段 ${segmentIndex}/${totalSegments}：${segment.title}`,
+          content: `中视频片段 ${segmentIndex}/${totalSegments}：${segment.title}｜${task.prompt}｜灵感参考：${segment.scenes.join("｜")}${task.agentName ? `｜智能体：${task.agentName}` : ""}`,
+          script: segment.scenes,
+          prompt: segment.prompt,
+          status: "success" as const,
+          originalCoverUrl: soraResult.coverUrl || "",
+          originalVideoUrl: soraResult.videoUrl || "",
+          upscaledVideoUrl: "",
+          upscaledCoverUrl: "",
+          upscaleStatus: "queued" as const,
+          upscaleTaskId: "",
+          upscaleErrorMessage: "",
+          upscaleConsumeMoney: 0,
+          upscaleTaskCostTime: 0,
+          coverUrl: soraResult.coverUrl || "",
+          videoUrl: soraResult.videoUrl || "",
+          previewImageUrl: soraResult.videoUrl || "",
+          referenceImageUrl: currentReferenceImageUrl,
+          referenceImageName: segmentIndex === 1 ? task.referenceImageName : `上段关键帧 ${segmentIndex - 1}`,
+          cost: 0,
+          seconds: 12,
+          duration: "12s",
+          ratio: soraResult.ratio || targetRatio,
+          size: soraResult.size || targetSize,
+          mediumVideo: true,
+          mediumVideoTaskId: task.id,
+          chainId,
+          segmentIndex,
+          totalSegments,
+          segmentTitle: segment.title,
+        },
+      ])[0];
+      successfulRecordIds.push(created.id);
+
+      mediumVideoLog("SEGMENT_SUCCESS", {
+        taskId: task.id,
+        segmentIndex,
+        providerTaskId: soraResult.providerTaskId,
+        videoId: created.id,
+      });
+
+      void (async () => {
+        runnerLog("VIDEO_COVER_ASYNC_START", {
+          taskId: task.id,
+          videoId: created.id,
+          stage: "original",
+        });
+        try {
+          const sourceForCover = created.originalVideoUrl || created.videoUrl || created.previewImageUrl;
+          if (sourceForCover) {
+            const extracted = await extractCoverAt015FromVideoUrl({
+              videoId: created.id,
+              sourceVideoUrl: sourceForCover,
+              kind: "original",
+            });
+            videosRepository.updateCoverFields(created.id, {
+              originalCoverUrl: extracted.coverUrl,
+              coverUrl: extracted.coverUrl,
+            });
+          }
+        } catch (error) {
+          runnerLog("VIDEO_COVER_EXTRACT_FAILED", {
+            taskId: task.id,
+            videoId: created.id,
+            stage: "original",
+            errorMessage: stringifyUnknownError(error),
+          });
+        }
+      })();
+
+      const upscaleJob = enqueueUpscaleJob(task.userId, { videoId: created.id, taskId: task.id }, async () => {
+        videosRepository.update(created.id, {
+          upscaleStatus: "processing",
+          upscaleErrorMessage: "",
+        });
+        let upscaleResult: UpscalePollResult;
+        try {
+          upscaleResult = await runUpscaleWithRetries(created.originalVideoUrl!);
+        } catch (error) {
+          upscaleResult = {
+            success: false as const,
+            errorMessage: stringifyUnknownError(error) || "超分任务异常",
+          } as UpscalePollResult;
+        }
+        if (upscaleResult.success) {
+          videosRepository.update(created.id, {
+            upscaledVideoUrl: upscaleResult.upscaledVideoUrl,
+            upscaledCoverUrl: upscaleResult.upscaledCoverUrl,
+            upscaleStatus: "success",
+            upscaleTaskId: upscaleResult.taskId,
+            upscaleErrorMessage: "",
+            upscaleConsumeMoney: upscaleResult.consumeMoney ?? 0,
+            upscaleTaskCostTime: upscaleResult.taskCostTime ?? 0,
+            videoUrl: upscaleResult.upscaledVideoUrl,
+            coverUrl: upscaleResult.upscaledCoverUrl || created.originalCoverUrl || "",
+            previewImageUrl: upscaleResult.upscaledVideoUrl,
+          });
+          return;
+        }
+        videosRepository.update(created.id, {
+          upscaleStatus: "failed",
+          upscaleTaskId: upscaleResult.taskId,
+          upscaleErrorMessage: upscaleResult.errorMessage,
+          upscaleConsumeMoney: upscaleResult.consumeMoney ?? 0,
+          upscaleTaskCostTime: upscaleResult.taskCostTime ?? 0,
+          videoUrl: created.originalVideoUrl,
+          coverUrl: created.originalCoverUrl || "",
+          previewImageUrl: created.originalVideoUrl,
+        });
+      }).then(
+        () => undefined,
+        (error) => {
+          runnerLog("UPSCALE_JOB_ERROR", {
+            taskId: task.id,
+            videoId: created.id,
+            errorMessage: stringifyUnknownError(error),
+          });
+        }
+      );
+      upscaleJobs.push(upscaleJob);
+
+      if (segmentIndex < totalSegments) {
+        mediumVideoLog("FRAME_EXTRACT_REQUEST", {
+          taskId: task.id,
+          segmentIndex,
+          sourceVideoId: created.id,
+        });
+        try {
+          const extractedFrame = await extractMediumVideoReferenceFrame({
+            taskId: task.id,
+            segmentIndex,
+            sourceVideoUrl: created.originalVideoUrl || created.videoUrl || "",
+          });
+          currentReferenceImageUrl = extractedFrame.referenceUrl;
+          mediumVideoLog("FRAME_EXTRACT_SUCCESS", {
+            taskId: task.id,
+            segmentIndex,
+            referenceUrlForNextSegment: extractedFrame.referenceUrl,
+          });
+        } catch (error) {
+          const reason = stringifyUnknownError(error) || "关键帧抽取失败，无法继续生成下一段";
+          mediumVideoLog("FRAME_EXTRACT_FAILED", {
+            taskId: task.id,
+            segmentIndex,
+            reason,
+          });
+          const failedNextSegment = segmentIndex + 1;
+          failedCount += 1;
+          videosRepository.createMany([
+            {
+              taskId: task.id,
+              providerTaskId: "",
+              title: `中视频片段 ${failedNextSegment}/${totalSegments}（失败）`,
+              content: `中视频片段 ${failedNextSegment}/${totalSegments}：关键帧抽取失败，无法继续生成下一段｜${reason}`,
+              script: [],
+              prompt: segmentPrompts[failedNextSegment - 1]?.prompt || "",
+              status: "failed" as const,
+              originalCoverUrl: "",
+              originalVideoUrl: "",
+              upscaledVideoUrl: "",
+              upscaledCoverUrl: "",
+              upscaleStatus: "idle" as const,
+              upscaleTaskId: "",
+              upscaleErrorMessage: "",
+              upscaleConsumeMoney: 0,
+              upscaleTaskCostTime: 0,
+              coverUrl: "",
+              previewImageUrl: "",
+              errorMessage: reason,
+              referenceImageUrl: "",
+              referenceImageName: "",
+              cost: 0,
+              seconds: 12,
+              duration: "12s",
+              ratio: targetRatio,
+              size: targetSize,
+              mediumVideo: true,
+              mediumVideoTaskId: task.id,
+              chainId,
+              segmentIndex: failedNextSegment,
+              totalSegments,
+              segmentTitle: segmentPrompts[failedNextSegment - 1]?.title || `中视频片段 ${failedNextSegment}/${totalSegments}`,
+            },
+          ]);
+          await failMediumTask(failedNextSegment, reason);
+          return;
+        }
+      }
+    }
+
+    const latestMediumTask = tasksRepository.getById(taskId);
+    if (!latestMediumTask || latestMediumTask.status === "cancelled") {
+      runnerLog("TASK_ABORTED", { taskId, reason: "medium video task removed before final status" });
+      return;
+    }
+    void Promise.allSettled(upscaleJobs);
+    await settleSuccessfulMediumCharges();
+    tasksRepository.update(taskId, { status: successCount === totalSegments ? "success" : "failed" });
+    if (successCount === totalSegments) {
+      mediumVideoLog("TASK_SUCCESS", {
+        taskId: task.id,
+        successSegments: successCount,
+      });
+    } else {
+      mediumVideoLog("TASK_FAILED", {
+        taskId: task.id,
+        failedSegment: successCount + 1,
+        reason: "中视频片段未全部完成",
+      });
+    }
+    return;
+    } catch (error) {
+      const reason = stringifyUnknownError(error) || "中视频任务异常";
+      await settleSuccessfulMediumCharges();
+      tasksRepository.update(taskId, { status: "failed" });
+      mediumVideoLog("TASK_FAILED", {
+        taskId: task.id,
+        failedSegment: Math.min(totalSegments, successCount + 1),
+        reason,
+      });
+      return;
+    }
+  }
+
   for (let index = 0; index < task.count; index += 1) {
     const targetSize = task.ratio === "9:16" ? "720x1280" : "1280x720";
     const targetRatio = task.ratio === "9:16" ? "9:16" : "16:9";

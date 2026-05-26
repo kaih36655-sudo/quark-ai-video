@@ -10,7 +10,7 @@ type TaskStatus = "waiting" | "queued" | "running" | "success" | "failed" | "can
 type Task = {
   id: number;
   prompt: string;
-  mode?: "agent" | "normal" | "image";
+  mode?: "agent" | "normal" | "image" | "medium_video";
   status: TaskStatus;
   createdAt: number;
   kind: "manual" | "schedule";
@@ -20,6 +20,7 @@ type Task = {
   scheduledAt?: number;
   promptSnapshot?: string;
   countSnapshot?: number;
+  mediumVideoSegments?: number;
   duration?: string;
   ratio?: "1:1" | "9:16" | "16:9";
   agentId?: string;
@@ -63,6 +64,10 @@ type Video = {
   videoUrl?: string;
   hasReferenceImage: boolean;
   referenceImageName?: string;
+  mediumVideo?: boolean;
+  segmentIndex?: number;
+  totalSegments?: number;
+  segmentTitle?: string;
 };
 
 type AgentProfile = {
@@ -180,6 +185,7 @@ export default function Home() {
   const [ratio, setRatio] = useState("16:9");
   const [imageSize, setImageSize] = useState<"1K" | "2K" | "4K">("2K");
   const [imageModel, setImageModel] = useState<"image2" | "banana2">("image2");
+  const [mediumVideoSegments, setMediumVideoSegments] = useState(3);
   const [timingEnabled, setTimingEnabled] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateProgress, setGenerateProgress] = useState(0);
@@ -242,6 +248,7 @@ export default function Home() {
     const savedRatio = localStorage.getItem("quark_ratio");
     const savedImageSize = localStorage.getItem("quark_image_size");
     const savedImageModel = localStorage.getItem("quark_image_model");
+    const savedMediumVideoSegments = localStorage.getItem("quark_medium_video_segments");
     const savedHasReferenceImage = localStorage.getItem("quark_has_reference_image");
     const savedReferenceImageData = localStorage.getItem("quark_reference_image_data");
     const savedReferenceImageThumbData = localStorage.getItem("quark_reference_image_thumb_data");
@@ -293,6 +300,10 @@ export default function Home() {
     }
     if (savedImageModel === "banana2" || savedImageModel === "image2") {
       setImageModel(savedImageModel);
+    }
+    const parsedMediumVideoSegments = Number(savedMediumVideoSegments);
+    if ([1, 2, 3, 4, 5].includes(parsedMediumVideoSegments)) {
+      setMediumVideoSegments(parsedMediumVideoSegments);
     }
 
     if (savedHasReferenceImage === "true") {
@@ -457,7 +468,7 @@ export default function Home() {
   const mapApiTaskToLocal = (task: Record<string, unknown>): Task => ({
     id: Number(task.id ?? 0),
     prompt: String(task.prompt ?? ""),
-    mode: task.mode === "agent" || task.mode === "image" ? task.mode : "normal",
+    mode: task.mode === "agent" || task.mode === "image" || task.mode === "medium_video" ? task.mode : "normal",
     status: toTaskStatus(String(task.status ?? "success")),
     createdAt: Date.parse(String(task.createdAt ?? new Date().toISOString())),
     kind: task.scheduledAt ? "schedule" : "manual",
@@ -467,6 +478,7 @@ export default function Home() {
     scheduledAt: typeof task.scheduledAt === "string" ? Date.parse(task.scheduledAt) : undefined,
     promptSnapshot: typeof task.promptSnapshot === "string" ? task.promptSnapshot : typeof task.prompt === "string" ? task.prompt : undefined,
     countSnapshot: typeof task.count === "number" ? task.count : undefined,
+    mediumVideoSegments: typeof task.mediumVideoSegments === "number" ? task.mediumVideoSegments : task.mode === "medium_video" && typeof task.count === "number" ? task.count : undefined,
     duration: typeof task.duration === "string" ? task.duration : undefined,
     ratio: task.ratio === "1:1" || task.ratio === "9:16" || task.ratio === "16:9" ? task.ratio : undefined,
     agentId: typeof task.agentId === "string" ? task.agentId : undefined,
@@ -596,6 +608,10 @@ export default function Home() {
       videoUrl: mediaType === "image" ? effectiveVideoUrl : usePlaybackProxy ? `/api/videos/${playbackId}/stream` : effectiveVideoUrl,
       hasReferenceImage: Boolean(video.referenceImageUrl),
       referenceImageName: typeof video.referenceImageName === "string" ? video.referenceImageName : undefined,
+      mediumVideo: Boolean(video.mediumVideo),
+      segmentIndex: typeof video.segmentIndex === "number" ? video.segmentIndex : undefined,
+      totalSegments: typeof video.totalSegments === "number" ? video.totalSegments : undefined,
+      segmentTitle: typeof video.segmentTitle === "string" ? video.segmentTitle : undefined,
     };
   };
 
@@ -632,12 +648,13 @@ export default function Home() {
       return false;
     }
 
-    const effectiveCount = countValue ?? generateCount;
+    const isCurrentMediumVideoMode = mode === "medium_video";
+    const effectiveCount = isCurrentMediumVideoMode ? mediumVideoSegments : countValue ?? generateCount;
     const useReference = typeof refEnabled === "boolean" ? refEnabled : hasReferenceImage;
     const useReferenceName = refName ?? referenceImageName;
     const useReferenceThumbData = refThumbData ?? referenceImageThumbData;
     const isCurrentRemixMode = mode === "remix";
-    const isCurrentAgentMode = mode === "agent" || mode === "agent_image";
+    const isCurrentAgentMode = mode === "agent" || mode === "agent_image" || isCurrentMediumVideoMode;
     const isCurrentImageMode = mode === "image" || mode === "agent_image";
     const submitMode = mode === "agent_image" ? "image" : isCurrentRemixMode ? "normal" : mode;
     const shouldSubmitReference = useReference;
@@ -654,12 +671,13 @@ export default function Home() {
     }
     const payload = {
       prompt: seedPrompt.trim(),
-      mode: submitMode as "agent" | "normal" | "image",
-      duration,
+      mode: submitMode as "agent" | "normal" | "image" | "medium_video",
+      duration: isCurrentMediumVideoMode ? "12s" : duration,
       ratio: isCurrentImageMode ? ratio : ratio === "9:16" ? "9:16" : "16:9",
       imageSize: isCurrentImageMode ? imageSize : undefined,
       imageModel: isCurrentImageMode ? imageModel : undefined,
       count: effectiveCount,
+      mediumVideoSegments: isCurrentMediumVideoMode ? mediumVideoSegments : undefined,
       agentId: activeAgentId,
       referenceImageUrl: shouldSubmitReference ? referenceImageData ?? undefined : undefined,
       referenceImageName: shouldSubmitReference ? useReferenceName || undefined : undefined,
@@ -700,7 +718,7 @@ export default function Home() {
           }, 200);
           if (taskStatus === "success") {
             const videosCount = snapshot.videos.filter((video) => String(video.taskId) === createdTaskId).length;
-            showToast(isCurrentImageMode ? `已生成${videosCount}张图片` : `已生成${videosCount}条视频`);
+            showToast(isCurrentImageMode ? `已生成${videosCount}张图片` : isCurrentMediumVideoMode ? `中视频已生成${videosCount}个片段` : `已生成${videosCount}条视频`);
             void refreshCurrentUser();
           } else if (taskStatus === "failed") {
             showToast("任务执行失败");
@@ -733,7 +751,7 @@ export default function Home() {
       showToast("请先分析并生成复刻提示词");
       return;
     }
-    if (mode === "agent" && (!selectedAgent || !selectedAgentApplicable)) {
+    if ((mode === "agent" || mode === "medium_video") && (!selectedAgent || !selectedAgentApplicable)) {
       showToast("请先选择视频智能体");
       return;
     }
@@ -741,7 +759,7 @@ export default function Home() {
       showToast("请先选择图片智能体");
       return;
     }
-    if ((mode === "agent" || mode === "agent_image") && selectedAgent?.access === "restricted" && !selectedAgent.isAuthorized) {
+    if ((mode === "agent" || mode === "agent_image" || mode === "medium_video") && selectedAgent?.access === "restricted" && !selectedAgent.isAuthorized) {
       showToast("当前智能体尚未获得授权，无法执行任务");
       return;
     }
@@ -766,7 +784,7 @@ export default function Home() {
       showToast("请选择未来时间");
       return;
     }
-    if (mode === "agent" && (!selectedAgent || !selectedAgentApplicable)) {
+    if ((mode === "agent" || mode === "medium_video") && (!selectedAgent || !selectedAgentApplicable)) {
       showToast("请先选择视频智能体");
       return;
     }
@@ -774,11 +792,12 @@ export default function Home() {
       showToast("请先选择图片智能体");
       return;
     }
-    if ((mode === "agent" || mode === "agent_image") && selectedAgent?.access === "restricted" && !selectedAgent.isAuthorized) {
+    if ((mode === "agent" || mode === "agent_image" || mode === "medium_video") && selectedAgent?.access === "restricted" && !selectedAgent.isAuthorized) {
       showToast("当前智能体尚未获得授权，无法执行任务");
       return;
     }
     const isCurrentRemixMode = mode === "remix";
+    const isCurrentMediumVideoMode = mode === "medium_video";
     const isCurrentImageMode = mode === "image" || mode === "agent_image";
     const submitMode = mode === "agent_image" ? "image" : isCurrentRemixMode ? "normal" : mode;
     const shouldSubmitReference = hasReferenceImage;
@@ -787,13 +806,14 @@ export default function Home() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         prompt: prompt.trim(),
-        mode: submitMode as "agent" | "normal" | "image",
-        duration,
+        mode: submitMode as "agent" | "normal" | "image" | "medium_video",
+        duration: isCurrentMediumVideoMode ? "12s" : duration,
         ratio,
         imageSize: isCurrentImageMode ? imageSize : undefined,
         imageModel: isCurrentImageMode ? imageModel : undefined,
-        count: generateCount,
-        agentId: mode === "agent" || mode === "agent_image" ? selectedAgent?.id : undefined,
+        count: isCurrentMediumVideoMode ? mediumVideoSegments : generateCount,
+        mediumVideoSegments: isCurrentMediumVideoMode ? mediumVideoSegments : undefined,
+        agentId: mode === "agent" || mode === "agent_image" || mode === "medium_video" ? selectedAgent?.id : undefined,
         referenceImageUrl: shouldSubmitReference ? referenceImageData ?? undefined : undefined,
         referenceImageName: shouldSubmitReference ? referenceImageName || undefined : undefined,
         scheduledAt: new Date(targetTs).toISOString(),
@@ -1401,11 +1421,14 @@ export default function Home() {
 
   const selectedAgent = agentProfiles.find((agent) => agent.id === selectedAgentId) ?? null;
   const isRemixMode = mode === "remix";
+  const isMediumVideoMode = mode === "medium_video";
   const isImageMode = mode === "image" || mode === "agent_image";
-  const isAgentMode = mode === "agent" || mode === "agent_image";
+  const isAgentMode = mode === "agent" || mode === "agent_image" || isMediumVideoMode;
   const modeLabel =
     isRemixMode
       ? "爆款视频复刻"
+      : isMediumVideoMode
+        ? "中视频"
       : mode === "agent"
       ? "智能体批量视频"
       : mode === "normal"
@@ -1415,7 +1438,7 @@ export default function Home() {
           : "通用图片";
   const selectedAgentApplicable =
     !selectedAgent ||
-    (mode === "agent" && (selectedAgent.type === "video" || selectedAgent.type === "both")) ||
+    ((mode === "agent" || isMediumVideoMode) && (selectedAgent.type === "video" || selectedAgent.type === "both")) ||
     (mode === "agent_image" && (selectedAgent.type === "image" || selectedAgent.type === "both")) ||
     !isAgentMode;
 
@@ -1423,14 +1446,16 @@ export default function Home() {
     const imagePrefix: "image" | "image2" = imageModel === "banana2" ? "image" : "image2";
     const imagePriceKey = `${imagePrefix}_${imageSize}` as "image_1K" | "image_2K" | "image_4K" | "image2_1K" | "image2_2K" | "image2_4K";
     const unit =
-      isImageMode
+      isMediumVideoMode
+        ? pricing.video_12s
+        : isImageMode
         ? pricing[imagePriceKey]
         : duration === "4s"
           ? pricing.video_4s
           : duration === "8s"
             ? pricing.video_8s
             : pricing.video_12s;
-    return Number((unit * generateCount).toFixed(2));
+    return Number((unit * (isMediumVideoMode ? mediumVideoSegments : generateCount)).toFixed(2));
   })();
   const isBalanceInsufficient = isLoggedIn && Number(balance) < estimatedCost;
   const currentChannelEnabled = isImageMode ? pricing.image_enabled : pricing.video_enabled;
@@ -1444,7 +1469,7 @@ export default function Home() {
   const makeTaskId = (taskId: number) => `TASK-${String(taskId).padStart(3, "0")}`;
   const agentSearchKeyword = agentSearch.trim().toLowerCase();
   const visibleAgents = agentProfiles.filter((agent) => {
-    if (mode === "agent" && !(agent.type === "video" || agent.type === "both")) return false;
+    if ((mode === "agent" || isMediumVideoMode) && !(agent.type === "video" || agent.type === "both")) return false;
     if (mode === "agent_image" && !(agent.type === "image" || agent.type === "both")) return false;
     if (!agentSearchKeyword) return true;
     return (
@@ -1538,6 +1563,10 @@ export default function Home() {
         scheduledAt: parentTask?.scheduledAt,
         prompt: parentTask?.prompt ?? "未知任务",
         agentName: parentTask?.agentName,
+        mediumVideo: video.mediumVideo,
+        segmentIndex: video.segmentIndex,
+        totalSegments: video.totalSegments,
+        segmentTitle: video.segmentTitle,
         isFavorite: favorites.includes(video.id),
         isLatestDone: video.status === "success" && !videos.some((item) => item.status === "success" && item.createdAt > video.createdAt),
         taskStatus: parentTask?.status ?? "success",
@@ -1548,7 +1577,7 @@ export default function Home() {
   const placeholderRecords = taskRecords.flatMap((task) => {
     if (!["waiting", "queued", "running", "failed", "cancelled"].includes(task.status)) return [];
     const relatedVideos = videos.filter((video) => video.taskId === task.id);
-    const expectedCount = Math.max(1, task.countSnapshot ?? relatedVideos.length);
+    const expectedCount = Math.max(1, task.mode === "medium_video" ? task.mediumVideoSegments ?? task.countSnapshot ?? relatedVideos.length : task.countSnapshot ?? relatedVideos.length);
     const missingCount = Math.max(0, expectedCount - relatedVideos.length);
     if (missingCount === 0) return [];
     const mediaType: "video" | "image" = task.mode === "image" ? "image" : "video";
@@ -1567,8 +1596,8 @@ export default function Home() {
       id: -1 * (task.id * 100 + index + 1),
       taskId: task.id,
       mediaType,
-      title: `${mediaType === "image" ? "图片" : "视频"}占位 ${index + 1}`,
-      item: placeholderText,
+      title: task.mode === "medium_video" ? `中视频片段 ${relatedVideos.length + index + 1}/${expectedCount}` : `${mediaType === "image" ? "图片" : "视频"}占位 ${index + 1}`,
+      item: task.mode === "medium_video" ? `中视频片段 ${relatedVideos.length + index + 1}/${expectedCount}：${placeholderText}` : placeholderText,
       script: [] as string[],
       promptText: task.promptSnapshot ?? task.prompt,
       status: placeholderStatus,
@@ -1594,6 +1623,10 @@ export default function Home() {
       scheduledAt: task.scheduledAt,
       prompt: task.prompt,
       agentName: task.agentName,
+      mediumVideo: task.mode === "medium_video",
+      segmentIndex: task.mode === "medium_video" ? relatedVideos.length + index + 1 : undefined,
+      totalSegments: task.mode === "medium_video" ? expectedCount : undefined,
+      segmentTitle: task.mode === "medium_video" ? `中视频片段 ${relatedVideos.length + index + 1}/${expectedCount}` : undefined,
       isFavorite: false,
       isLatestDone: false,
       taskStatus: task.status,
@@ -1605,7 +1638,19 @@ export default function Home() {
     .sort((a, b) => b.createdAt - a.createdAt);
 
   const detailTask = taskDetailId ? taskRecords.find((task) => task.id === taskDetailId) ?? null : null;
-  const detailVideos = detailTask ? videoRecords.filter((video) => video.taskId === detailTask.id) : [];
+  const rawDetailVideos = detailTask ? videoRecords.filter((video) => video.taskId === detailTask.id) : [];
+  const shouldSortDetailVideosBySegment = Boolean(
+    detailTask?.mode === "medium_video" ||
+      rawDetailVideos.some((video) => video.mediumVideo || typeof video.segmentIndex === "number" || typeof video.totalSegments === "number")
+  );
+  const detailVideos = shouldSortDetailVideosBySegment
+    ? [...rawDetailVideos].sort((a, b) => {
+        const aSegmentIndex = typeof a.segmentIndex === "number" ? a.segmentIndex : Number.POSITIVE_INFINITY;
+        const bSegmentIndex = typeof b.segmentIndex === "number" ? b.segmentIndex : Number.POSITIVE_INFINITY;
+        if (aSegmentIndex !== bSegmentIndex) return aSegmentIndex - bSegmentIndex;
+        return a.createdAt - b.createdAt;
+      })
+    : rawDetailVideos;
   const activeDetailVideo = detailVideos.find((video) => video.id === detailVideoId) ?? detailVideos[0] ?? null;
 
   const resultSearchKeyword = resultSearch.trim().toLowerCase();
@@ -1782,6 +1827,11 @@ export default function Home() {
     if (!mounted) return;
     localStorage.setItem("quark_generate_count", String(generateCount));
   }, [generateCount, mounted]);
+
+  useEffect(() => {
+    if (!mounted) return;
+    localStorage.setItem("quark_medium_video_segments", String(mediumVideoSegments));
+  }, [mediumVideoSegments, mounted]);
 
   useEffect(() => {
     if (!mounted) return;
@@ -2068,7 +2118,7 @@ export default function Home() {
           一句话生成多个视频，支持批量与定时任务
         </p>
 
-        <div className={isDark ? "relative w-full max-w-4xl overflow-hidden rounded-[34px] border border-white/10 bg-white/[0.065] p-4 shadow-[0_30px_90px_rgba(0,0,0,0.42)] backdrop-blur-2xl ring-1 ring-indigo-400/10 md:p-5" : "relative w-full max-w-4xl overflow-hidden rounded-[34px] border border-white/80 bg-white/84 p-4 shadow-[0_30px_90px_rgba(79,70,229,0.18)] backdrop-blur-2xl ring-1 ring-indigo-100/70 md:p-5"}>
+        <div className={isDark ? "relative w-full max-w-5xl overflow-hidden rounded-[34px] border border-white/10 bg-white/[0.065] p-4 shadow-[0_30px_90px_rgba(0,0,0,0.42)] backdrop-blur-2xl ring-1 ring-indigo-400/10 md:p-5" : "relative w-full max-w-5xl overflow-hidden rounded-[34px] border border-white/80 bg-white/84 p-4 shadow-[0_30px_90px_rgba(79,70,229,0.18)] backdrop-blur-2xl ring-1 ring-indigo-100/70 md:p-5"}>
           <div className="absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-indigo-400/70 to-transparent" />
           <input ref={fileInputRef} type="file" accept="image/*" onChange={handleReferenceUpload} className="hidden" />
           <input ref={remixVideoInputRef} type="file" accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm" onChange={handleRemixVideoUpload} className="hidden" />
@@ -2138,6 +2188,17 @@ export default function Home() {
                 className={modeTabClass(mode === "remix")}
               >
                 <span className="mr-1 text-xs">✨</span>爆款视频复刻
+              </button>
+
+              <button
+                onClick={() => {
+                  setMode("medium_video");
+                  setDuration("12s");
+                  if (ratio === "1:1") setRatio("16:9");
+                }}
+                className={modeTabClass(mode === "medium_video")}
+              >
+                <span className="mr-1 text-xs">🎬</span>中视频
               </button>
 
               <button
@@ -2507,7 +2568,11 @@ export default function Home() {
                   </button>
                 )}
                 <div className={isDark ? "rounded-full border border-white/10 bg-white/[0.05] px-4 py-2 text-sm font-medium text-gray-300" : "rounded-full border border-sky-100 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-700 shadow-sm"}>
-                  {isImageMode ? `${imageModel === "banana2" ? "Nano Banana2" : "image2"} / ${imageSize} / ${generateCount}张` : `${duration} / ${ratio === "9:16" ? "竖屏" : "横屏"} / ${generateCount}条`}
+                  {isMediumVideoMode
+                    ? `${mediumVideoSegments * 12}s / ${mediumVideoSegments}段 / ${ratio === "9:16" ? "竖屏" : "横屏"}`
+                    : isImageMode
+                      ? `${imageModel === "banana2" ? "Nano Banana2" : "image2"} / ${imageSize} / ${generateCount}张`
+                      : `${duration} / ${ratio === "9:16" ? "竖屏" : "横屏"} / ${generateCount}条`}
                 </div>
                 <div className={isDark ? "ml-auto rounded-full border border-amber-300/20 bg-amber-300/10 px-4 py-2 text-sm font-semibold text-amber-100" : "ml-auto rounded-full border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-700 shadow-sm"}>
                   预计消耗 ¥{formatMoney(estimatedCost)}
@@ -2536,7 +2601,25 @@ export default function Home() {
                   </div>
 
                   <div className="grid gap-4 md:grid-cols-2">
-                    {!isImageMode && (
+                    {isMediumVideoMode ? (
+                      <div className="md:col-span-2">
+                        <div className={isDark ? "mb-2 text-xs font-medium text-gray-400" : "mb-2 text-xs font-medium text-gray-500"}>总时长 / 片段数</div>
+                        <div className="flex flex-wrap gap-2">
+                          {[1, 2, 3, 4, 5].map((segments) => (
+                            <button
+                              key={segments}
+                              onClick={() => setMediumVideoSegments(segments)}
+                              className={`rounded-full px-4 py-2 text-sm transition ${pillClass(mediumVideoSegments === segments)}`}
+                            >
+                              {segments * 12}秒 · {segments}段
+                            </button>
+                          ))}
+                        </div>
+                        <div className={isDark ? "mt-2 text-xs text-gray-400" : "mt-2 text-xs text-slate-500"}>
+                          中视频模式将按 12 秒一段顺序生成，最多 5 段 60 秒；每次只创建 1 个连续中视频任务。
+                        </div>
+                      </div>
+                    ) : !isImageMode && (
                       <div>
                         <div className={isDark ? "mb-2 text-xs font-medium text-gray-400" : "mb-2 text-xs font-medium text-gray-500"}>视频时长</div>
                         <div className="flex flex-wrap gap-2">
@@ -2630,20 +2713,22 @@ export default function Home() {
                       </>
                     )}
 
-                    <div>
-                      <div className={isDark ? "mb-2 text-xs font-medium text-gray-400" : "mb-2 text-xs font-medium text-gray-500"}>{isImageMode ? "生成张数" : "生成条数"}</div>
-                      <select
-                        value={generateCount}
-                        onChange={(e) => setGenerateCount(Number(e.target.value))}
-                        className={isDark ? "w-full rounded-full border border-gray-700 bg-gray-800 px-4 py-2 text-sm text-gray-100 outline-none" : "w-full rounded-full border border-gray-200 bg-gray-50 px-4 py-2 text-sm text-gray-700 outline-none"}
-                      >
-                        {Array.from({ length: 10 }, (_, i) => i + 1).map((count) => (
-                          <option key={count} value={count}>
-                            {count}{isImageMode ? "张" : "条"}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+                    {!isMediumVideoMode && (
+                      <div>
+                        <div className={isDark ? "mb-2 text-xs font-medium text-gray-400" : "mb-2 text-xs font-medium text-gray-500"}>{isImageMode ? "生成张数" : "生成条数"}</div>
+                        <select
+                          value={generateCount}
+                          onChange={(e) => setGenerateCount(Number(e.target.value))}
+                          className={isDark ? "w-full rounded-full border border-gray-700 bg-gray-800 px-4 py-2 text-sm text-gray-100 outline-none" : "w-full rounded-full border border-gray-200 bg-gray-50 px-4 py-2 text-sm text-gray-700 outline-none"}
+                        >
+                          {Array.from({ length: 10 }, (_, i) => i + 1).map((count) => (
+                            <option key={count} value={count}>
+                              {count}{isImageMode ? "张" : "条"}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
 
                     <div>
                       <div className={isDark ? "mb-2 text-xs font-medium text-gray-400" : "mb-2 text-xs font-medium text-gray-500"}>参考图状态</div>
@@ -2780,7 +2865,7 @@ export default function Home() {
                       ? "暂无失败任务"
                       : "暂无任务记录"}
               </div>
-            ) : pagedVisibleResults.map(({ item, id, taskId, mediaType, title, prompt: fromTaskPrompt, isFavorite, status, isLatestDone, cost, seconds, duration: videoDuration, upscaleStatus, upscaleErrorMessage, hasReferenceImage: taskHasRef, referenceImageName, referenceImageThumbData: taskRefThumbData, coverData, videoUrl, ratio: videoRatio, size: videoSize, imageSize: resultImageSize, imageModel, displayModel, imageModelLabel, apiModel, kind, scheduledAt, createdAt, taskStatus, agentName, isPlaceholder }) => (
+            ) : pagedVisibleResults.map(({ item, id, taskId, mediaType, title, prompt: fromTaskPrompt, isFavorite, status, isLatestDone, cost, seconds, duration: videoDuration, upscaleStatus, upscaleErrorMessage, hasReferenceImage: taskHasRef, referenceImageName, referenceImageThumbData: taskRefThumbData, coverData, videoUrl, ratio: videoRatio, size: videoSize, imageSize: resultImageSize, imageModel, displayModel, imageModelLabel, apiModel, kind, scheduledAt, createdAt, taskStatus, agentName, isPlaceholder, mediumVideo, segmentIndex, totalSegments, segmentTitle }) => (
               <div
                 key={id}
                 className={`relative p-3 text-sm ${surfaceCardClass}`}
@@ -2819,6 +2904,10 @@ export default function Home() {
                             upscaleErrorMessage,
                             hasReferenceImage: taskHasRef,
                             referenceImageName,
+                            mediumVideo,
+                            segmentIndex,
+                            totalSegments,
+                            segmentTitle,
                           });
                         }}
                         className="absolute inset-0 z-30 flex items-center justify-center play-preview-btn"
@@ -2856,6 +2945,8 @@ export default function Home() {
                           </button>
                         )}
                         {isLatestDone && <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[11px] font-semibold text-indigo-700 shadow-sm">最新完成</span>}
+                        {mediumVideo && <span className="rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-[11px] font-semibold text-violet-700 shadow-sm">中视频</span>}
+                        {mediumVideo && segmentIndex && totalSegments && <span className={softChipClass}>片段 {segmentIndex}/{totalSegments}</span>}
                       </div>
 
                       {(() => {
@@ -2884,7 +2975,7 @@ export default function Home() {
                                 textOverflow: "ellipsis",
                               }}
                             >
-                              {singleLineTitle}
+                              {mediumVideo && segmentIndex && totalSegments ? truncateTitleByHanWidth(`中视频片段 ${segmentIndex}/${totalSegments}${segmentTitle ? `：${segmentTitle.replace(/^中视频片段\s*\d+\/\d+：?/, "")}` : ""}`, 25) : singleLineTitle}
                             </p>
                             {inspirationText ? (
                               <p className={isDark ? "truncate text-xs leading-tight text-gray-400" : "truncate text-xs leading-tight text-gray-500"}>
@@ -2961,6 +3052,10 @@ export default function Home() {
                             upscaleErrorMessage,
                             hasReferenceImage: taskHasRef,
                             referenceImageName,
+                            mediumVideo,
+                            segmentIndex,
+                            totalSegments,
+                            segmentTitle,
                           });
                         }}
                         className={`w-full whitespace-nowrap text-center ${isPlaceholder ? "cursor-not-allowed rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-400" : smallSecondaryButtonClass}`}
@@ -3269,7 +3364,7 @@ export default function Home() {
                             : "暂无任务记录"}
                   </div>
                 ) : (
-                  pagedDrawerRecords.map(({ item, id, isFavorite, status, isLatestDone, cost, hasReferenceImage: taskHasRef, referenceImageName, referenceImageThumbData: taskRefThumbData, kind, scheduledAt, createdAt, totalVideos, successVideos, failedVideos, agentName, agentAccess }) => (
+                  pagedDrawerRecords.map(({ item, id, isFavorite, status, isLatestDone, cost, hasReferenceImage: taskHasRef, referenceImageName, referenceImageThumbData: taskRefThumbData, kind, scheduledAt, createdAt, totalVideos, successVideos, failedVideos, agentName, agentAccess, mode: recordMode, mediumVideoSegments: recordMediumSegments }) => (
                     <div key={id} className="flex items-start gap-2">
                       <input
                         type="checkbox"
@@ -3301,6 +3396,13 @@ export default function Home() {
                           <span className={softChipClass}>
                             作品：{totalVideos}（成功 {successVideos} / 失败 {failedVideos}）
                           </span>
+                          {recordMode === "medium_video" && (
+                            <>
+                              <span className="rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700">中视频</span>
+                              <span className={softChipClass}>片段：{recordMediumSegments ?? totalVideos}</span>
+                              <span className={softChipClass}>总时长：{(recordMediumSegments ?? totalVideos) * 12}s</span>
+                            </>
+                          )}
                           {agentName && (
                             <span className={softChipClass}>
                               智能体：{agentName}
@@ -3471,6 +3573,11 @@ export default function Home() {
                       {getUpscaleStatusLabel(previewVideo.upscaleStatus)}
                     </span>
                   )}
+                  {previewVideo.mediumVideo && (
+                    <span className="rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-[11px] font-semibold text-violet-700 shadow-sm">
+                      中视频片段 {previewVideo.segmentIndex}/{previewVideo.totalSegments}
+                    </span>
+                  )}
                 </div>
                 <button
                   onClick={() => setPreviewVideo(null)}
@@ -3585,6 +3692,11 @@ export default function Home() {
                     <span className={softChipClass}>
                       比例：{getRatioLabel(previewVideo.ratio, previewVideo.size)}
                     </span>
+                    {previewVideo.mediumVideo && (
+                      <span className={softChipClass}>
+                        片段：{previewVideo.segmentIndex}/{previewVideo.totalSegments}
+                      </span>
+                    )}
                     <span className={softChipClass}>
                       参考图：{previewVideo.hasReferenceImage ? `已添加${previewVideo.referenceImageName ? `（${previewVideo.referenceImageName}）` : ""}` : "未添加"}
                     </span>
@@ -3714,6 +3826,13 @@ export default function Home() {
                       <span className={softChipClass}>
                         类型：{detailTask.kind === "schedule" ? "定时任务" : "普通任务"}
                       </span>
+                      {detailTask.mode === "medium_video" && (
+                        <>
+                          <span className="rounded-full border border-violet-200 bg-violet-50 px-3 py-1 text-xs font-semibold text-violet-700">中视频任务</span>
+                          <span className={softChipClass}>片段数：{detailTask.mediumVideoSegments ?? detailTask.countSnapshot ?? detailVideos.length}</span>
+                          <span className={softChipClass}>总时长：{(detailTask.mediumVideoSegments ?? detailTask.countSnapshot ?? detailVideos.length) * 12}s</span>
+                        </>
+                      )}
                       <span className={softChipClass}>
                         发布时间：{formatTaskPublishTime(detailTask.createdAt)}
                       </span>
@@ -3810,6 +3929,12 @@ export default function Home() {
                                       <span className={isDark ? "rounded-full border border-emerald-300/20 bg-emerald-300/10 px-2 py-0.5 text-xs text-emerald-200" : "rounded-full border border-emerald-100 bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700"}>
                                         预览/下载：超分视频优先
                                       </span>
+                                    )}
+                                    {video.mediumVideo && (
+                                      <>
+                                        <span className="rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-xs font-semibold text-violet-700">中视频</span>
+                                        {video.segmentIndex && video.totalSegments && <span className={softChipClass}>片段 {video.segmentIndex}/{video.totalSegments}</span>}
+                                      </>
                                     )}
                                     {video.mediaType !== "image" && video.upscaleStatus === "failed" && (
                                       <button
