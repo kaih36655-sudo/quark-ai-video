@@ -21,6 +21,26 @@ export type MediumVideoSegmentPrompt = {
   prompt: string;
 };
 
+function getMediumVideoDynamicStartInstruction(params: {
+  segmentIndex: number;
+  totalSegments: number;
+  hasInitialReferenceImage?: boolean;
+}) {
+  const referenceInstruction =
+    params.segmentIndex === 1
+      ? params.hasInitialReferenceImage
+        ? "参考图仅作为首帧构图与主体一致性参考，禁止将参考图静态展示超过 0.1 秒；第一帧可与参考图一致，但下一瞬间必须立即延续动作。"
+        : "即使没有参考图，本段也必须从开头建立连续动作，不要用静态照片式开场。"
+      : "以上一段最后关键帧作为连续起点，0.0 秒立即承接上一段动作继续推进，禁止停留展示关键帧。";
+  return `动态开场要求：${referenceInstruction} 视频必须从第 0 秒立即出现主体动作、镜头推进、手部操作、环境动态或场景变化；0.0-0.3 秒内必须开始运动；禁止前 1-2 秒静态停留，禁止照片式开场，禁止 freeze frame。The input reference is only a first-frame composition reference. Do not hold it as a still image. No freeze frame. Motion must begin immediately at 0.0s.`;
+}
+
+function getMediumVideoDynamicOpeningScene(segmentIndex: number, totalSegments: number) {
+  return segmentIndex === 1
+    ? `0-1s：画面从第 0 秒立即开始动作或镜头推进，主体不静止停留，建立第 ${segmentIndex}/${totalSegments} 段的连续开场`
+    : `0-1s：立即承接上一段最后动作继续推进，不静止展示关键帧，保持第 ${segmentIndex}/${totalSegments} 段连续运动`;
+}
+
 const fallback = (params: GenerateVideoScriptParams): GenerateVideoScriptResult => {
   const base = params.theme || "短视频主题";
   const agent = params.agentName ? `，智能体：${params.agentName}` : "";
@@ -170,15 +190,21 @@ const mediumVideoFallback = (params: {
           : "承接上一段结尾，推进一个新动作或新信息，结尾自然转入下一段";
     const title = `中视频片段 ${segmentIndex}/${params.totalSegments}`;
     const scenes = [
-      `0-3s：承接${segmentIndex === 1 ? "用户主题" : `第${segmentIndex - 1}段结尾`}，主体和画面风格保持一致`,
-      `3-8s：${phase}`,
+      getMediumVideoDynamicOpeningScene(segmentIndex, params.totalSegments),
+      `1-4s：承接${segmentIndex === 1 ? "用户主题" : `第${segmentIndex - 1}段结尾`}，主体和画面风格保持一致并持续运动`,
+      `4-8s：${phase}`,
       `8-12s：保留连续动作和视觉线索，方便衔接下一段`,
     ];
+    const dynamicStartInstruction = getMediumVideoDynamicStartInstruction({
+      segmentIndex,
+      totalSegments: params.totalSegments,
+      hasInitialReferenceImage: params.hasReferenceImage,
+    });
     return {
       segmentIndex,
       title,
       scenes,
-      prompt: `这是同一条连续中视频的第 ${segmentIndex}/${params.totalSegments} 段，时长 12 秒，画面比例 ${ratioLabel}。主题：「${base}」${agent}。${phase}。必须保持主体、服装、场景、光线、镜头语言、色彩风格与其他片段连续一致；不要字幕、水印、Logo；不要让本段像独立广告，要像同一条长视频的连续片段。`,
+      prompt: `这是同一条连续中视频的第 ${segmentIndex}/${params.totalSegments} 段，时长 12 秒，画面比例 ${ratioLabel}。主题：「${base}」${agent}。${phase}。${dynamicStartInstruction} 必须保持主体、服装、场景、光线、镜头语言、色彩风格与其他片段连续一致；不要字幕、水印、Logo；不要让本段像独立广告，要像同一条长视频的连续片段。`,
     };
   });
 };
@@ -214,7 +240,7 @@ export async function generateMediumVideoSegments(params: {
           {
             role: "system",
             content:
-              "你是连续中视频分镜策划专家。必须仅返回 JSON，不要额外文本。输出 segments 数组，每个元素字段严格为 segmentIndex(number), title(string), scenes(string[]), prompt(string)。所有片段必须像同一条长视频的连续片段，主体、场景、风格、镜头语言连续一致。",
+              "你是连续中视频分镜策划专家。必须仅返回 JSON，不要额外文本。输出 segments 数组，每个元素字段严格为 segmentIndex(number), title(string), scenes(string[]), prompt(string)。所有片段必须像同一条长视频的连续片段，主体、场景、风格、镜头语言连续一致。若使用 input_reference，参考图只能作为首帧构图参考，视频必须从 0.0 秒立即运动，禁止静态停留或 freeze frame。",
           },
           {
             role: "user",
@@ -234,7 +260,11 @@ export async function generateMediumVideoSegments(params: {
 3. 上一段结尾必须能自然衔接下一段开头。
 4. 不要字幕、水印、Logo。
 5. 不要把每段写成独立广告，要像同一条长视频的连续剧情/连续展示。
-6. 每段 scenes 输出 3-5 条，包含时间段和镜头内容。`,
+6. 每段 scenes 输出 3-5 条，包含时间段和镜头内容。
+7. 动态开场要求必须写入每段 prompt：如果本段有 input_reference，参考图只作为第一帧构图与主体一致性参考，禁止静态展示参考图，禁止照片式开场，禁止 freeze frame，视频从第 0 秒立即出现主体动作、镜头推进、手部操作、主体运动或环境动态，0.0-0.3 秒内必须开始运动。
+8. 第 1 段如有用户参考图：写明“参考图仅作为第一帧视觉参考，视频开头不允许静态展示参考图，画面从第 0 秒立即开始动作。”
+9. 第 2 段及后续片段：写明“以上一段最后关键帧作为连续起点，0.0 秒立即承接上一段动作继续推进，不要停留展示关键帧。”
+10. scenes 不要写“0-2s 展示主体”这类静态描述，首条必须类似“0-1s 镜头立即推进/主体立即开始动作/手部继续操作”。`,
           },
         ],
         response_format: {
@@ -281,16 +311,26 @@ export async function generateMediumVideoSegments(params: {
     if (!content || typeof content !== "string") return mediumVideoFallback({ ...params, totalSegments });
     const parsed = JSON.parse(content) as { segments?: Partial<MediumVideoSegmentPrompt>[] };
     if (!Array.isArray(parsed.segments) || parsed.segments.length !== totalSegments) return mediumVideoFallback({ ...params, totalSegments });
-    const cleaned = parsed.segments.map((segment, index) => ({
-      segmentIndex: index + 1,
-      title: typeof segment.title === "string" && segment.title.trim() ? segment.title.trim() : `中视频片段 ${index + 1}/${totalSegments}`,
-      scenes: Array.isArray(segment.scenes) ? segment.scenes.filter((scene): scene is string => typeof scene === "string" && scene.trim().length > 0).slice(0, 5) : [],
-      prompt: typeof segment.prompt === "string" && segment.prompt.trim() ? segment.prompt.trim() : "",
-    }));
+    const cleaned = parsed.segments.map((segment, index) => {
+      const segmentIndex = index + 1;
+      const originalScenes = Array.isArray(segment.scenes)
+        ? segment.scenes.filter((scene): scene is string => typeof scene === "string" && scene.trim().length > 0)
+        : [];
+      return {
+        segmentIndex,
+        title: typeof segment.title === "string" && segment.title.trim() ? segment.title.trim() : `中视频片段 ${segmentIndex}/${totalSegments}`,
+        scenes: [getMediumVideoDynamicOpeningScene(segmentIndex, totalSegments), ...originalScenes].slice(0, 5),
+        prompt: typeof segment.prompt === "string" && segment.prompt.trim() ? segment.prompt.trim() : "",
+      };
+    });
     if (cleaned.some((segment) => segment.scenes.length < 3 || !segment.prompt)) return mediumVideoFallback({ ...params, totalSegments });
     return cleaned.map((segment) => ({
       ...segment,
-      prompt: `${segment.prompt}\n\n硬性要求：这是同一条连续中视频的第 ${segment.segmentIndex}/${totalSegments} 段；单段时长 12 秒；画面比例 ${ratioLabel}；不要字幕、水印、Logo；保持主体、场景、风格与其他片段连续一致。`,
+      prompt: `${segment.prompt}\n\n硬性要求：这是同一条连续中视频的第 ${segment.segmentIndex}/${totalSegments} 段；单段时长 12 秒；画面比例 ${ratioLabel}；${getMediumVideoDynamicStartInstruction({
+        segmentIndex: segment.segmentIndex,
+        totalSegments,
+        hasInitialReferenceImage: params.hasReferenceImage,
+      })} 不要字幕、水印、Logo；保持主体、场景、风格与其他片段连续一致。`,
     }));
   } catch {
     return mediumVideoFallback({ ...params, totalSegments });

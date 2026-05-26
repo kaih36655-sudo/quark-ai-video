@@ -108,6 +108,7 @@ const DEFAULT_PRICING: PricingConfig = {
   image2_4K: 1.5,
 };
 
+const RESULT_PAGE_SIZE = 30;
 const PAGE_SIZE = 50;
 const formatMoney = (value: unknown) => Number(value || 0).toFixed(2);
 const formatImageModelLabel = (video?: { mediaType?: "video" | "image"; imageModelLabel?: string; imageModel?: "image2" | "banana2"; displayModel?: string; apiModel?: string }) => {
@@ -1771,14 +1772,14 @@ export default function Home() {
       </div>
     );
   };
-  const resultTotalPages = Math.max(1, Math.ceil(visibleResults.length / PAGE_SIZE));
+  const resultTotalPages = Math.max(1, Math.ceil(visibleResults.length / RESULT_PAGE_SIZE));
   const drawerTotalPages = Math.max(1, Math.ceil(filteredTaskRecords.length / PAGE_SIZE));
-  const pagedVisibleResults = visibleResults.slice((resultPage - 1) * PAGE_SIZE, resultPage * PAGE_SIZE);
+  const pagedVisibleResults = visibleResults.slice((resultPage - 1) * RESULT_PAGE_SIZE, resultPage * RESULT_PAGE_SIZE);
   const pagedDrawerRecords = filteredTaskRecords.slice((drawerPage - 1) * PAGE_SIZE, drawerPage * PAGE_SIZE);
 
   useEffect(() => {
     setResultPage(1);
-  }, [resultFilter, resultSort, resultSearch, favorites.length, videos.length]);
+  }, [resultFilter, resultSort, resultSearch, mode, favorites.length, videos.length]);
 
   useEffect(() => {
     setDrawerPage(1);
@@ -2865,7 +2866,9 @@ export default function Home() {
                       ? "暂无失败任务"
                       : "暂无任务记录"}
               </div>
-            ) : pagedVisibleResults.map(({ item, id, taskId, mediaType, title, prompt: fromTaskPrompt, isFavorite, status, isLatestDone, cost, seconds, duration: videoDuration, upscaleStatus, upscaleErrorMessage, hasReferenceImage: taskHasRef, referenceImageName, referenceImageThumbData: taskRefThumbData, coverData, videoUrl, ratio: videoRatio, size: videoSize, imageSize: resultImageSize, imageModel, displayModel, imageModelLabel, apiModel, kind, scheduledAt, createdAt, taskStatus, agentName, isPlaceholder, mediumVideo, segmentIndex, totalSegments, segmentTitle }) => (
+            ) : (
+              <div className="space-y-4">
+                {pagedVisibleResults.map(({ item, id, taskId, mediaType, title, prompt: fromTaskPrompt, isFavorite, status, isLatestDone, cost, seconds, duration: videoDuration, upscaleStatus, upscaleErrorMessage, hasReferenceImage: taskHasRef, referenceImageName, referenceImageThumbData: taskRefThumbData, coverData, videoUrl, ratio: videoRatio, size: videoSize, imageSize: resultImageSize, imageModel, displayModel, imageModelLabel, apiModel, kind, scheduledAt, createdAt, taskStatus, agentName, isPlaceholder, mediumVideo, segmentIndex, totalSegments, segmentTitle }) => (
               <div
                 key={id}
                 className={`relative p-3 text-sm ${surfaceCardClass}`}
@@ -3161,8 +3164,10 @@ export default function Home() {
                   </div>
                 </div>
               </div>
-            ))}
-            {visibleResults.length > PAGE_SIZE && (
+                ))}
+              </div>
+            )}
+            {visibleResults.length > RESULT_PAGE_SIZE && (
               <div className="mt-4 flex items-center justify-end gap-2">
                 <button
                   onClick={() => setResultPage((prev) => Math.max(1, prev - 1))}
@@ -3172,7 +3177,7 @@ export default function Home() {
                   上一页
                 </button>
                 <span className={softChipClass}>
-                  第 {resultPage} / {resultTotalPages} 页
+                  第 {resultPage} / {resultTotalPages} 页 · 共 {visibleResults.length} 个作品
                 </span>
                 <button
                   onClick={() => setResultPage((prev) => Math.min(resultTotalPages, prev + 1))}
