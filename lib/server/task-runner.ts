@@ -689,42 +689,11 @@ async function executeTask(taskId: string) {
       })),
     });
 
-    if (task.referenceImageUrl) {
-      mediumVideoLog("REFERENCE_SKETCH_REQUEST", {
-        taskId: task.id,
-        hasReferenceImage: true,
-      });
-      try {
-        const sketchResult = await generateYunwuImage({
-          prompt:
-            "请基于参考图生成一张适合 Sora2 图生视频使用的动态首帧参考图。若画面中存在真实人物人脸，请仅将人脸区域处理为清晰自然的素描化/插画化效果，保持人物姿态、服装、场景、商品、构图和光线尽量不变；若画面中没有可识别真实人脸，则保持原图主体、场景和构图基本不变，只做轻微清晰化处理。参考图应保留动作瞬间、手部动作、运动趋势或可延续的姿态，适合作为视频从第 0 秒立即运动的首帧参考；不要生成海报、证件照、静态摆拍图或照片展示感画面。不要添加文字、水印、Logo，不要改变商品结构，不要改变场景类别。",
-          referenceImageUrl: task.referenceImageUrl,
-          ratio: targetRatio,
-          imageSize: "1K",
-          imageModel: "banana2",
-          maxAttempts: 2,
-          retryDelaysMs: [2000],
-          logParsedJson: false,
-        });
-        currentReferenceImageUrl = sketchResult.imageUrl;
-        mediumVideoLog("REFERENCE_SKETCH_SUCCESS", {
-          taskId: task.id,
-          outputUrl: sketchResult.imageUrl,
-        });
-      } catch (error) {
-        mediumVideoLog("REFERENCE_SKETCH_FAILED", {
-          taskId: task.id,
-          reason: stringifyUnknownError(error),
-          fallback: "original_reference",
-        });
-        currentReferenceImageUrl = task.referenceImageUrl;
-      }
-    } else {
-      mediumVideoLog("REFERENCE_SKETCH_REQUEST", {
-        taskId: task.id,
-        hasReferenceImage: false,
-      });
-    }
+    mediumVideoLog("INITIAL_REFERENCE_USED", {
+      taskId: task.id,
+      hasReferenceImage: Boolean(task.referenceImageUrl),
+      source: task.referenceImageUrl ? "original_reference" : "none",
+    });
 
     const failMediumTask = async (failedSegment: number, reason: string) => {
       await settleSuccessfulMediumCharges();
