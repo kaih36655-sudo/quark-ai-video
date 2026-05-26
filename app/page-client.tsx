@@ -10,6 +10,7 @@ type TaskStatus = "waiting" | "queued" | "running" | "success" | "failed" | "can
 type Task = {
   id: number;
   prompt: string;
+  mode?: "agent" | "normal" | "image";
   status: TaskStatus;
   createdAt: number;
   kind: "manual" | "schedule";
@@ -19,6 +20,8 @@ type Task = {
   scheduledAt?: number;
   promptSnapshot?: string;
   countSnapshot?: number;
+  duration?: string;
+  ratio?: "1:1" | "9:16" | "16:9";
   agentId?: string;
   agentName?: string;
   agentAccess?: "public" | "restricted";
@@ -168,6 +171,7 @@ export default function Home() {
   const [isDark, setIsDark] = useState(false);
 
   const [mode, setMode] = useState("agent");
+  const [showPreferences, setShowPreferences] = useState(false);
   const [agentSearch, setAgentSearch] = useState("");
   const [agentProfiles, setAgentProfiles] = useState<AgentProfile[]>(AGENT_PROFILES);
   const [pricing, setPricing] = useState<PricingConfig>(DEFAULT_PRICING);
@@ -226,11 +230,6 @@ export default function Home() {
   const scheduleTimersRef = useRef<Record<number, number>>({});
   const taskPollersRef = useRef<Record<string, number>>({});
   const storageWarningShownRef = useRef(false);
-  const promptTemplates = [
-    "新员工入职第一天手足无措，办公室搞笑短视频",
-    "老板临时加需求，全员加班到深夜的反转剧情",
-    "实习生一句话点醒团队，轻喜剧职场短视频",
-  ];
 
   useEffect(() => {
     const savedTheme = localStorage.getItem("quark_theme");
@@ -458,6 +457,7 @@ export default function Home() {
   const mapApiTaskToLocal = (task: Record<string, unknown>): Task => ({
     id: Number(task.id ?? 0),
     prompt: String(task.prompt ?? ""),
+    mode: task.mode === "agent" || task.mode === "image" ? task.mode : "normal",
     status: toTaskStatus(String(task.status ?? "success")),
     createdAt: Date.parse(String(task.createdAt ?? new Date().toISOString())),
     kind: task.scheduledAt ? "schedule" : "manual",
@@ -467,6 +467,8 @@ export default function Home() {
     scheduledAt: typeof task.scheduledAt === "string" ? Date.parse(task.scheduledAt) : undefined,
     promptSnapshot: typeof task.promptSnapshot === "string" ? task.promptSnapshot : typeof task.prompt === "string" ? task.prompt : undefined,
     countSnapshot: typeof task.count === "number" ? task.count : undefined,
+    duration: typeof task.duration === "string" ? task.duration : undefined,
+    ratio: task.ratio === "1:1" || task.ratio === "9:16" || task.ratio === "16:9" ? task.ratio : undefined,
     agentId: typeof task.agentId === "string" ? task.agentId : undefined,
     agentName: typeof task.agentName === "string" ? task.agentName : undefined,
     agentAccess: task.agentAccessType === "restricted" ? "restricted" : task.agentAccessType === "public" ? "public" : undefined,
@@ -890,7 +892,7 @@ export default function Home() {
     title?: string;
     taskId: number;
     videoUrl?: string;
-    status?: "success" | "failed";
+    status?: TaskStatus;
     mediaType?: "video" | "image";
   }) => {
     const safeName = (video.title || `task-${video.taskId}`)
@@ -1463,18 +1465,18 @@ export default function Home() {
 
   const getStatusClass = (status: TaskStatus) => {
     if (status === "waiting") {
-      return "rounded-full border border-gray-400/60 bg-gray-500/90 px-3 py-1 text-xs font-medium tracking-wide text-white";
+      return "rounded-full border border-slate-300/80 bg-slate-100 px-3 py-1 text-xs font-semibold tracking-wide text-slate-600 shadow-sm";
     }
     if (status === "queued" || status === "running") {
-      return "rounded-full border border-amber-400/70 bg-amber-500/90 px-3 py-1 text-xs font-medium tracking-wide text-white";
+      return "rounded-full border border-violet-200 bg-violet-50 px-3 py-1 text-xs font-semibold tracking-wide text-violet-700 shadow-sm";
     }
     if (status === "failed") {
-      return "rounded-full border border-rose-400/70 bg-rose-500/90 px-3 py-1 text-xs font-medium tracking-wide text-white";
+      return "rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-xs font-semibold tracking-wide text-rose-700 shadow-sm";
     }
     if (status === "cancelled") {
-      return "rounded-full border border-gray-300/70 bg-gray-400/90 px-3 py-1 text-xs font-medium tracking-wide text-white";
+      return "rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold tracking-wide text-slate-500 shadow-sm";
     }
-    return "rounded-full border border-emerald-400/70 bg-emerald-500/90 px-3 py-1 text-xs font-medium tracking-wide text-white";
+    return "rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold tracking-wide text-emerald-700 shadow-sm";
   };
 
   const taskRecords = [...tasks]
@@ -1501,7 +1503,7 @@ export default function Home() {
       };
     });
 
-  const videoRecords = [...videos]
+  const realVideoRecords = [...videos]
     .sort((a, b) => b.createdAt - a.createdAt)
     .map((video) => {
       const parentTask = tasks.find((task) => task.id === video.taskId);
@@ -1539,8 +1541,68 @@ export default function Home() {
         isFavorite: favorites.includes(video.id),
         isLatestDone: video.status === "success" && !videos.some((item) => item.status === "success" && item.createdAt > video.createdAt),
         taskStatus: parentTask?.status ?? "success",
+        isPlaceholder: false,
       };
     });
+
+  const placeholderRecords = taskRecords.flatMap((task) => {
+    if (!["waiting", "queued", "running", "failed", "cancelled"].includes(task.status)) return [];
+    const relatedVideos = videos.filter((video) => video.taskId === task.id);
+    const expectedCount = Math.max(1, task.countSnapshot ?? relatedVideos.length);
+    const missingCount = Math.max(0, expectedCount - relatedVideos.length);
+    if (missingCount === 0) return [];
+    const mediaType: "video" | "image" = task.mode === "image" ? "image" : "video";
+    const placeholderStatus: TaskStatus = task.status === "cancelled" ? "cancelled" : task.status;
+    const placeholderText =
+      placeholderStatus === "waiting"
+        ? "任务已创建，等待定时执行"
+        : placeholderStatus === "failed"
+          ? "任务生成失败，暂无作品记录"
+          : placeholderStatus === "cancelled"
+            ? "任务已取消，暂无作品记录"
+            : mediaType === "image"
+              ? "图片生成中，请稍候"
+              : "视频生成中，请稍候";
+    return Array.from({ length: missingCount }, (_, index) => ({
+      id: -1 * (task.id * 100 + index + 1),
+      taskId: task.id,
+      mediaType,
+      title: `${mediaType === "image" ? "图片" : "视频"}占位 ${index + 1}`,
+      item: placeholderText,
+      script: [] as string[],
+      promptText: task.promptSnapshot ?? task.prompt,
+      status: placeholderStatus,
+      createdAt: task.createdAt + index,
+      cost: 0,
+      seconds: mediaType === "video" ? Number((task.duration || duration).replace(/[^\d]/g, "")) || undefined : undefined,
+      duration: mediaType === "video" ? task.duration || duration : undefined,
+      upscaleStatus: mediaType === "video" ? "idle" as const : undefined,
+      upscaleErrorMessage: undefined,
+      hasReferenceImage: task.hasReferenceImage,
+      referenceImageName: task.referenceImageName,
+      referenceImageThumbData: task.referenceImageThumbData,
+      ratio: mediaType === "image" ? task.ratio || ratio as "1:1" | "9:16" | "16:9" : task.ratio === "9:16" || ratio === "9:16" ? "9:16" as const : "16:9" as const,
+      size: mediaType === "image" ? task.imageSize : undefined,
+      imageSize: task.imageSize,
+      imageModel: task.imageModel,
+      displayModel: undefined,
+      imageModelLabel: undefined,
+      apiModel: undefined,
+      coverData: undefined,
+      videoUrl: undefined,
+      kind: task.kind === "schedule" ? "schedule" : "video",
+      scheduledAt: task.scheduledAt,
+      prompt: task.prompt,
+      agentName: task.agentName,
+      isFavorite: false,
+      isLatestDone: false,
+      taskStatus: task.status,
+      isPlaceholder: true,
+    }));
+  });
+
+  const videoRecords = [...placeholderRecords, ...realVideoRecords]
+    .sort((a, b) => b.createdAt - a.createdAt);
 
   const detailTask = taskDetailId ? taskRecords.find((task) => task.id === taskDetailId) ?? null : null;
   const detailVideos = detailTask ? videoRecords.filter((video) => video.taskId === detailTask.id) : [];
@@ -1607,7 +1669,7 @@ export default function Home() {
   };
 
   const renderVideoCover = (
-    video: { id?: number; mediaType?: "video" | "image"; coverData?: string; coverUrl?: string; previewImageUrl?: string; videoUrl?: string; ratio?: "1:1" | "9:16" | "16:9"; seconds?: number; duration?: string } | null
+    video: { id?: number; mediaType?: "video" | "image"; coverData?: string; coverUrl?: string; previewImageUrl?: string; videoUrl?: string; ratio?: "1:1" | "9:16" | "16:9"; seconds?: number; duration?: string; isPlaceholder?: boolean; status?: TaskStatus } | null
   ) => {
     const finalCoverSrc = normalizeReferenceImageSrc(video?.coverData);
     const hasCover = Boolean(finalCoverSrc);
@@ -1623,7 +1685,14 @@ export default function Home() {
           </div>
         )}
         <div className="h-full w-full overflow-hidden rounded-2xl">
-          {hasCover ? (
+          {video?.isPlaceholder ? (
+            <div className={isDark ? "relative flex h-full w-full items-center justify-center overflow-hidden bg-[#17171d]" : "relative flex h-full w-full items-center justify-center overflow-hidden bg-gray-100"}>
+              <div className={isDark ? "absolute inset-0 animate-pulse bg-gradient-to-r from-[#181820] via-[#242430] to-[#181820]" : "absolute inset-0 animate-pulse bg-gradient-to-r from-gray-100 via-white to-gray-200"} />
+              <div className="relative z-10 px-2 text-center text-[10px] font-medium text-gray-500">
+                {video.status === "waiting" ? "待执行" : video.status === "failed" || video.status === "cancelled" ? "暂无作品" : video.mediaType === "image" ? "图片生成中" : "视频生成中"}
+              </div>
+            </div>
+          ) : hasCover ? (
             <img src={finalCoverSrc ?? ""} alt={video?.mediaType === "image" ? "图片封面" : "视频封面"} className="h-full w-full object-cover object-center" draggable={false} />
           ) : (
             <div className={isDark ? "flex h-full w-full items-center justify-center bg-black/35 text-[10px] text-gray-300" : "flex h-full w-full items-center justify-center bg-white/70 text-[10px] text-gray-600"}>
@@ -1823,17 +1892,54 @@ export default function Home() {
   }, [previewVideo?.id, previewVideo?.mediaType]);
 
   const pillClass = (active: boolean) =>
-    active ? "bg-black text-white" : "bg-gray-100 text-gray-700 hover:bg-gray-200";
+    active
+      ? "bg-gradient-to-r from-indigo-500 via-violet-500 to-sky-500 text-white shadow-sm shadow-indigo-200"
+      : isDark
+        ? "border border-gray-700 bg-[#18181d] text-gray-200 hover:border-indigo-500/60 hover:bg-[#20202a]"
+        : "border border-indigo-100 bg-white/85 text-slate-700 shadow-sm shadow-slate-200/50 hover:border-indigo-200 hover:bg-indigo-50/60";
+  const modeTabClass = (active: boolean) =>
+    active
+      ? "rounded-2xl bg-gradient-to-r from-indigo-500 via-violet-500 to-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-indigo-200/60 transition hover:-translate-y-0.5"
+      : isDark
+        ? "rounded-2xl border border-gray-800 bg-white/[0.04] px-4 py-2 text-sm font-medium text-gray-300 transition hover:-translate-y-0.5 hover:border-indigo-500/50 hover:bg-indigo-500/10"
+        : "rounded-2xl border border-indigo-100 bg-white/70 px-4 py-2 text-sm font-medium text-slate-600 shadow-sm transition hover:-translate-y-0.5 hover:border-indigo-200 hover:bg-indigo-50/80 hover:text-indigo-700";
+  const toolButtonClass = (active = false) =>
+    active
+      ? "rounded-full bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-indigo-200 transition hover:-translate-y-0.5 hover:bg-indigo-700"
+      : isDark
+        ? "rounded-full border border-gray-700 bg-white/[0.05] px-4 py-2 text-sm font-medium text-gray-100 transition hover:-translate-y-0.5 hover:border-indigo-400/60 hover:bg-indigo-500/10"
+        : "rounded-full border border-indigo-100 bg-white/80 px-4 py-2 text-sm font-medium text-slate-700 shadow-sm shadow-slate-200/60 transition hover:-translate-y-0.5 hover:border-indigo-200 hover:bg-indigo-50";
+  const primaryActionClass = isDark
+    ? "rounded-full bg-gradient-to-r from-indigo-400 via-violet-400 to-sky-400 px-7 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-950/40 transition hover:-translate-y-0.5 hover:brightness-110 disabled:opacity-60"
+    : "rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-sky-500 px-7 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-200/80 transition hover:-translate-y-0.5 hover:brightness-105 disabled:opacity-60";
+  const secondaryButtonClass = isDark
+    ? "rounded-full border border-gray-700 bg-white/[0.05] px-4 py-2 text-sm font-medium text-gray-100 transition hover:bg-white/[0.08]"
+    : "rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50";
+  const dangerButtonClass = isDark
+    ? "rounded-full border border-rose-900/70 bg-rose-950/30 px-3 py-1.5 text-xs font-medium text-rose-200 transition hover:bg-rose-900/50"
+    : "rounded-full border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-700 transition hover:bg-rose-100";
+  const agentTagClass = (tag: string) => {
+    if (tag.includes("视频")) return isDark ? "rounded-full border border-sky-400/20 bg-sky-400/10 px-2 py-0.5 text-[10px] font-medium text-sky-200" : "rounded-full border border-sky-100 bg-sky-50 px-2 py-0.5 text-[10px] font-medium text-sky-700";
+    if (tag.includes("图片") || tag.includes("商品图")) return isDark ? "rounded-full border border-violet-400/20 bg-violet-400/10 px-2 py-0.5 text-[10px] font-medium text-violet-200" : "rounded-full border border-violet-100 bg-violet-50 px-2 py-0.5 text-[10px] font-medium text-violet-700";
+    if (tag.includes("带货") || tag.includes("转化")) return isDark ? "rounded-full border border-amber-300/20 bg-amber-300/10 px-2 py-0.5 text-[10px] font-medium text-amber-200" : "rounded-full border border-amber-100 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700";
+    if (tag.includes("公开")) return isDark ? "rounded-full border border-emerald-300/20 bg-emerald-300/10 px-2 py-0.5 text-[10px] font-medium text-emerald-200" : "rounded-full border border-emerald-100 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700";
+    return isDark ? "rounded-full border border-slate-400/20 bg-slate-400/10 px-2 py-0.5 text-[10px] font-medium text-slate-300" : "rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-medium text-slate-600";
+  };
 
   if (!mounted) return null;
 
   return (
-    <main className={isDark ? "min-h-screen bg-[#0b0b0c] text-white" : "min-h-screen bg-[#f7f7f8] text-black"}>
+    <main className={isDark ? "relative min-h-screen overflow-hidden bg-[#090a12] text-white" : "relative min-h-screen overflow-hidden bg-gradient-to-b from-slate-50 via-white to-indigo-50 text-slate-950"}>
+      <div className="pointer-events-none absolute inset-0 -z-0">
+        <div className={isDark ? "absolute left-[-10rem] top-[-12rem] h-[30rem] w-[30rem] rounded-full bg-violet-500/18 blur-3xl" : "absolute left-[-10rem] top-[-12rem] h-[34rem] w-[34rem] rounded-full bg-violet-200/45 blur-3xl"} />
+        <div className={isDark ? "absolute right-[-12rem] top-16 h-[34rem] w-[34rem] rounded-full bg-sky-500/12 blur-3xl" : "absolute right-[-12rem] top-12 h-[34rem] w-[34rem] rounded-full bg-sky-200/45 blur-3xl"} />
+        <div className={isDark ? "absolute bottom-8 left-1/2 h-[28rem] w-[42rem] -translate-x-1/2 rounded-full bg-indigo-500/8 blur-3xl" : "absolute bottom-8 left-1/2 h-[28rem] w-[42rem] -translate-x-1/2 rounded-full bg-white/90 blur-3xl"} />
+      </div>
       <header
         className={
           isDark
-            ? "sticky top-0 z-20 border-b border-gray-800 bg-black/85 backdrop-blur"
-            : "sticky top-0 z-20 border-b border-gray-200 bg-white/85 backdrop-blur"
+            ? "sticky top-0 z-20 border-b border-white/10 bg-[#090a12]/75 shadow-sm backdrop-blur-xl"
+            : "sticky top-0 z-20 border-b border-white/70 bg-white/70 shadow-sm shadow-indigo-100/50 backdrop-blur-xl"
         }
       >
         <div className="flex items-center justify-between px-4 py-4 md:px-6">
@@ -1842,8 +1948,8 @@ export default function Home() {
             <div
               className={
                 isDark
-                  ? "flex h-10 w-10 items-center justify-center rounded-2xl bg-white text-sm font-bold text-black shadow-sm"
-                  : "flex h-10 w-10 items-center justify-center rounded-2xl bg-black text-sm font-bold text-white shadow-sm"
+                  ? "flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-300 via-violet-300 to-sky-300 text-sm font-bold text-black shadow-lg shadow-indigo-950/30"
+                  : "flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 via-violet-500 to-sky-500 text-sm font-bold text-white shadow-lg shadow-indigo-200/80"
               }
             >
               QK
@@ -1858,17 +1964,13 @@ export default function Home() {
           <div className="flex items-center gap-2 md:gap-3">
             <button
               onClick={toggleTheme}
-              className={
-                isDark
-                  ? "rounded-full bg-gray-800 px-4 py-2 text-sm font-medium text-white"
-                  : "rounded-full bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700"
-              }
+              className={toolButtonClass()}
             >
               {isDark ? "☀️" : "🌙"}
             </button>
             {isLoggedIn ? (
               <>
-                <div className={isDark ? "rounded-full bg-gray-800 px-4 py-2 text-sm font-medium text-gray-100" : "rounded-full bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700"}>
+                <div className={isDark ? "rounded-full border border-emerald-400/20 bg-emerald-400/10 px-4 py-2 text-sm font-semibold text-emerald-100" : "rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 shadow-sm"}>
                   余额 ¥{balance}
                 </div>
 
@@ -1876,22 +1978,14 @@ export default function Home() {
                   href="https://work.weixin.qq.com/ca/cawcde87c5c2d49c7f"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className={
-                    isDark
-                      ? "rounded-full bg-gray-800 px-4 py-2 text-sm font-medium text-gray-100"
-                      : "rounded-full bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700"
-                  }
+                  className={toolButtonClass()}
                 >
                   充值
                 </a>
 
                 <button
                   onClick={() => setIsTaskDrawerOpen(true)}
-                  className={
-                    isDark
-                      ? "rounded-full bg-gray-800 px-4 py-2 text-sm font-medium text-gray-100"
-                      : "rounded-full bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700"
-                  }
+                  className={toolButtonClass()}
                 >
                   任务记录 {tasks.length > 0 ? `(${tasks.length})` : ""}
                 </button>
@@ -1899,11 +1993,7 @@ export default function Home() {
                 {currentUserRole === "admin" && (
                   <button
                     onClick={() => router.push("/admin")}
-                    className={
-                      isDark
-                        ? "rounded-full bg-gray-800 px-4 py-2 text-sm font-medium text-gray-100"
-                        : "rounded-full bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700"
-                    }
+                    className={toolButtonClass()}
                   >
                     管理后台
                   </button>
@@ -1918,7 +2008,7 @@ export default function Home() {
 
                 <button
                   onClick={handleLogout}
-                  className={isDark ? "rounded-full bg-white px-6 py-2 text-sm font-medium text-black" : "rounded-full bg-black px-6 py-2 text-sm font-medium text-white"}
+                  className={secondaryButtonClass}
                 >
                   退出登录
                 </button>
@@ -1927,14 +2017,14 @@ export default function Home() {
               <>
                 <button
                   onClick={() => router.push("/login")}
-                  className={isDark ? "rounded-full bg-gray-800 px-6 py-2 text-sm font-medium text-gray-100" : "rounded-full bg-gray-100 px-6 py-2 text-sm font-medium text-gray-700"}
+                  className={secondaryButtonClass}
                 >
                   登录
                 </button>
 
                 <button
                   onClick={() => router.push("/register")}
-                  className={isDark ? "rounded-full bg-white px-6 py-2 text-sm font-medium text-black" : "rounded-full bg-black px-6 py-2 text-sm font-medium text-white"}
+                  className={primaryActionClass}
                 >
                   注册
                 </button>
@@ -1944,15 +2034,16 @@ export default function Home() {
         </div>
       </header>
 
-      <section className="mx-auto flex max-w-7xl flex-col items-center px-4 pb-16 pt-16 md:px-6 md:pt-20">
-        <h1 className="mb-3 text-4xl font-semibold tracking-tight md:text-5xl">
-          批量视频生成 Agent
+      <section className="relative z-10 mx-auto flex max-w-7xl flex-col items-center px-4 pb-16 pt-14 md:px-6 md:pt-18">
+        <h1 className="mb-3 text-center text-4xl font-semibold tracking-tight md:text-5xl">
+          批量视频生成 <span className="bg-gradient-to-r from-indigo-500 via-violet-500 to-sky-500 bg-clip-text text-transparent">Agent</span>
         </h1>
         <p className={isDark ? "mb-8 text-sm text-gray-400 md:text-base" : "mb-8 text-sm text-gray-500 md:text-base"}>
           一句话生成多个视频，支持批量与定时任务
         </p>
 
-        <div className={isDark ? "w-full max-w-4xl rounded-[28px] border border-gray-800 bg-[#121214] p-4 shadow-sm md:p-5" : "w-full max-w-4xl rounded-[28px] border border-gray-200 bg-white p-4 shadow-sm md:p-5"}>
+        <div className={isDark ? "relative w-full max-w-4xl overflow-hidden rounded-[34px] border border-white/10 bg-white/[0.065] p-4 shadow-[0_30px_90px_rgba(0,0,0,0.42)] backdrop-blur-2xl ring-1 ring-indigo-400/10 md:p-5" : "relative w-full max-w-4xl overflow-hidden rounded-[34px] border border-white/80 bg-white/84 p-4 shadow-[0_30px_90px_rgba(79,70,229,0.18)] backdrop-blur-2xl ring-1 ring-indigo-100/70 md:p-5"}>
+          <div className="absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-indigo-400/70 to-transparent" />
           <input ref={fileInputRef} type="file" accept="image/*" onChange={handleReferenceUpload} className="hidden" />
           <input ref={remixVideoInputRef} type="file" accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm" onChange={handleRemixVideoUpload} className="hidden" />
           <textarea
@@ -1960,15 +2051,15 @@ export default function Home() {
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             placeholder={isRemixMode ? "上传参考视频并分析后，AI 会在这里填入适用于 Sora2 的复刻提示词..." : "输入你的创意，例如：新员工入职手足无措，生成 3 条搞笑办公室短视频..."}
-            className={isDark ? "h-44 w-full resize-none rounded-2xl border border-gray-800 bg-[#18181b] p-5 text-sm leading-6 outline-none placeholder:text-gray-500 md:h-48" : "h-44 w-full resize-none rounded-2xl border border-gray-200 bg-gray-50 p-5 text-sm leading-6 outline-none placeholder:text-gray-400 md:h-48"}
+            className={isDark ? "h-40 w-full resize-none rounded-[26px] border border-white/10 bg-[#12131b]/82 p-5 text-sm leading-6 text-gray-100 outline-none ring-0 transition focus:border-indigo-400/70 focus:shadow-[0_0_0_5px_rgba(99,102,241,0.13)] placeholder:text-gray-500 md:h-44" : "h-40 w-full resize-none rounded-[26px] border border-indigo-100 bg-slate-50/70 p-5 text-sm leading-6 text-slate-800 outline-none ring-0 transition focus:border-indigo-300 focus:bg-white focus:shadow-[0_0_0_5px_rgba(99,102,241,0.13)] placeholder:text-slate-400 md:h-44"}
           />
           <div className="mt-2 flex justify-end">
             <button
               onClick={() => setPrompt("")}
               className={
                 isDark
-                  ? "rounded-full bg-gray-800 px-4 py-2 text-xs text-gray-200"
-                  : "rounded-full bg-gray-100 px-4 py-2 text-xs text-gray-700"
+                  ? "rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs text-gray-300 transition hover:bg-white/[0.08]"
+                  : "rounded-full border border-transparent bg-transparent px-3 py-1.5 text-xs font-medium text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
               }
             >
               清空输入
@@ -1977,29 +2068,9 @@ export default function Home() {
 
           <div className="mt-4 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-2">
-                {!isRemixMode && (
-                  <button
-                    onClick={handleToggleReferenceImage}
-                    className={
-                      hasReferenceImage
-                        ? isDark
-                          ? "rounded-full bg-white px-4 py-2 text-sm font-medium text-black"
-                          : "rounded-full bg-black px-4 py-2 text-sm font-medium text-white"
-                        : isDark
-                          ? "rounded-full bg-gray-800 px-4 py-2 text-sm font-medium text-gray-100"
-                          : "rounded-full bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700"
-                    }
-                  >
-                    {hasReferenceImage ? "已添加参考图" : "上传参考图"}
-                  </button>
-                )}
-
-                <div className={isDark ? "rounded-full bg-gray-800 px-4 py-2 text-sm text-gray-100" : "rounded-full bg-gray-100 px-4 py-2 text-sm text-gray-700"}>
-                  {isRemixMode ? "复刻视频模式" : isImageMode ? "图像模式" : "视频模式"}
-                </div>
+              <div className={isDark ? "rounded-full bg-gray-800 px-4 py-2 text-sm text-gray-100" : "rounded-full bg-gray-100 px-4 py-2 text-sm text-gray-700"}>
+                {modeLabel}
               </div>
-
               <div className={isDark ? "text-sm text-gray-400" : "text-sm text-gray-500"}>
                 已输入 {prompt.length} 字 {prompt.length === 0 ? "｜建议先输入提示词" : "｜可直接开始生成"}
               </div>
@@ -2026,23 +2097,7 @@ export default function Home() {
               </div>
             )}
 
-            <div className="flex flex-wrap items-center gap-2">
-              {promptTemplates.map((template) => (
-                <button
-                  key={template}
-                  onClick={() => setPrompt(template)}
-                  className={
-                    isDark
-                      ? "rounded-full bg-gray-800 px-4 py-2 text-xs text-gray-200"
-                      : "rounded-full bg-gray-100 px-4 py-2 text-xs text-gray-700"
-                  }
-                >
-                  {template}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3">
+            <div className={isDark ? "flex flex-wrap items-center gap-2 rounded-[24px] border border-white/10 bg-white/[0.045] p-1.5 shadow-inner shadow-black/20" : "flex flex-wrap items-center gap-1.5 rounded-[24px] border border-white/80 bg-slate-100/80 p-1.5 shadow-inner shadow-white/90"}>
               <button
                 onClick={() => {
                   setMode("remix");
@@ -2054,9 +2109,9 @@ export default function Home() {
                   setRemixGeneratedReferenceImageUrl(null);
                   if (ratio === "1:1") setRatio("16:9");
                 }}
-                className={`rounded-full px-4 py-2 text-sm transition ${pillClass(mode === "remix")}`}
+                className={modeTabClass(mode === "remix")}
               >
-                爆款视频复刻
+                <span className="mr-1 text-xs">✨</span>爆款视频复刻
               </button>
 
               <button
@@ -2065,9 +2120,9 @@ export default function Home() {
                   setSelectedAgentId(null);
                   if (ratio === "1:1") setRatio("16:9");
                 }}
-                className={`rounded-full px-4 py-2 text-sm transition ${pillClass(mode === "agent")}`}
+                className={modeTabClass(mode === "agent")}
               >
-                智能体批量视频
+                <span className="mr-1 text-xs">🤖</span>智能体批量视频
               </button>
 
               <button
@@ -2076,9 +2131,9 @@ export default function Home() {
                   setSelectedAgentId(null);
                   if (ratio === "1:1") setRatio("16:9");
                 }}
-                className={`rounded-full px-4 py-2 text-sm transition ${pillClass(mode === "normal")}`}
+                className={modeTabClass(mode === "normal")}
               >
-                通用视频
+                <span className="mr-1 text-xs">🎞️</span>通用视频
               </button>
 
               <button
@@ -2086,9 +2141,9 @@ export default function Home() {
                   setMode("agent_image");
                   setSelectedAgentId(null);
                 }}
-                className={`rounded-full px-4 py-2 text-sm transition ${pillClass(mode === "agent_image")}`}
+                className={modeTabClass(mode === "agent_image")}
               >
-                智能体批量图片
+                <span className="mr-1 text-xs">🧠</span>智能体批量图片
               </button>
 
               <button
@@ -2096,17 +2151,17 @@ export default function Home() {
                   setMode("image");
                   setSelectedAgentId(null);
                 }}
-                className={`rounded-full px-4 py-2 text-sm transition ${pillClass(mode === "image")}`}
+                className={modeTabClass(mode === "image")}
               >
-                通用图片
+                <span className="mr-1 text-xs">🖼️</span>通用图片
               </button>
             </div>
 
             {isRemixMode && (
-              <div className={isDark ? "rounded-2xl border border-gray-800 bg-[#18181b] p-4" : "rounded-2xl border border-gray-200 bg-gray-50 p-4"}>
+              <div className={isDark ? "rounded-3xl border border-violet-400/20 bg-violet-400/[0.04] p-4 shadow-sm" : "rounded-3xl border border-violet-100 bg-violet-50/60 p-4 shadow-sm shadow-violet-100/60"}>
                 <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <div className="text-sm font-semibold">上传参考视频</div>
+                    <div className="text-sm font-semibold">爆款视频复刻</div>
                     <p className={isDark ? "mt-1 max-w-2xl text-xs leading-5 text-gray-400" : "mt-1 max-w-2xl text-xs leading-5 text-gray-500"}>
                       上传参考视频，AI 将分析镜头节奏、画面风格、人物动作和叙事结构，生成适用于 Sora2 的复刻提示词。
                     </p>
@@ -2117,21 +2172,18 @@ export default function Home() {
                   <button
                     onClick={() => remixVideoInputRef.current?.click()}
                     disabled={remixAnalysisLoading || remixReferenceImageLoading}
-                    className={
-                      remixAnalysisLoading || remixReferenceImageLoading
-                        ? "cursor-not-allowed rounded-full bg-gray-300 px-4 py-2 text-sm font-medium text-gray-500"
-                        : isDark
-                          ? "rounded-full bg-white px-4 py-2 text-sm font-medium text-black"
-                          : "rounded-full bg-black px-4 py-2 text-sm font-medium text-white"
-                    }
+                    className={`${toolButtonClass(Boolean(remixVideoFile))} disabled:cursor-not-allowed disabled:opacity-60`}
                   >
                     选择参考视频
                   </button>
                 </div>
 
                 {remixVideoFile ? (
-                  <div className={isDark ? "mb-3 rounded-2xl border border-gray-700 bg-[#141417] p-3 text-sm text-gray-200" : "mb-3 rounded-2xl border border-gray-200 bg-white p-3 text-sm text-gray-700"}>
+                  <div className={isDark ? "mb-3 rounded-2xl border border-violet-400/20 bg-[#14151d] p-3 text-sm text-gray-200 shadow-sm" : "mb-3 rounded-2xl border border-violet-100 bg-white/90 p-3 text-sm text-slate-700 shadow-sm"}>
                     <div className="flex flex-wrap items-center gap-3">
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 via-violet-500 to-sky-500 text-sm font-bold text-white shadow-md shadow-indigo-200">
+                        MP4
+                      </div>
                       <div className="min-w-0 flex-1">
                         <div className="truncate font-medium">{remixVideoFile.name}</div>
                         <div className={isDark ? "mt-1 text-xs text-gray-400" : "mt-1 text-xs text-gray-500"}>
@@ -2142,16 +2194,21 @@ export default function Home() {
                       <button
                         onClick={handleRemoveRemixVideo}
                         disabled={remixAnalysisLoading || remixReferenceImageLoading}
-                        className={isDark ? "rounded-full bg-gray-700 px-3 py-1.5 text-xs text-gray-100" : "rounded-full bg-gray-100 px-3 py-1.5 text-xs text-gray-700"}
+                        className={dangerButtonClass}
                       >
                         移除
                       </button>
                     </div>
                   </div>
                 ) : (
-                  <div className={isDark ? "mb-3 rounded-2xl border border-dashed border-gray-700 p-4 text-sm text-gray-400" : "mb-3 rounded-2xl border border-dashed border-gray-300 p-4 text-sm text-gray-500"}>
-                    还未上传参考视频，请先选择文件后点击分析。
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => remixVideoInputRef.current?.click()}
+                    className={isDark ? "mb-3 flex w-full items-center justify-center gap-3 rounded-2xl border border-dashed border-violet-400/35 bg-white/[0.03] p-5 text-sm text-gray-300 transition hover:border-violet-300/60 hover:bg-violet-400/10" : "mb-3 flex w-full items-center justify-center gap-3 rounded-2xl border border-dashed border-violet-200 bg-white/70 p-5 text-sm text-slate-600 transition hover:border-violet-300 hover:bg-white"}
+                  >
+                    <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 via-violet-500 to-sky-500 text-white shadow-md shadow-indigo-200">↥</span>
+                    <span>还未上传参考视频，请先选择文件后点击分析。</span>
+                  </button>
                 )}
 
                 <label className="mb-3 block">
@@ -2163,8 +2220,8 @@ export default function Home() {
                     placeholder="例如：保持原视频卖点结构，但改成更适合小红书风格"
                     className={
                       isDark
-                        ? "w-full rounded-xl border border-gray-700 bg-[#141417] px-3 py-2 text-sm text-gray-100 outline-none placeholder:text-gray-500 disabled:opacity-60"
-                        : "w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 outline-none placeholder:text-gray-400 disabled:opacity-60"
+                      ? "w-full rounded-2xl border border-white/10 bg-[#14151d] px-3 py-2 text-sm text-gray-100 outline-none transition focus:border-violet-400/60 placeholder:text-gray-500 disabled:opacity-60"
+                      : "w-full rounded-2xl border border-violet-100 bg-white/90 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-violet-300 placeholder:text-slate-400 disabled:opacity-60"
                     }
                   />
                   <span className={isDark ? "mt-1 block text-[11px] text-gray-500" : "mt-1 block text-[11px] text-gray-400"}>
@@ -2180,8 +2237,8 @@ export default function Home() {
                     disabled={remixAnalysisLoading || remixReferenceImageLoading}
                     className={
                       isDark
-                        ? "w-full rounded-xl border border-gray-700 bg-[#141417] px-3 py-2 text-sm text-gray-100 outline-none disabled:opacity-60"
-                        : "w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 outline-none disabled:opacity-60"
+                      ? "w-full rounded-2xl border border-white/10 bg-[#14151d] px-3 py-2 text-sm text-gray-100 outline-none transition focus:border-violet-400/60 disabled:opacity-60"
+                      : "w-full rounded-2xl border border-violet-100 bg-white/90 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-violet-300 disabled:opacity-60"
                     }
                   >
                     <option value="zh">中文</option>
@@ -2190,7 +2247,7 @@ export default function Home() {
                   </select>
                 </label>
 
-                <label className={isDark ? "mb-3 flex items-start gap-2 rounded-2xl border border-gray-700 bg-[#141417] p-3 text-sm text-gray-200" : "mb-3 flex items-start gap-2 rounded-2xl border border-gray-200 bg-white p-3 text-sm text-gray-700"}>
+                <label className={isDark ? "mb-3 flex items-start gap-3 rounded-2xl border border-violet-400/20 bg-[#14151d] p-3 text-sm text-gray-200 shadow-sm" : "mb-3 flex items-start gap-3 rounded-2xl border border-violet-100 bg-white/90 p-3 text-sm text-slate-700 shadow-sm"}>
                   <input
                     type="checkbox"
                     checked={remixGenerateReferenceImage}
@@ -2210,13 +2267,7 @@ export default function Home() {
                   <button
                     onClick={handleAnalyzeRemixVideo}
                     disabled={remixAnalysisLoading || remixReferenceImageLoading}
-                    className={
-                      remixAnalysisLoading || remixReferenceImageLoading
-                        ? "cursor-not-allowed rounded-full bg-gray-300 px-4 py-2 text-sm font-medium text-gray-500"
-                        : isDark
-                          ? "rounded-full bg-white px-4 py-2 text-sm font-medium text-black"
-                          : "rounded-full bg-black px-4 py-2 text-sm font-medium text-white"
-                    }
+                    className={primaryActionClass}
                   >
                     {remixAnalysisLoading ? (
                       <span className="inline-flex items-center gap-2">
@@ -2243,14 +2294,14 @@ export default function Home() {
                 )}
 
                 {(remixGeneratedReferenceImageUrl || (hasReferenceImage && referenceImageData)) ? (
-                  <div className={isDark ? "mt-3 rounded-2xl border border-gray-700 bg-[#141417] p-3 text-sm text-gray-200" : "mt-3 rounded-2xl border border-gray-200 bg-white p-3 text-sm text-gray-700"}>
+                  <div className={isDark ? "mt-3 rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.05] p-3 text-sm text-gray-200" : "mt-3 rounded-2xl border border-emerald-100 bg-emerald-50/80 p-3 text-sm text-slate-700"}>
                     <div className="flex flex-wrap items-center gap-3">
                       <img src={remixGeneratedReferenceImageUrl || referenceImageData || ""} alt="复刻参考图" className={ratio === "9:16" ? "h-24 w-16 rounded-xl object-cover" : "h-16 w-28 rounded-xl object-cover"} />
                       <div className="min-w-0 flex-1">
                         <div className="text-sm font-medium">{remixGeneratedReferenceImageUrl ? "原视频参考图已生成" : "已添加参考图"}</div>
                         <div className={isDark ? "mt-1 text-xs text-gray-400" : "mt-1 text-xs text-gray-500"}>开始生成时会作为 Sora2 图生视频参考图使用。</div>
                       </div>
-                      <button onClick={handleRemoveReferenceImage} className={isDark ? "rounded-full bg-gray-700 px-3 py-1.5 text-xs text-gray-100" : "rounded-full bg-gray-100 px-3 py-1.5 text-xs text-gray-700"}>
+                      <button onClick={handleRemoveReferenceImage} className={dangerButtonClass}>
                         移除
                       </button>
                     </div>
@@ -2260,7 +2311,7 @@ export default function Home() {
                     <button
                       onClick={handleToggleReferenceImage}
                       disabled={remixAnalysisLoading || remixReferenceImageLoading}
-                      className={isDark ? "rounded-full bg-gray-700 px-3 py-1.5 text-xs text-gray-100 disabled:opacity-50" : "rounded-full bg-white px-3 py-1.5 text-xs text-gray-700 disabled:opacity-50"}
+                      className={`${secondaryButtonClass} disabled:opacity-50`}
                     >
                       手动上传参考图
                     </button>
@@ -2268,14 +2319,14 @@ export default function Home() {
                 )}
 
                 {remixAnalysisResult && (
-                  <div className={isDark ? "mt-4 rounded-2xl border border-emerald-500/40 bg-emerald-950/20 p-4 text-sm text-gray-200" : "mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-gray-700"}>
+                  <div className={isDark ? "mt-4 rounded-3xl border border-emerald-400/30 bg-emerald-400/[0.06] p-4 text-sm text-gray-200 shadow-sm" : "mt-4 rounded-3xl border border-emerald-100 bg-gradient-to-br from-emerald-50 via-white to-sky-50 p-4 text-sm text-slate-700 shadow-md shadow-emerald-100/70"}>
                     <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                       <div className="text-base font-semibold">AI复刻提示词已生成</div>
                       <div className="flex flex-wrap gap-2">
-                        <button onClick={handleUseRemixPrompt} className={isDark ? "rounded-full bg-white px-3 py-1.5 text-xs font-medium text-black" : "rounded-full bg-black px-3 py-1.5 text-xs font-medium text-white"}>
+                        <button onClick={handleUseRemixPrompt} className={primaryActionClass}>
                           使用此提示词
                         </button>
-                        <button onClick={handleCopyRemixPrompt} className={isDark ? "rounded-full bg-gray-700 px-3 py-1.5 text-xs font-medium text-gray-100" : "rounded-full bg-white px-3 py-1.5 text-xs font-medium text-gray-700"}>
+                        <button onClick={handleCopyRemixPrompt} className={secondaryButtonClass}>
                           复制提示词
                         </button>
                       </div>
@@ -2298,23 +2349,26 @@ export default function Home() {
             )}
 
             {isAgentMode && (
-              <div className={isDark ? "rounded-2xl border border-gray-800 bg-[#18181b] p-3" : "rounded-2xl border border-gray-200 bg-gray-50 p-3"}>
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                  <div className="text-sm font-semibold">{mode === "agent_image" ? "选择图片智能体" : "选择视频智能体"}</div>
+              <div id="agent-picker" className={isDark ? "rounded-[28px] border border-indigo-400/15 bg-white/[0.045] p-4 shadow-lg shadow-black/20" : "rounded-[28px] border border-white/80 bg-white/78 p-4 shadow-lg shadow-indigo-100/70 backdrop-blur"}>
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-semibold">{mode === "agent_image" ? "选择图片智能体" : "选择视频智能体"}</div>
+                    <div className={isDark ? "mt-1 text-xs text-gray-400" : "mt-1 text-xs text-slate-500"}>智能体会将固定创作策略叠加到你的提示词中。</div>
+                  </div>
                   {selectedAgent && selectedAgentApplicable ? (
                     <div className="flex items-center gap-2">
-                      <span className={isDark ? "rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-200" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>
-                        当前已选：{selectedAgent.name}
+                      <span className={isDark ? "rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1 text-xs font-semibold text-emerald-200" : "rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700"}>
+                        已选：{selectedAgent.name}
                       </span>
                       <button
                         onClick={() => setSelectedAgentId(null)}
-                        className={isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100 transition hover:brightness-110" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700 transition hover:brightness-95"}
+                        className={secondaryButtonClass}
                       >
                         取消选择
                       </button>
                     </div>
                   ) : (
-                    <span className={isDark ? "text-xs text-gray-400" : "text-xs text-gray-500"}>请选择 1 个智能体</span>
+                    <span className={isDark ? "rounded-full border border-slate-400/20 bg-slate-400/10 px-3 py-1 text-xs font-medium text-slate-300" : "rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600"}>请选择 1 个智能体</span>
                   )}
                 </div>
 
@@ -2324,12 +2378,12 @@ export default function Home() {
                   placeholder="搜索智能体，例如：煤炉 / 餐饮 / 带货"
                   className={
                     isDark
-                      ? "mb-2 w-full rounded-xl border border-gray-700 bg-[#141417] px-3 py-2 text-xs text-gray-100 outline-none placeholder:text-gray-500"
-                      : "mb-2 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs text-gray-700 outline-none placeholder:text-gray-400"
+                      ? "mb-3 w-full rounded-2xl border border-white/10 bg-[#12131b]/80 px-4 py-2.5 text-xs text-gray-100 outline-none transition focus:border-indigo-400/60 focus:shadow-[0_0_0_4px_rgba(99,102,241,0.12)] placeholder:text-gray-500"
+                      : "mb-3 w-full rounded-2xl border border-indigo-100 bg-white/85 px-4 py-2.5 text-xs text-slate-700 shadow-sm outline-none transition focus:border-indigo-300 focus:shadow-[0_0_0_4px_rgba(99,102,241,0.12)] placeholder:text-slate-400"
                   }
                 />
 
-                <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                   {visibleAgents.map((agent) => {
                     const isSelected = selectedAgentId === agent.id;
                     const isRestrictedLocked = agent.access === "restricted" && !agent.isAuthorized;
@@ -2348,29 +2402,38 @@ export default function Home() {
                         className={
                           isSelected
                             ? isDark
-                              ? "rounded-xl border border-white/60 bg-[#202028] p-2.5 text-left transition"
-                              : "rounded-xl border border-black/70 bg-white p-2.5 text-left transition"
+                              ? "relative overflow-hidden rounded-[22px] border border-indigo-300/70 bg-gradient-to-br from-indigo-400/12 via-white/[0.05] to-sky-400/10 p-4 text-left shadow-xl shadow-indigo-950/30 ring-2 ring-indigo-400/20 transition-all duration-200"
+                              : "relative overflow-hidden rounded-[22px] border border-indigo-200 bg-gradient-to-br from-indigo-50 via-white to-sky-50 p-4 text-left shadow-xl shadow-indigo-100/80 ring-2 ring-indigo-100 transition-all duration-200"
                             : isRestrictedLocked
                               ? isDark
-                                ? "rounded-xl border border-gray-800 bg-[#151519] p-2.5 text-left opacity-65 transition"
-                                : "rounded-xl border border-gray-200 bg-white p-2.5 text-left opacity-70 transition"
+                                ? "relative overflow-hidden rounded-[22px] border border-gray-800 bg-[#151519] p-4 text-left opacity-55 transition"
+                                : "relative overflow-hidden rounded-[22px] border border-slate-200/80 bg-white/70 p-4 text-left opacity-60 transition"
                             : isDark
-                              ? "rounded-xl border border-gray-700 bg-[#151519] p-2.5 text-left transition hover:border-gray-600 hover:bg-[#1a1a1f]"
-                              : "rounded-xl border border-gray-200 bg-white p-2.5 text-left transition hover:border-gray-300 hover:bg-gray-50"
+                              ? "relative cursor-pointer overflow-hidden rounded-[22px] border border-gray-700 bg-[#151519] p-4 text-left shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-indigo-400/50 hover:bg-[#1a1b24] hover:shadow-lg hover:shadow-indigo-950/20"
+                              : "relative cursor-pointer overflow-hidden rounded-[22px] border border-slate-200/80 bg-gradient-to-br from-white via-white to-slate-50 p-4 text-left shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-indigo-200 hover:bg-white hover:shadow-lg hover:shadow-indigo-100/60"
                         }
                       >
-                        <div className="mb-1 flex items-center justify-between gap-2">
-                          <span className="text-sm font-medium">{agent.name}</span>
-                          {lockIcon ? <span className="text-xs">{lockIcon}</span> : null}
+                        <div className="mb-3 flex items-start justify-between gap-3">
+                          <div className="flex items-center gap-2">
+                            <span className={isSelected ? "h-2.5 w-2.5 rounded-full bg-gradient-to-r from-indigo-500 to-sky-500 shadow-[0_0_14px_rgba(99,102,241,0.75)]" : isRestrictedLocked ? "h-2.5 w-2.5 rounded-full bg-slate-300" : "h-2.5 w-2.5 rounded-full bg-gradient-to-r from-sky-400 to-violet-400 shadow-[0_0_10px_rgba(56,189,248,0.45)]"} />
+                            <span className="text-sm font-semibold">{agent.name}</span>
+                          </div>
+                          {isSelected ? (
+                            <span className="rounded-full bg-gradient-to-r from-indigo-500 to-sky-500 px-2 py-0.5 text-[10px] font-semibold text-white shadow-sm">已选 ✓</span>
+                          ) : isRestrictedLocked ? (
+                            <span className="rounded-full border border-rose-100 bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-600">🔒 需授权</span>
+                          ) : lockIcon ? (
+                            <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-medium text-slate-600">{lockIcon}</span>
+                          ) : null}
                         </div>
-                        <div className={isDark ? "mb-2 text-xs text-gray-400" : "mb-2 text-xs text-gray-500"}>{agent.description}</div>
+                        <div className={isDark ? "mb-3 text-xs leading-5 text-gray-400" : "mb-3 text-xs leading-5 text-slate-500"}>{isRestrictedLocked ? `${agent.description} 后台授权后可用。` : agent.description}</div>
                         <div className="flex flex-wrap items-center gap-1">
                           {agent.tags.slice(0, 2).map((tag) => (
-                            <span key={tag} className={isDark ? "rounded-full bg-gray-800 px-2 py-0.5 text-[10px] text-gray-300" : "rounded-full bg-gray-100 px-2 py-0.5 text-[10px] text-gray-600"}>
+                            <span key={tag} className={agentTagClass(tag)}>
                               {tag}
                             </span>
                           ))}
-                          <span className={isDark ? "rounded-full bg-gray-700 px-2 py-0.5 text-[10px] text-gray-200" : "rounded-full bg-gray-100 px-2 py-0.5 text-[10px] text-gray-600"}>
+                          <span className={agent.access === "public" ? agentTagClass("公开") : agent.isAuthorized ? agentTagClass("授权") : "rounded-full border border-rose-100 bg-rose-50 px-2 py-0.5 text-[10px] font-medium text-rose-600"}>
                             {agent.access === "public" ? "公开" : agent.isAuthorized ? "已授权" : "需授权"}
                           </span>
                         </div>
@@ -2384,204 +2447,235 @@ export default function Home() {
               </div>
             )}
 
-            <div className="flex flex-wrap items-center gap-3">
-              {!isImageMode &&
-                ["4s", "8s", "12s"].map((item) => (
+            <div className={isDark ? "rounded-3xl border border-white/10 bg-[#11121a]/80 p-3 shadow-inner shadow-black/20" : "rounded-3xl border border-indigo-100 bg-white/70 p-3 shadow-sm shadow-indigo-100/60"}>
+              <div className="flex flex-wrap items-center gap-2">
+                {!isRemixMode && (
                   <button
-                    key={item}
-                    onClick={() => {
-                      setDuration(item);
-                      if (isRemixMode) setRemixAnalysisResult(null);
-                    }}
-                    className={`rounded-full px-4 py-2 text-sm transition ${pillClass(duration === item)}`}
+                    onClick={handleToggleReferenceImage}
+                    className={toolButtonClass(hasReferenceImage)}
                   >
-                    {item}
+                    {hasReferenceImage ? "参考图已添加" : "上传参考图"}
                   </button>
-                ))}
-
-              {[
-                ...(isImageMode ? [{ label: "1:1方屏", value: "1:1" }] : []),
-                { label: "9:16竖屏", value: "9:16" },
-                { label: "16:9横屏", value: "16:9" },
-              ].map((item) => {
-                const disabled = isImageMode && imageModel === "image2" && ((item.value === "9:16" && imageSize === "2K") || (item.value === "1:1" && imageSize === "4K"));
-                return (
+                )}
+                {isRemixMode && (
                   <button
-                    key={item.value}
-                    onClick={() => {
-                      if (disabled) {
-                        showToast("image2模型暂不支持该比例/分辨率组合");
-                        return;
-                      }
-                      setRatio(item.value);
-                      if (isRemixMode) setRemixAnalysisResult(null);
-                    }}
-                    className={`rounded-full px-4 py-2 text-sm transition ${disabled ? "cursor-not-allowed bg-gray-100 text-gray-400 opacity-60" : pillClass(ratio === item.value)}`}
+                    onClick={() => remixVideoInputRef.current?.click()}
+                    disabled={remixAnalysisLoading || remixReferenceImageLoading}
+                    className={`${toolButtonClass(Boolean(remixVideoFile))} disabled:opacity-50`}
                   >
-                    {item.label}
+                    {remixVideoFile ? "更换参考视频" : "上传参考视频"}
                   </button>
-                );
-              })}
+                )}
+                <button
+                  onClick={() => setShowPreferences((prev) => !prev)}
+                  className={toolButtonClass(showPreferences)}
+                >
+                  ✦ 生成偏好
+                </button>
+                {isAgentMode && (
+                  <button
+                    onClick={() => document.getElementById("agent-picker")?.scrollIntoView({ behavior: "smooth", block: "center" })}
+                    className={toolButtonClass(Boolean(selectedAgent))}
+                  >
+                    {selectedAgent ? selectedAgent.name : "选择智能体"}
+                  </button>
+                )}
+                <div className={isDark ? "rounded-full border border-white/10 bg-white/[0.05] px-4 py-2 text-sm font-medium text-gray-300" : "rounded-full border border-sky-100 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-700 shadow-sm"}>
+                  {isImageMode ? `${imageModel === "banana2" ? "Nano Banana2" : "image2"} / ${imageSize} / ${generateCount}张` : `${duration} / ${ratio === "9:16" ? "竖屏" : "横屏"} / ${generateCount}条`}
+                </div>
+                <div className={isDark ? "ml-auto rounded-full border border-amber-300/20 bg-amber-300/10 px-4 py-2 text-sm font-semibold text-amber-100" : "ml-auto rounded-full border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-700 shadow-sm"}>
+                  预计消耗 ¥{formatMoney(estimatedCost)}
+                  {!currentChannelEnabled && <span className="ml-2 text-rose-500">通道维护升级中请稍后再试</span>}
+                  {imageModelRestrictionMessage && <span className="ml-2 text-rose-500">{imageModelRestrictionMessage}</span>}
+                  {isBalanceInsufficient && <span className="ml-2 text-rose-500">余额不足，请充值</span>}
+                </div>
+                <button
+                  onClick={handleGenerate}
+                  className={primaryActionClass}
+                >
+                  {isGenerating ? "生成中..." : "开始生成"}
+                </button>
+              </div>
 
-              {isImageMode ? (
-                <>
-                  <div className="flex items-center gap-2">
-                    <span className={isDark ? "text-sm text-gray-400" : "text-sm text-gray-500"}>模型</span>
-                    {[
-                      { label: "image2", value: "image2" },
-                      { label: "Nano Banana2", value: "banana2" },
-                    ].map((item) => (
-                      <button
-                        key={item.value}
-                        onClick={() => setImageModel(item.value as "image2" | "banana2")}
-                        className={`rounded-full px-4 py-2 text-sm transition ${pillClass(imageModel === item.value)}`}
+              {showPreferences && (
+                <div className={isDark ? "mt-3 rounded-3xl border border-indigo-400/20 bg-[#0f1018]/95 p-4 shadow-2xl shadow-black/30" : "mt-3 rounded-3xl border border-indigo-100 bg-white/95 p-4 shadow-xl shadow-indigo-100/70"}>
+                  <div className="mb-4 flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold">生成偏好</div>
+                      <div className={isDark ? "mt-1 text-xs text-gray-400" : "mt-1 text-xs text-gray-500"}>设置会实时影响预计消耗和本次提交参数。</div>
+                    </div>
+                    {!isImageMode && (
+                      <span className={isDark ? "rounded-full border border-sky-400/20 bg-sky-400/10 px-3 py-1 text-xs font-semibold text-sky-200" : "rounded-full border border-sky-100 bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-700"}>超清1080P</span>
+                    )}
+                  </div>
+
+                  <div className="grid gap-4 md:grid-cols-2">
+                    {!isImageMode && (
+                      <div>
+                        <div className={isDark ? "mb-2 text-xs font-medium text-gray-400" : "mb-2 text-xs font-medium text-gray-500"}>视频时长</div>
+                        <div className="flex flex-wrap gap-2">
+                          {["4s", "8s", "12s"].map((item) => (
+                            <button
+                              key={item}
+                              onClick={() => {
+                                setDuration(item);
+                                if (isRemixMode) setRemixAnalysisResult(null);
+                              }}
+                              className={`rounded-full px-4 py-2 text-sm transition ${pillClass(duration === item)}`}
+                            >
+                              {item}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div>
+                      <div className={isDark ? "mb-2 text-xs font-medium text-gray-400" : "mb-2 text-xs font-medium text-gray-500"}>{isImageMode ? "图片比例" : "视频比例"}</div>
+                      <div className="flex flex-wrap gap-2">
+                        {[
+                          ...(isImageMode ? [{ label: "1:1方屏", value: "1:1" }] : []),
+                          { label: "9:16竖屏", value: "9:16" },
+                          { label: "16:9横屏", value: "16:9" },
+                        ].map((item) => {
+                          const disabled = isImageMode && imageModel === "image2" && ((item.value === "9:16" && imageSize === "2K") || (item.value === "1:1" && imageSize === "4K"));
+                          return (
+                            <button
+                              key={item.value}
+                              onClick={() => {
+                                if (disabled) {
+                                  showToast("image2模型暂不支持该比例/分辨率组合");
+                                  return;
+                                }
+                                setRatio(item.value);
+                                if (isRemixMode) setRemixAnalysisResult(null);
+                              }}
+                              className={`rounded-full px-4 py-2 text-sm transition ${disabled ? "cursor-not-allowed bg-gray-100 text-gray-400 opacity-60" : pillClass(ratio === item.value)}`}
+                            >
+                              {item.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {isImageMode && (
+                      <>
+                        <div>
+                          <div className={isDark ? "mb-2 text-xs font-medium text-gray-400" : "mb-2 text-xs font-medium text-gray-500"}>图片模型</div>
+                          <div className="flex flex-wrap gap-2">
+                            {[
+                              { label: "image2", value: "image2" },
+                              { label: "Nano Banana2", value: "banana2" },
+                            ].map((item) => (
+                              <button
+                                key={item.value}
+                                onClick={() => setImageModel(item.value as "image2" | "banana2")}
+                                className={`rounded-full px-4 py-2 text-sm transition ${pillClass(imageModel === item.value)}`}
+                              >
+                                {item.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <div className={isDark ? "mb-2 text-xs font-medium text-gray-400" : "mb-2 text-xs font-medium text-gray-500"}>分辨率</div>
+                          <div className="flex flex-wrap gap-2">
+                            {(["1K", "2K", "4K"] as const).map((item) => {
+                              const disabled = imageModel === "image2" && ((item === "2K" && ratio === "9:16") || (item === "4K" && ratio === "1:1"));
+                              return (
+                                <button
+                                  key={item}
+                                  onClick={() => {
+                                    if (disabled) {
+                                      showToast("image2模型暂不支持该比例/分辨率组合");
+                                      return;
+                                    }
+                                    setImageSize(item);
+                                  }}
+                                  className={`rounded-full px-4 py-2 text-sm transition ${disabled ? "cursor-not-allowed bg-gray-100 text-gray-400 opacity-60" : pillClass(imageSize === item)}`}
+                                >
+                                  {item}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </>
+                    )}
+
+                    <div>
+                      <div className={isDark ? "mb-2 text-xs font-medium text-gray-400" : "mb-2 text-xs font-medium text-gray-500"}>{isImageMode ? "生成张数" : "生成条数"}</div>
+                      <select
+                        value={generateCount}
+                        onChange={(e) => setGenerateCount(Number(e.target.value))}
+                        className={isDark ? "w-full rounded-full border border-gray-700 bg-gray-800 px-4 py-2 text-sm text-gray-100 outline-none" : "w-full rounded-full border border-gray-200 bg-gray-50 px-4 py-2 text-sm text-gray-700 outline-none"}
                       >
-                        {item.label}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className={isDark ? "text-sm text-gray-400" : "text-sm text-gray-500"}>分辨率</span>
-                    {(["1K", "2K", "4K"] as const).map((item) => {
-                      const disabled = imageModel === "image2" && ((item === "2K" && ratio === "9:16") || (item === "4K" && ratio === "1:1"));
-                      return (
+                        {Array.from({ length: 10 }, (_, i) => i + 1).map((count) => (
+                          <option key={count} value={count}>
+                            {count}{isImageMode ? "张" : "条"}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <div className={isDark ? "mb-2 text-xs font-medium text-gray-400" : "mb-2 text-xs font-medium text-gray-500"}>参考图状态</div>
+                      <div className={isDark ? "rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-gray-300" : "rounded-2xl border border-indigo-100 bg-indigo-50/50 px-4 py-3 text-sm text-slate-600"}>
+                        {hasReferenceImage ? `已添加${referenceImageName ? `：${referenceImageName}` : ""}` : "未添加参考图"}
+                      </div>
+                    </div>
+
+                    {!isImageMode && (
+                      <div className="md:col-span-2">
                         <button
-                          key={item}
-                          onClick={() => {
-                            if (disabled) {
-                              showToast("image2模型暂不支持该比例/分辨率组合");
-                              return;
-                            }
-                            setImageSize(item);
-                          }}
-                          className={`rounded-full px-4 py-2 text-sm transition ${disabled ? "cursor-not-allowed bg-gray-100 text-gray-400 opacity-60" : pillClass(imageSize === item)}`}
+                          onClick={() => setTimingEnabled((prev) => !prev)}
+                          className={`rounded-full px-4 py-2 text-sm transition ${pillClass(timingEnabled)}`}
                         >
-                          {item}
+                          {timingEnabled ? "已开启定时" : "定时生成"}
                         </button>
-                      );
-                    })}
+                      </div>
+                    )}
                   </div>
-                </>
-              ) : (
-                <div className={isDark ? "rounded-full bg-gray-800 px-4 py-2 text-sm text-gray-100" : "rounded-full bg-gray-100 px-4 py-2 text-sm text-gray-700"}>
-                  超清1080P
+
+                  {timingEnabled && (
+                    <div className={isDark ? "mt-4 rounded-2xl border border-violet-400/20 bg-violet-400/[0.04] p-4" : "mt-4 rounded-2xl border border-violet-100 bg-violet-50/60 p-4"}>
+                      <div className="grid gap-3 md:grid-cols-3">
+                        <div className="space-y-1">
+                          <div className={isDark ? "text-xs text-gray-400" : "text-xs text-gray-500"}>定时日期</div>
+                          <div onClick={() => timingDateInputRef.current?.showPicker ? timingDateInputRef.current.showPicker() : timingDateInputRef.current?.focus()}>
+                            <input ref={timingDateInputRef} type="date" value={timingDate} onChange={(e) => setTimingDate(e.target.value)} className={isDark ? "w-full cursor-pointer rounded-full border border-gray-700 bg-gray-800 px-4 py-2 text-sm text-gray-100 outline-none" : "w-full cursor-pointer rounded-full border border-gray-200 bg-white px-4 py-2 text-sm text-gray-700 outline-none"} />
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          <div className={isDark ? "text-xs text-gray-400" : "text-xs text-gray-500"}>定时时间</div>
+                          <div onClick={() => timingTimeInputRef.current?.showPicker ? timingTimeInputRef.current.showPicker() : timingTimeInputRef.current?.focus()}>
+                            <input ref={timingTimeInputRef} type="time" value={timingTime} onChange={(e) => setTimingTime(e.target.value)} className={isDark ? "w-full cursor-pointer rounded-full border border-gray-700 bg-gray-800 px-4 py-2 text-sm text-gray-100 outline-none" : "w-full cursor-pointer rounded-full border border-gray-200 bg-white px-4 py-2 text-sm text-gray-700 outline-none"} />
+                          </div>
+                        </div>
+                        <div className="flex items-end">
+                          <button onClick={handleCreateScheduledTask} className={primaryActionClass}>
+                            确认创建定时任务
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
-
-              <div className="flex items-center gap-2">
-                <span className={isDark ? "text-sm text-gray-400" : "text-sm text-gray-500"}>
-                  {isImageMode ? "生成张数" : "生成条数"}
-                </span>
-                <select
-                  value={generateCount}
-                  onChange={(e) => setGenerateCount(Number(e.target.value))}
-                  className={
-                    isDark
-                      ? "rounded-full border border-gray-700 bg-gray-800 px-4 py-2 text-sm text-gray-100 outline-none"
-                      : "rounded-full border border-gray-200 bg-gray-50 px-4 py-2 text-sm text-gray-700 outline-none"
-                  }
-                >
-                  {Array.from({ length: 10 }, (_, i) => i + 1).map((count) => (
-                    <option key={count} value={count}>
-                      {count}{isImageMode ? "张" : "条"}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <button
-                onClick={() => setTimingEnabled((prev) => !prev)}
-                className={`rounded-full px-4 py-2 text-sm transition ${pillClass(timingEnabled)}`}
-              >
-                {timingEnabled ? "已开启定时" : "定时生成"}
-              </button>
-
-              <div className={isDark ? "ml-auto rounded-full border border-gray-700 bg-gray-800 px-4 py-2 text-sm text-gray-100" : "ml-auto rounded-full border border-gray-200 bg-gray-50 px-4 py-2 text-sm text-gray-700"}>
-                <span className="mr-1">🪙</span>
-                预计消耗 ¥{formatMoney(estimatedCost)}
-                {!currentChannelEnabled && <span className="ml-2 text-rose-500">通道维护升级中请稍后再试</span>}
-                {imageModelRestrictionMessage && <span className="ml-2 text-rose-500">{imageModelRestrictionMessage}</span>}
-                {isBalanceInsufficient && <span className="ml-2 text-rose-500">余额不足，请充值</span>}
-              </div>
-
-              <button
-                onClick={handleGenerate}
-                className={
-                  isDark
-                    ? "rounded-full bg-white px-6 py-2 text-sm font-medium text-black"
-                    : "rounded-full bg-black px-6 py-2 text-sm font-medium text-white"
-                }
-              >
-                {isGenerating ? "生成中..." : "开始生成"}
-              </button>
             </div>
-
-            {timingEnabled && (
-              <div className={isDark ? "rounded-2xl border border-gray-800 bg-[#18181b] p-4" : "rounded-2xl border border-gray-200 bg-gray-50 p-4"}>
-                <div className="grid gap-3 md:grid-cols-3">
-                  <div className="space-y-1">
-                    <div className={isDark ? "text-xs text-gray-400" : "text-xs text-gray-500"}>定时日期</div>
-                    <div
-                      onClick={() => {
-                        if (timingDateInputRef.current?.showPicker) {
-                          timingDateInputRef.current.showPicker();
-                        } else {
-                          timingDateInputRef.current?.focus();
-                        }
-                      }}
-                    >
-                      <input
-                        ref={timingDateInputRef}
-                        type="date"
-                        value={timingDate}
-                        onChange={(e) => setTimingDate(e.target.value)}
-                        className={isDark ? "w-full cursor-pointer rounded-full border border-gray-700 bg-gray-800 px-4 py-2 text-sm text-gray-100 outline-none" : "w-full cursor-pointer rounded-full border border-gray-200 bg-white px-4 py-2 text-sm text-gray-700 outline-none"}
-                      />
-                    </div>
-                  </div>
-                  <div className="space-y-1">
-                    <div className={isDark ? "text-xs text-gray-400" : "text-xs text-gray-500"}>定时时间</div>
-                    <div
-                      onClick={() => {
-                        if (timingTimeInputRef.current?.showPicker) {
-                          timingTimeInputRef.current.showPicker();
-                        } else {
-                          timingTimeInputRef.current?.focus();
-                        }
-                      }}
-                    >
-                      <input
-                        ref={timingTimeInputRef}
-                        type="time"
-                        value={timingTime}
-                        onChange={(e) => setTimingTime(e.target.value)}
-                        className={isDark ? "w-full cursor-pointer rounded-full border border-gray-700 bg-gray-800 px-4 py-2 text-sm text-gray-100 outline-none" : "w-full cursor-pointer rounded-full border border-gray-200 bg-white px-4 py-2 text-sm text-gray-700 outline-none"}
-                      />
-                    </div>
-                  </div>
-                  <div className="flex items-end">
-                    <button
-                      onClick={handleCreateScheduledTask}
-                      className={isDark ? "w-full rounded-full bg-white px-4 py-2 text-sm font-medium text-black" : "w-full rounded-full bg-black px-4 py-2 text-sm font-medium text-white"}
-                    >
-                      确认创建定时任务
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
         </div>
 
-        {(isGenerating || videos.length > 0) && (
-          <div className="mt-6 w-full max-w-4xl space-y-3 max-h-[680px] overflow-y-auto pr-1">
+        {(isGenerating || videoRecords.length > 0) && (
+          <div className="mt-8 w-full max-w-4xl space-y-3 max-h-[720px] overflow-y-auto pr-1">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <div className={isDark ? "text-sm font-medium text-gray-200" : "text-sm font-medium text-gray-700"}>
                   作品管理区
                 </div>
                 <div className={isDark ? "mt-1 text-sm text-gray-400" : "mt-1 text-sm text-gray-500"}>
-                  当前显示 {pagedVisibleResults.length} / 筛选后 {visibleResults.length} / 总计 {videos.length} 条作品，当前收藏 {visibleFavoriteCount} 条，模式：{modeLabel}，参考图：{hasReferenceImage ? "已添加" : "未添加"}
+                  当前显示 {pagedVisibleResults.length} / 筛选后 {visibleResults.length} / 总计 {videoRecords.length} 条作品，当前收藏 {visibleFavoriteCount} 条，模式：{modeLabel}，参考图：{hasReferenceImage ? "已添加" : "未添加"}
                 </div>
               </div>
 
@@ -2592,8 +2686,8 @@ export default function Home() {
                   placeholder="搜索作品关键词"
                   className={
                     isDark
-                      ? "rounded-full border border-gray-700 bg-gray-800 px-3 py-1.5 text-xs text-gray-100 outline-none placeholder:text-gray-500"
-                      : "rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-700 outline-none placeholder:text-gray-400"
+                      ? "rounded-full border border-white/10 bg-white/[0.05] px-3 py-1.5 text-xs text-gray-100 outline-none placeholder:text-gray-500 focus:border-indigo-400/60"
+                      : "rounded-full border border-indigo-100 bg-white/80 px-3 py-1.5 text-xs text-slate-700 outline-none shadow-sm placeholder:text-slate-400 focus:border-indigo-300"
                   }
                 />
                 <select
@@ -2601,8 +2695,8 @@ export default function Home() {
                   onChange={(e) => setResultSort(e.target.value as "latest" | "earliest" | "successOnly" | "failedOnly")}
                   className={
                     isDark
-                      ? "rounded-full border border-gray-700 bg-gray-800 px-3 py-1.5 text-xs text-gray-100 outline-none"
-                      : "rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-700 outline-none"
+                      ? "rounded-full border border-white/10 bg-white/[0.05] px-3 py-1.5 text-xs text-gray-100 outline-none focus:border-indigo-400/60"
+                      : "rounded-full border border-indigo-100 bg-white/80 px-3 py-1.5 text-xs text-slate-700 outline-none shadow-sm focus:border-indigo-300"
                   }
                 >
                   <option value="latest">最新优先</option>
@@ -2615,8 +2709,8 @@ export default function Home() {
                   className={
                     resultFilter === "all"
                       ? isDark
-                        ? "rounded-full bg-white px-4 py-2 text-xs font-medium text-black"
-                        : "rounded-full bg-black px-4 py-2 text-xs font-medium text-white"
+                        ? "rounded-full bg-gradient-to-r from-indigo-500 to-sky-500 px-4 py-2 text-xs font-semibold text-white shadow-sm shadow-indigo-200"
+                        : "rounded-full bg-gradient-to-r from-indigo-500 to-sky-500 px-4 py-2 text-xs font-semibold text-white shadow-sm shadow-indigo-200"
                       : isDark
                         ? "rounded-full bg-gray-800 px-4 py-2 text-xs font-medium text-gray-100"
                         : "rounded-full bg-gray-100 px-4 py-2 text-xs font-medium text-gray-700"
@@ -2629,7 +2723,7 @@ export default function Home() {
                   onClick={() => setResultFilter("favorites")}
                   className={
                     resultFilter === "favorites"
-                      ? "rounded-full bg-yellow-400 px-4 py-2 text-xs font-medium text-black"
+                      ? "rounded-full bg-amber-300 px-4 py-2 text-xs font-semibold text-amber-950 shadow-sm"
                       : isDark
                         ? "rounded-full bg-gray-800 px-4 py-2 text-xs font-medium text-gray-100"
                         : "rounded-full bg-gray-100 px-4 py-2 text-xs font-medium text-gray-700"
@@ -2639,14 +2733,7 @@ export default function Home() {
                 </button>
 
                 {videos.length > 0 && (
-                  <button
-                    onClick={handleClearResults}
-                    className={
-                      isDark
-                        ? "rounded-full bg-gray-800 px-4 py-2 text-xs font-medium text-gray-100"
-                        : "rounded-full bg-gray-100 px-4 py-2 text-xs font-medium text-gray-700"
-                    }
-                  >
+                  <button onClick={handleClearResults} className={dangerButtonClass}>
                     清空记录
                   </button>
                 )}
@@ -2676,23 +2763,27 @@ export default function Home() {
                       ? "暂无失败任务"
                       : "暂无任务记录"}
               </div>
-            ) : pagedVisibleResults.map(({ item, id, taskId, mediaType, title, prompt: fromTaskPrompt, isFavorite, status, isLatestDone, cost, seconds, duration: videoDuration, upscaleStatus, upscaleErrorMessage, hasReferenceImage: taskHasRef, referenceImageName, referenceImageThumbData: taskRefThumbData, coverData, videoUrl, ratio: videoRatio, size: videoSize, imageSize: resultImageSize, imageModel, displayModel, imageModelLabel, apiModel, kind, scheduledAt, createdAt, taskStatus, agentName }) => (
+            ) : pagedVisibleResults.map(({ item, id, taskId, mediaType, title, prompt: fromTaskPrompt, isFavorite, status, isLatestDone, cost, seconds, duration: videoDuration, upscaleStatus, upscaleErrorMessage, hasReferenceImage: taskHasRef, referenceImageName, referenceImageThumbData: taskRefThumbData, coverData, videoUrl, ratio: videoRatio, size: videoSize, imageSize: resultImageSize, imageModel, displayModel, imageModelLabel, apiModel, kind, scheduledAt, createdAt, taskStatus, agentName, isPlaceholder }) => (
               <div
                 key={id}
                 className={
                   isDark
-                    ? "relative rounded-2xl border border-gray-800/90 bg-[#121214] p-3 text-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-gray-700 hover:shadow-[0_16px_30px_rgba(0,0,0,0.28)]"
-                    : "relative rounded-2xl border border-gray-200 bg-white p-3 text-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-gray-300 hover:shadow-[0_14px_24px_rgba(17,24,39,0.1)]"
+                    ? "relative rounded-3xl border border-white/10 bg-white/[0.05] p-3 text-sm shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-indigo-400/40 hover:bg-white/[0.07] hover:shadow-[0_18px_34px_rgba(0,0,0,0.32)]"
+                    : "relative rounded-3xl border border-white/80 bg-white/88 p-3 text-sm shadow-md shadow-indigo-100/50 backdrop-blur transition-all duration-200 hover:-translate-y-0.5 hover:border-indigo-200 hover:shadow-[0_18px_38px_rgba(79,70,229,0.13)]"
                 }
               >
                 <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
                   <div className="flex items-start gap-3">
                     <div className={`relative group shrink-0 overflow-hidden rounded-2xl ${videoRatio === "9:16" ? "h-20 w-14" : videoRatio === "1:1" ? "h-16 w-16" : "h-16 w-28"}`}>
-                      {renderVideoCover({ id, mediaType, coverData, videoUrl, ratio: videoRatio, seconds, duration: videoDuration })}
+                      {renderVideoCover({ id, mediaType, coverData, videoUrl, ratio: videoRatio, seconds, duration: videoDuration, isPlaceholder, status })}
                       <button
                         type="button"
                         onClick={(event) => {
                           event.stopPropagation();
+                          if (isPlaceholder) {
+                            showToast(status === "waiting" ? "任务待执行，暂不可预览" : "作品生成中，稍后可预览");
+                            return;
+                          }
                           setPreviewVideo({
                             id,
                             item,
@@ -2861,8 +2952,8 @@ export default function Home() {
                         }}
                         className={
                           isDark
-                            ? "w-full whitespace-nowrap rounded-full border border-gray-700 bg-gray-800 px-3 py-1.5 text-center text-xs font-medium text-gray-100 transition-all duration-200 hover:bg-gray-700 hover:shadow-sm"
-                            : "w-full whitespace-nowrap rounded-full border border-gray-200 bg-gray-100 px-3 py-1.5 text-center text-xs font-medium text-gray-700 transition-all duration-200 hover:bg-white hover:shadow-sm"
+                            ? `w-full whitespace-nowrap rounded-full border border-gray-700 px-3 py-1.5 text-center text-xs font-medium transition-all duration-200 ${isPlaceholder ? "cursor-not-allowed bg-gray-900 text-gray-500" : "bg-gray-800 text-gray-100 hover:bg-gray-700 hover:shadow-sm"}`
+                            : `w-full whitespace-nowrap rounded-full border border-gray-200 px-3 py-1.5 text-center text-xs font-medium transition-all duration-200 ${isPlaceholder ? "cursor-not-allowed bg-gray-50 text-gray-400" : "bg-gray-100 text-gray-700 hover:bg-white hover:shadow-sm"}`
                         }
                       >
                         预览
@@ -2880,11 +2971,17 @@ export default function Home() {
                       </button>
 
                       <button
-                        onClick={() => void handleDownload({ id, item, title, taskId, mediaType, videoUrl, status })}
+                        onClick={() => {
+                          if (isPlaceholder) {
+                            showToast("作品生成完成后可下载");
+                            return;
+                          }
+                          void handleDownload({ id, item, title, taskId, mediaType, videoUrl, status });
+                        }}
                         className={
                           isDark
-                            ? "w-full whitespace-nowrap rounded-full border border-white/15 bg-white px-3 py-1.5 text-center text-xs font-semibold text-black transition-all duration-200 hover:bg-gray-100 hover:shadow-sm"
-                            : "w-full whitespace-nowrap rounded-full bg-black px-3 py-1.5 text-center text-xs font-semibold text-white transition-all duration-200 hover:bg-gray-900 hover:shadow-sm"
+                            ? `w-full whitespace-nowrap rounded-full border border-white/15 px-3 py-1.5 text-center text-xs font-semibold transition-all duration-200 ${isPlaceholder ? "cursor-not-allowed bg-gray-800 text-gray-500" : "bg-white text-black hover:bg-gray-100 hover:shadow-sm"}`
+                            : `w-full whitespace-nowrap rounded-full px-3 py-1.5 text-center text-xs font-semibold transition-all duration-200 ${isPlaceholder ? "cursor-not-allowed bg-gray-200 text-gray-400" : "bg-black text-white hover:bg-gray-900 hover:shadow-sm"}`
                         }
                       >
                         下载
@@ -2892,17 +2989,19 @@ export default function Home() {
 
                       <button
                         onClick={() => handleCopy(item, id)}
-                        className={
-                          isDark
-                            ? "w-full whitespace-nowrap rounded-full border border-gray-700 bg-gray-800 px-3 py-1.5 text-center text-xs font-medium text-gray-100 transition duration-200 hover:bg-gray-700 hover:shadow-sm"
-                            : "w-full whitespace-nowrap rounded-full border border-gray-200 bg-gray-100 px-3 py-1.5 text-center text-xs font-medium text-gray-700 transition duration-200 hover:bg-white hover:shadow-sm"
-                        }
+                        className={`w-full whitespace-nowrap text-center ${dangerButtonClass}`}
                       >
                         {copiedTaskId === id ? "已复制✓" : "复制文案"}
                       </button>
 
                       <button
-                        onClick={() => handleToggleFavorite(id)}
+                        onClick={() => {
+                          if (isPlaceholder) {
+                            showToast("作品生成完成后可收藏");
+                            return;
+                          }
+                          handleToggleFavorite(id);
+                        }}
                         className={
                           isFavorite
                             ? "w-full whitespace-nowrap rounded-full bg-yellow-400 px-3 py-1.5 text-center text-xs font-medium text-black transition duration-200 hover:brightness-95 hover:shadow-sm"
@@ -2915,7 +3014,13 @@ export default function Home() {
                       </button>
 
                       <button
-                        onClick={() => handleDeleteResult(id)}
+                        onClick={() => {
+                          if (isPlaceholder) {
+                            handleDeleteTask(taskId);
+                            return;
+                          }
+                          handleDeleteResult(id);
+                        }}
                         className={
                           isDark
                             ? "w-full whitespace-nowrap rounded-full border border-gray-700 bg-gray-800 px-3 py-1.5 text-center text-xs font-medium text-gray-100 transition duration-200 hover:bg-gray-700 hover:shadow-sm"
@@ -3176,7 +3281,7 @@ export default function Home() {
                   </span>
                   <button
                     onClick={handleBatchDelete}
-                    className={isDark ? "rounded-full border border-gray-700 bg-gray-800 px-3 py-1.5 text-xs font-medium text-gray-100 transition hover:bg-gray-700" : "rounded-full border border-gray-200 bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-white"}
+                    className={dangerButtonClass}
                   >
                     批量删除
                   </button>
@@ -3337,7 +3442,7 @@ export default function Home() {
                                 e.stopPropagation();
                                 handleDeleteTask(id);
                               }}
-                              className={isDark ? "rounded-full border border-gray-700 bg-gray-800 px-3 py-1.5 text-xs font-medium text-gray-100 transition hover:bg-gray-700" : "rounded-full border border-gray-200 bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-white"}
+                              className={dangerButtonClass}
                             >
                               删除
                             </button>
@@ -3739,19 +3844,23 @@ export default function Home() {
                                   type="button"
                                   onClick={(event) => {
                                     event.stopPropagation();
+                                    if (video.isPlaceholder) {
+                                      showToast(video.status === "waiting" ? "任务待执行，暂不可预览" : "作品生成中，稍后可预览");
+                                      return;
+                                    }
                                     setPreviewVideo(video);
                                   }}
                                   className={`group shrink-0 cursor-pointer overflow-hidden rounded-2xl ${video.ratio === "9:16" ? "h-20 w-14" : video.ratio === "1:1" ? "h-16 w-16" : "h-16 w-28"}`}
                                 >
-                                  {renderVideoCover({ id: video.id, mediaType: video.mediaType, coverData: video.coverData, videoUrl: video.videoUrl, ratio: video.ratio, seconds: video.seconds, duration: video.duration })}
+                                  {renderVideoCover({ id: video.id, mediaType: video.mediaType, coverData: video.coverData, videoUrl: video.videoUrl, ratio: video.ratio, seconds: video.seconds, duration: video.duration, isPlaceholder: video.isPlaceholder, status: video.status })}
                                 </button>
                                 <div className="min-w-0 flex-1">
                                   <div className="mb-1 flex flex-wrap items-center gap-2">
                                     <span className={isDark ? "rounded-full bg-gray-700 px-2 py-0.5 text-xs font-medium text-gray-200" : "rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600"}>
                                       {video.mediaType === "image" ? "IMAGE" : "VIDEO"}-{String(video.id).padStart(3, "0")}
                                     </span>
-                                    <span className={video.status === "success" ? "rounded-full border border-emerald-400/70 bg-emerald-500/90 px-2 py-0.5 text-xs font-medium text-white" : "rounded-full border border-rose-400/70 bg-rose-500/90 px-2 py-0.5 text-xs font-medium text-white"}>
-                                      {video.status === "success" ? "已完成" : "失败"}
+                                    <span className={getStatusClass(video.status)}>
+                                      {statusLabelMap[video.status]}
                                     </span>
                                     {video.mediaType !== "image" && (
                                       <span className={video.upscaleStatus === "success" ? "rounded-full border border-emerald-400/70 bg-emerald-500/90 px-2 py-0.5 text-xs font-medium text-white" : video.upscaleStatus === "failed" ? "rounded-full border border-rose-400/70 bg-rose-500/90 px-2 py-0.5 text-xs font-medium text-white" : video.upscaleStatus === "processing" || video.upscaleStatus === "pending" || video.upscaleStatus === "queued" ? "rounded-full border border-amber-400/70 bg-amber-500/90 px-2 py-0.5 text-xs font-medium text-white" : isDark ? "rounded-full border border-gray-600 bg-gray-700 px-2 py-0.5 text-xs font-medium text-gray-200" : "rounded-full border border-gray-200 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600"}>
@@ -3815,10 +3924,10 @@ export default function Home() {
                                     </div>
                                   )}
                                   <div className="flex flex-wrap items-center gap-1.5">
-                                    <button onClick={(e) => { e.stopPropagation(); setPreviewVideo(video); }} className={isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>预览</button>
+                                    <button onClick={(e) => { e.stopPropagation(); if (video.isPlaceholder) { showToast("作品生成完成后可预览"); return; } setPreviewVideo(video); }} className={isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>预览</button>
                                     <button onClick={(e) => { e.stopPropagation(); handleCopy(video.item, video.id); }} className={isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>复制</button>
-                                    <button onClick={(e) => { e.stopPropagation(); void handleDownload(video); }} className={isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>下载</button>
-                                    <button onClick={(e) => { e.stopPropagation(); handleToggleFavorite(video.id); }} className={favorites.includes(video.id) ? "rounded-full bg-yellow-400 px-3 py-1 text-xs text-black" : isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>{favorites.includes(video.id) ? "已收藏" : "收藏"}</button>
+                                    <button onClick={(e) => { e.stopPropagation(); if (video.isPlaceholder) { showToast("作品生成完成后可下载"); return; } void handleDownload(video); }} className={isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>下载</button>
+                                    <button onClick={(e) => { e.stopPropagation(); if (video.isPlaceholder) { showToast("作品生成完成后可收藏"); return; } handleToggleFavorite(video.id); }} className={favorites.includes(video.id) ? "rounded-full bg-yellow-400 px-3 py-1 text-xs text-black" : isDark ? "rounded-full bg-gray-700 px-3 py-1 text-xs text-gray-100" : "rounded-full bg-white px-3 py-1 text-xs text-gray-700"}>{favorites.includes(video.id) ? "已收藏" : "收藏"}</button>
                                   </div>
                                 </div>
                               </div>
@@ -3852,32 +3961,32 @@ export default function Home() {
           <div className={isDark ? "mb-4 text-sm font-medium text-gray-400" : "mb-4 text-sm font-medium text-gray-500"}>常用功能</div>
 
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <div className={isDark ? "rounded-3xl border border-gray-800 bg-[#121214] p-5 transition duration-200 hover:bg-[#18181b] md:p-6" : "rounded-3xl border border-gray-200 bg-white p-5 transition duration-200 hover:bg-gray-50 md:p-6"}>
-              <div className="mb-3 text-2xl">🎬</div>
+            <div className={isDark ? "rounded-3xl border border-white/10 bg-white/[0.05] p-5 shadow-sm transition duration-200 hover:-translate-y-1 hover:border-indigo-400/40 hover:bg-white/[0.07] md:p-6" : "rounded-3xl border border-white/80 bg-white/82 p-5 shadow-md shadow-indigo-100/50 backdrop-blur transition duration-200 hover:-translate-y-1 hover:border-indigo-200 hover:shadow-lg md:p-6"}>
+              <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 via-violet-500 to-sky-500 text-xl shadow-md shadow-indigo-200">🎬</div>
               <div className="mb-1 text-base font-semibold">通用视频</div>
               <div className={isDark ? "text-sm text-gray-400" : "text-sm text-gray-500"}>
                 支持文生视频、图生视频，直接输入完整提示词生成。
               </div>
             </div>
 
-            <div className={isDark ? "rounded-3xl border border-gray-800 bg-[#121214] p-5 transition duration-200 hover:bg-[#18181b] md:p-6" : "rounded-3xl border border-gray-200 bg-white p-5 transition duration-200 hover:bg-gray-50 md:p-6"}>
-              <div className="mb-3 text-2xl">🧠</div>
+            <div className={isDark ? "rounded-3xl border border-white/10 bg-white/[0.05] p-5 shadow-sm transition duration-200 hover:-translate-y-1 hover:border-indigo-400/40 hover:bg-white/[0.07] md:p-6" : "rounded-3xl border border-white/80 bg-white/82 p-5 shadow-md shadow-indigo-100/50 backdrop-blur transition duration-200 hover:-translate-y-1 hover:border-indigo-200 hover:shadow-lg md:p-6"}>
+              <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500 via-fuchsia-500 to-indigo-500 text-xl shadow-md shadow-violet-200">🧠</div>
               <div className="mb-1 text-base font-semibold">智能体批量视频</div>
               <div className={isDark ? "text-sm text-gray-400" : "text-sm text-gray-500"}>
                 选择智能体模板，一句话批量生成最多 10 条视频任务。
               </div>
             </div>
 
-            <div className={isDark ? "rounded-3xl border border-gray-800 bg-[#121214] p-5 transition duration-200 hover:bg-[#18181b] md:p-6" : "rounded-3xl border border-gray-200 bg-white p-5 transition duration-200 hover:bg-gray-50 md:p-6"}>
-              <div className="mb-3 text-2xl">🖼️</div>
+            <div className={isDark ? "rounded-3xl border border-white/10 bg-white/[0.05] p-5 shadow-sm transition duration-200 hover:-translate-y-1 hover:border-indigo-400/40 hover:bg-white/[0.07] md:p-6" : "rounded-3xl border border-white/80 bg-white/82 p-5 shadow-md shadow-indigo-100/50 backdrop-blur transition duration-200 hover:-translate-y-1 hover:border-indigo-200 hover:shadow-lg md:p-6"}>
+              <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-sky-500 via-cyan-400 to-emerald-400 text-xl shadow-md shadow-sky-200">🖼️</div>
               <div className="mb-1 text-base font-semibold">通用图片</div>
               <div className={isDark ? "text-sm text-gray-400" : "text-sm text-gray-500"}>
                 支持文生图、图生图，成功可下载后再扣费。
               </div>
             </div>
 
-            <div className={isDark ? "rounded-3xl border border-gray-800 bg-[#121214] p-5 transition duration-200 hover:bg-[#18181b] md:p-6" : "rounded-3xl border border-gray-200 bg-white p-5 transition duration-200 hover:bg-gray-50 md:p-6"}>
-              <div className="mb-3 text-2xl">⏰</div>
+            <div className={isDark ? "rounded-3xl border border-white/10 bg-white/[0.05] p-5 shadow-sm transition duration-200 hover:-translate-y-1 hover:border-indigo-400/40 hover:bg-white/[0.07] md:p-6" : "rounded-3xl border border-white/80 bg-white/82 p-5 shadow-md shadow-indigo-100/50 backdrop-blur transition duration-200 hover:-translate-y-1 hover:border-indigo-200 hover:shadow-lg md:p-6"}>
+              <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-400 via-orange-400 to-rose-400 text-xl shadow-md shadow-amber-200">⏰</div>
               <div className="mb-1 text-base font-semibold">定时生成</div>
               <div className={isDark ? "text-sm text-gray-400" : "text-sm text-gray-500"}>
                 支持指定时间执行一次任务，适合夜间批量生产。

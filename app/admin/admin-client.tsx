@@ -263,7 +263,7 @@ export default function AdminClient() {
     setMessage("价格已保存");
   };
 
-  const fieldClass = "rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none";
+  const fieldClass = "rounded-2xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-gray-300 focus:bg-gray-50";
   const agentPromptHints: Record<
     "scenePrompt" | "characterPrompt" | "languagePrompt" | "cameraPrompt" | "stylePrompt" | "negativePrompt" | "extraPrompt",
     string
@@ -278,24 +278,24 @@ export default function AdminClient() {
   };
 
   return (
-    <main className="min-h-screen bg-[#f7f7f8] px-6 py-8 text-black">
+    <main className="min-h-screen bg-[radial-gradient(circle_at_top,#ffffff_0,#f6f7f9_42%,#eef0f4_100%)] px-6 py-8 text-black">
       <div className="mx-auto max-w-7xl space-y-6">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-semibold">管理员后台</h1>
             <p className="text-sm text-gray-500">用户、智能体、价格配置与视频任务历史记录</p>
           </div>
-          <a href="/" className="rounded-full bg-black px-4 py-2 text-sm text-white">返回首页</a>
+          <a href="/" className="rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-sky-500 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-200/70 transition hover:-translate-y-0.5 hover:brightness-105">返回首页</a>
         </div>
-        <div className="flex flex-wrap gap-2 rounded-3xl border border-gray-200 bg-white p-3 text-sm shadow-sm">
-          <a href="#users" className="rounded-full bg-gray-100 px-4 py-2 text-gray-700">用户管理</a>
-          <a href="#agents" className="rounded-full bg-gray-100 px-4 py-2 text-gray-700">智能体管理</a>
-          <a href="#pricing" className="rounded-full bg-gray-100 px-4 py-2 text-gray-700">价格配置</a>
-          <a href="#video-records" className="rounded-full bg-gray-100 px-4 py-2 text-gray-700">视频任务历史记录</a>
+        <div className="flex flex-wrap gap-2 rounded-3xl border border-gray-200 bg-white/90 p-3 text-sm shadow-md shadow-gray-200/70 backdrop-blur">
+          <a href="#users" className="rounded-full border border-indigo-100 bg-indigo-50 px-4 py-2 font-medium text-indigo-700 transition hover:bg-indigo-100">用户管理</a>
+          <a href="#agents" className="rounded-full border border-violet-100 bg-violet-50 px-4 py-2 font-medium text-violet-700 transition hover:bg-violet-100">智能体管理</a>
+          <a href="#pricing" className="rounded-full border border-sky-100 bg-sky-50 px-4 py-2 font-medium text-sky-700 transition hover:bg-sky-100">价格配置</a>
+          <a href="#video-records" className="rounded-full border border-slate-200 bg-white px-4 py-2 font-medium text-slate-700 transition hover:bg-slate-50">视频任务历史记录</a>
         </div>
-        {message && <div className="rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-700">{message}</div>}
+        {message && <div className="rounded-2xl border border-gray-200 bg-white/95 px-4 py-3 text-sm text-gray-700 shadow-sm">{message}</div>}
 
-        <section id="pricing" className="rounded-3xl border border-gray-200 bg-white p-5 shadow-sm">
+        <section id="pricing" className="rounded-3xl border border-gray-200 bg-white/95 p-6 shadow-md shadow-gray-200/70">
           <h2 className="mb-4 text-lg font-semibold">价格配置</h2>
           {pricing && (
             <div className="space-y-4">
@@ -323,16 +323,16 @@ export default function AdminClient() {
                   />
                 </label>
               ))}
-              <button onClick={() => void savePricing()} className="self-end rounded-xl bg-black px-4 py-2 text-sm text-white">保存价格</button>
+              <button onClick={() => void savePricing()} className="self-end rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-sky-500 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-200/70 transition hover:-translate-y-0.5 hover:brightness-105">保存价格</button>
               </div>
             </div>
           )}
         </section>
 
-        <section id="agents" className="rounded-3xl border border-gray-200 bg-white p-5 shadow-sm">
+        <section id="agents" className="rounded-3xl border border-gray-200 bg-white/95 p-6 shadow-md shadow-gray-200/70">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-lg font-semibold">智能体管理</h2>
-            <button onClick={() => setEditingAgent(emptyAgent)} className="rounded-full bg-gray-100 px-3 py-1.5 text-xs text-gray-700">新建</button>
+            <button onClick={() => setEditingAgent(emptyAgent)} className="rounded-full bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-200">新建</button>
           </div>
           <div className="grid gap-3 md:grid-cols-3">
             <label>
@@ -385,11 +385,11 @@ export default function AdminClient() {
                 <div className="mt-1 text-xs text-gray-400">启用状态，关闭后前台不可使用</div>
               </span>
             </label>
-            <button onClick={() => void saveAgent()} className="rounded-xl bg-black px-4 py-2 text-sm text-white">{editingAgent.id ? "保存修改" : "创建智能体"}</button>
+            <button onClick={() => void saveAgent()} className="rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-sky-500 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-200/70 transition hover:-translate-y-0.5 hover:brightness-105">{editingAgent.id ? "保存修改" : "创建智能体"}</button>
           </div>
           <div className="mt-5 grid gap-3 md:grid-cols-2">
             {agents.map((agent) => (
-              <div key={agent.id} className="rounded-2xl border border-gray-200 p-4 text-sm">
+              <div key={agent.id} className="rounded-2xl border border-gray-200 bg-white p-4 text-sm shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
                 <div className="mb-1 flex items-center justify-between gap-2">
                   <div className="font-medium">{agent.name}</div>
                   <div className="text-xs text-gray-500">{agent.type} / {agent.visibility} / {agent.enabled ? "启用" : "停用"}</div>
@@ -401,17 +401,17 @@ export default function AdminClient() {
                   ))}
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <button onClick={() => setEditingAgent(agent)} className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700">编辑</button>
-                  <button onClick={() => void patchAgentQuick(agent.id, { enabled: !agent.enabled })} className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700">{agent.enabled ? "停用" : "启用"}</button>
-                  <button onClick={() => void patchAgentQuick(agent.id, { visibility: agent.visibility === "public" ? "private" : "public" })} className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700">{agent.visibility === "public" ? "设非公开" : "设公开"}</button>
-                  <button onClick={() => void deleteAgent(agent.id)} className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700">删除</button>
+                  <button onClick={() => setEditingAgent(agent)} className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700 transition hover:bg-gray-200">编辑</button>
+                  <button onClick={() => void patchAgentQuick(agent.id, { enabled: !agent.enabled })} className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700 transition hover:bg-gray-200">{agent.enabled ? "停用" : "启用"}</button>
+                  <button onClick={() => void patchAgentQuick(agent.id, { visibility: agent.visibility === "public" ? "private" : "public" })} className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700 transition hover:bg-gray-200">{agent.visibility === "public" ? "设非公开" : "设公开"}</button>
+                  <button onClick={() => void deleteAgent(agent.id)} className="rounded-full bg-rose-50 px-3 py-1 text-xs text-rose-600 transition hover:bg-rose-100">删除</button>
                 </div>
               </div>
             ))}
           </div>
         </section>
 
-        <section id="users" className="overflow-x-auto rounded-3xl border border-gray-200 bg-white shadow-sm">
+        <section id="users" className="overflow-x-auto rounded-3xl border border-gray-200 bg-white/95 shadow-md shadow-gray-200/70">
           <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
             <h2 className="text-lg font-semibold">用户管理</h2>
             <input
@@ -421,11 +421,11 @@ export default function AdminClient() {
                 setUserPage(1);
               }}
               placeholder="搜索 ID / 邮箱 / 昵称"
-              className="rounded-full border border-gray-200 bg-gray-50 px-4 py-2 text-sm outline-none"
+              className="rounded-full border border-gray-200 bg-gray-50 px-4 py-2 text-sm outline-none transition focus:border-gray-300 focus:bg-white"
             />
           </div>
           <table className="min-w-full text-left text-sm">
-            <thead className="bg-gray-50 text-xs text-gray-500">
+            <thead className="bg-gray-50/90 text-xs font-medium text-gray-500">
               <tr>
                 <th className="px-4 py-3">ID</th>
                 <th className="px-4 py-3">邮箱</th>
@@ -439,7 +439,7 @@ export default function AdminClient() {
             </thead>
             <tbody>
               {pagedUsers.map((user) => (
-                <tr key={user.id} className="border-t border-gray-100 align-top">
+                <tr key={user.id} className="border-t border-gray-100 align-top transition hover:bg-gray-50/70">
                   <td className="px-4 py-3">{user.id}</td>
                   <td className="px-4 py-3">{user.email}</td>
                   <td className="px-4 py-3">{user.name}</td>
@@ -451,14 +451,14 @@ export default function AdminClient() {
                   </td>
                   <td className="space-y-2 px-4 py-3">
                     <div className="flex flex-wrap gap-2">
-                      <button onClick={() => void patchUser(user.id, { disabled: !user.disabled })} className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700">{user.disabled ? "启用" : "禁用"}</button>
-                      <button onClick={() => void patchUser(user.id, { role: user.role === "admin" ? "user" : "admin" })} className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700">{user.role === "admin" ? "取消管理员" : "设为管理员"}</button>
+                      <button onClick={() => void patchUser(user.id, { disabled: !user.disabled })} className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700 transition hover:bg-gray-200">{user.disabled ? "启用" : "禁用"}</button>
+                      <button onClick={() => void patchUser(user.id, { role: user.role === "admin" ? "user" : "admin" })} className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700 transition hover:bg-gray-200">{user.role === "admin" ? "取消管理员" : "设为管理员"}</button>
                       <button
                         onClick={() => {
                           setGrantUser(user);
                           setGrantAgentIds(user.authorizedAgentIds ?? []);
                         }}
-                        className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700"
+                        className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700 transition hover:bg-gray-200"
                       >
                         授权智能体
                       </button>
@@ -468,13 +468,13 @@ export default function AdminClient() {
                           setNewPassword("");
                           setConfirmPassword("");
                         }}
-                        className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700"
+                        className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700 transition hover:bg-gray-200"
                       >
                         修改密码
                       </button>
                     </div>
                     <div className="flex gap-2">
-                      <input value={deltas[user.id] ?? ""} onChange={(event) => setDeltas((prev) => ({ ...prev, [user.id]: event.target.value }))} placeholder="+10 或 -5" className="w-24 rounded-full border border-gray-200 px-3 py-1 text-xs outline-none" />
+                      <input value={deltas[user.id] ?? ""} onChange={(event) => setDeltas((prev) => ({ ...prev, [user.id]: event.target.value }))} placeholder="+10 或 -5" className="w-24 rounded-full border border-gray-200 px-3 py-1 text-xs outline-none transition focus:border-gray-300" />
                       <button
                         onClick={() => {
                           const amount = Number(deltas[user.id]);
@@ -484,7 +484,7 @@ export default function AdminClient() {
                           }
                           void patchUser(user.id, { balanceDelta: amount, reason: "管理员手动调整余额" });
                         }}
-                        className="rounded-full bg-black px-3 py-1 text-xs text-white"
+                        className="rounded-full bg-gradient-to-r from-indigo-500 to-sky-500 px-3 py-1 text-xs font-medium text-white shadow-sm transition hover:brightness-105"
                       >
                         调整余额
                       </button>
@@ -501,7 +501,7 @@ export default function AdminClient() {
           </div>
         </section>
 
-        <section id="video-records" className="overflow-x-auto rounded-3xl border border-gray-200 bg-white shadow-sm">
+        <section id="video-records" className="overflow-x-auto rounded-3xl border border-gray-200 bg-white/95 shadow-md shadow-gray-200/70">
           <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
             <div>
               <h2 className="text-lg font-semibold">视频任务历史记录</h2>
@@ -514,11 +514,11 @@ export default function AdminClient() {
                 setVideoRecordPage(1);
               }}
               placeholder="搜索用户 ID / 邮箱"
-              className="rounded-full border border-gray-200 bg-gray-50 px-4 py-2 text-sm outline-none"
+              className="rounded-full border border-gray-200 bg-gray-50 px-4 py-2 text-sm outline-none transition focus:border-gray-300 focus:bg-white"
             />
           </div>
           <table className="min-w-full text-left text-sm">
-            <thead className="bg-gray-50 text-xs text-gray-500">
+            <thead className="bg-gray-50/90 text-xs font-medium text-gray-500">
               <tr>
                 <th className="px-4 py-3">用户ID</th>
                 <th className="px-4 py-3">用户邮箱</th>
@@ -537,7 +537,7 @@ export default function AdminClient() {
                   <td className="px-4 py-6 text-center text-sm text-gray-500" colSpan={9}>暂无视频任务记录</td>
                 </tr>
               ) : videoRecords.map((record) => (
-                <tr key={record.id} className="border-t border-gray-100 align-top">
+                <tr key={record.id} className="border-t border-gray-100 align-top transition hover:bg-gray-50/70">
                   <td className="px-4 py-3">{record.userId}</td>
                   <td className="px-4 py-3">{record.userEmail}</td>
                   <td className="max-w-xs px-4 py-3">
@@ -551,7 +551,7 @@ export default function AdminClient() {
                   <td className="px-4 py-3">{record.upscaleStatus}</td>
                   <td className="px-4 py-3">
                     {record.canDownload && record.downloadUrl ? (
-                      <a href={record.downloadUrl} className="rounded-full bg-black px-3 py-1 text-xs text-white">下载</a>
+                      <a href={record.downloadUrl} className="rounded-full bg-gradient-to-r from-indigo-500 to-sky-500 px-3 py-1 text-xs font-medium text-white shadow-sm">下载</a>
                     ) : (
                       <button disabled className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-400">下载</button>
                     )}
@@ -601,7 +601,7 @@ export default function AdminClient() {
                   void patchUser(grantUser.id, { authorizedAgentIds: grantAgentIds });
                   setGrantUser(null);
                 }}
-                className="rounded-full bg-black px-4 py-2 text-sm text-white"
+                className="rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-sky-500 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-200/70"
               >
                 保存授权
               </button>
@@ -644,7 +644,7 @@ export default function AdminClient() {
             </div>
             <div className="mt-5 flex justify-end gap-2">
               <button onClick={() => setPasswordUser(null)} className="rounded-full bg-gray-100 px-4 py-2 text-sm text-gray-700">取消</button>
-              <button onClick={() => void savePassword()} className="rounded-full bg-black px-4 py-2 text-sm text-white">保存</button>
+              <button onClick={() => void savePassword()} className="rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-sky-500 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-200/70">保存</button>
             </div>
           </div>
         </div>
