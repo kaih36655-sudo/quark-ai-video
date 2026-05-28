@@ -2143,7 +2143,7 @@ export default function Home() {
             </button>
           </div>
 
-          <div className="mt-4 space-y-3">
+          <div className="mt-4 flex flex-col gap-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className={isDark ? "rounded-full bg-gray-800 px-4 py-2 text-sm text-gray-100" : "rounded-full bg-gray-100 px-4 py-2 text-sm text-gray-700"}>
                 {modeLabel}
@@ -2174,7 +2174,7 @@ export default function Home() {
               </div>
             )}
 
-            <div className={isDark ? "flex flex-wrap items-center gap-2 rounded-[24px] border border-white/10 bg-white/[0.045] p-1.5 shadow-inner shadow-black/20" : "flex flex-wrap items-center gap-1.5 rounded-[24px] border border-white/80 bg-slate-100/80 p-1.5 shadow-inner shadow-white/90"}>
+            <div className={isDark ? "order-2 flex flex-wrap items-center gap-2 rounded-[24px] border border-white/10 bg-white/[0.045] p-1.5 shadow-inner shadow-black/20" : "order-2 flex flex-wrap items-center gap-1.5 rounded-[24px] border border-white/80 bg-slate-100/80 p-1.5 shadow-inner shadow-white/90"}>
               <button
                 onClick={() => {
                   setMode("remix");
@@ -2246,7 +2246,7 @@ export default function Home() {
             </div>
 
             {isRemixMode && (
-              <div className={isDark ? "rounded-3xl border border-violet-400/20 bg-violet-400/[0.04] p-4 shadow-sm" : "rounded-3xl border border-violet-100 bg-violet-50/60 p-4 shadow-sm shadow-violet-100/60"}>
+              <div className={isDark ? "order-4 rounded-3xl border border-violet-400/20 bg-violet-400/[0.04] p-4 shadow-sm" : "order-4 rounded-3xl border border-violet-100 bg-violet-50/60 p-4 shadow-sm shadow-violet-100/60"}>
                 <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <div className="text-sm font-semibold">爆款视频复刻</div>
@@ -2437,7 +2437,7 @@ export default function Home() {
             )}
 
             {isAgentMode && (
-              <div id="agent-picker" className={isDark ? "rounded-[28px] border border-indigo-400/15 bg-white/[0.045] p-4 shadow-lg shadow-black/20" : "rounded-[28px] border border-white/80 bg-white/78 p-4 shadow-lg shadow-indigo-100/70 backdrop-blur"}>
+              <div id="agent-picker" className={isDark ? "order-4 rounded-[28px] border border-indigo-400/15 bg-white/[0.045] p-4 shadow-lg shadow-black/20" : "order-4 rounded-[28px] border border-white/80 bg-white/78 p-4 shadow-lg shadow-indigo-100/70 backdrop-blur"}>
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <div className="text-sm font-semibold">{mode === "agent_image" ? "选择图片智能体" : "选择视频智能体"}</div>
@@ -2535,7 +2535,7 @@ export default function Home() {
               </div>
             )}
 
-            <div className={isDark ? "rounded-3xl border border-white/10 bg-[#11121a]/80 p-3 shadow-inner shadow-black/20" : "rounded-3xl border border-indigo-100 bg-white/70 p-3 shadow-sm shadow-indigo-100/60"}>
+            <div className={isDark ? "order-3 rounded-3xl border border-white/10 bg-[#11121a]/80 p-3 shadow-inner shadow-black/20" : "order-3 rounded-3xl border border-indigo-100 bg-white/70 p-3 shadow-sm shadow-indigo-100/60"}>
               <div className="flex flex-wrap items-center gap-2">
                 {!isRemixMode && (
                   <button
