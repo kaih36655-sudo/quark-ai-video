@@ -358,7 +358,7 @@ export async function createSora2Task(payload: CreateVideoRequest): Promise<{ ta
   }
   const createdId = pickString(parsed.json?.id) || pickString(parsed.json?.task_id);
   if (!parsed.ok || !createdId) {
-    throw new Error(String(parsed.json?.message || parsed.json?.error || "Sora2 创建任务失败"));
+    throw new Error(`Sora2 创建任务失败 status=${parsed.status} message=${String(parsed.json?.message || parsed.json?.error || "未返回任务ID")}`);
   }
   return { taskId: createdId };
 }
@@ -392,7 +392,7 @@ export async function querySora2Task(taskId: string): Promise<SoraQueryResult> {
     throw new Error(`Sora2 查询任务返回非JSON，status=${parsed.status}，preview=${textPreview(parsed.rawText, 120)}`);
   }
   if (!parsed.ok || !parsed.json) {
-    throw new Error(String(parsed.json?.message || parsed.json?.error || "Sora2 查询任务失败"));
+    throw new Error(`Sora2 查询任务失败 status=${parsed.status} message=${String(parsed.json?.message || parsed.json?.error || "空响应")}`);
   }
   const media = extractMediaFields(parsed.json);
   const videoUrl = media.videoUrl;

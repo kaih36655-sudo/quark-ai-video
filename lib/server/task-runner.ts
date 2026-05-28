@@ -41,11 +41,11 @@ const stringifyUnknownError = (value: unknown): string => {
   }
 };
 
-const sora2PipelineLog = (stage: "CREATE_RETRY" | "CREATE_FINAL_FAILED", payload: Record<string, unknown>) => {
+const sora2PipelineLog = (stage: "CREATE_RETRY" | "CREATE_FINAL_FAILED" | "CREATE_FINAL_SUCCESS", payload: Record<string, unknown>) => {
   console.log(`[SORA2][${stage}]`, JSON.stringify(payload));
 };
 
-const upscalePipelineLog = (stage: "RETRY" | "FINAL_FAILED", payload: Record<string, unknown>) => {
+const upscalePipelineLog = (stage: "RETRY" | "FINAL_FAILED" | "FINAL_SUCCESS", payload: Record<string, unknown>) => {
   console.log(`[UPSCALE][${stage}]`, JSON.stringify(payload));
 };
 
@@ -117,17 +117,24 @@ async function runSora2GenerationWithRetry(
   for (let attempt = 1; attempt <= max; attempt += 1) {
     try {
       const r = await runSora2AndWait(prompt, duration, ratio, imageUrl);
-      if (r.success) return r;
+      if (r.success) {
+        sora2PipelineLog("CREATE_FINAL_SUCCESS", {
+          attempt,
+          providerTaskId: r.providerTaskId,
+          hasVideoUrl: Boolean(r.videoUrl),
+        });
+        return r;
+      }
       last = r;
       const msg = r.errorMessage || "视频生成失败";
       if (isSora2GenerationNonRetryable(msg) || !isSora2GenerationRetryable(msg)) {
         sora2PipelineLog("CREATE_FINAL_FAILED", {
-          attempt,
+          attempts: attempt,
           maxAttempts: max,
-          delayMs: 0,
-          status: String(extractHttpStatusFromText(msg) ?? "non_retryable"),
-          code: pickLogCode(msg),
-          message: msg,
+          finalReason: msg,
+          lastStatus: String(extractHttpStatusFromText(msg) ?? "non_retryable"),
+          lastCode: pickLogCode(msg),
+          lastProviderTaskId: r.providerTaskId || "",
         });
         return { ...r, errorMessage: msg };
       }
@@ -140,6 +147,8 @@ async function runSora2GenerationWithRetry(
         status: String(extractHttpStatusFromText(msg) ?? "retryable"),
         code: pickLogCode(msg),
         message: msg,
+        providerTaskId: r.providerTaskId || "",
+        retryable: true,
       });
       await delay(delayMs);
     } catch (error) {
@@ -152,12 +161,12 @@ async function runSora2GenerationWithRetry(
       };
       if (isSora2GenerationNonRetryable(msg) || !isSora2GenerationRetryable(msg, error)) {
         sora2PipelineLog("CREATE_FINAL_FAILED", {
-          attempt,
+          attempts: attempt,
           maxAttempts: max,
-          delayMs: 0,
-          status: String(extractHttpStatusFromText(msg) ?? "non_retryable"),
-          code: pickLogCode(msg),
-          message: msg,
+          finalReason: msg,
+          lastStatus: String(extractHttpStatusFromText(msg) ?? "non_retryable"),
+          lastCode: pickLogCode(msg),
+          lastProviderTaskId: "",
         });
         return last;
       }
@@ -170,18 +179,20 @@ async function runSora2GenerationWithRetry(
         status: String(extractHttpStatusFromText(msg) ?? "retryable"),
         code: pickLogCode(msg),
         message: msg,
+        providerTaskId: "",
+        retryable: true,
       });
       await delay(delayMs);
     }
   }
   const msg = last.errorMessage || "视频生成失败";
   sora2PipelineLog("CREATE_FINAL_FAILED", {
-    attempt: max,
+    attempts: max,
     maxAttempts: max,
-    delayMs: 0,
-    status: String(extractHttpStatusFromText(msg) ?? "exhausted"),
-    code: pickLogCode(msg),
-    message: msg,
+    finalReason: msg,
+    lastStatus: String(extractHttpStatusFromText(msg) ?? "exhausted"),
+    lastCode: pickLogCode(msg),
+    lastProviderTaskId: last.providerTaskId || "",
   });
   return last;
 }
@@ -192,17 +203,25 @@ async function runUpscaleWithRetries(originalVideoUrl: string): Promise<UpscaleP
   for (let attempt = 1; attempt <= max; attempt += 1) {
     try {
       const r = await runRunningHubUpscaleWithPolling(originalVideoUrl);
-      if (r.success) return r;
+      if (r.success) {
+        upscalePipelineLog("FINAL_SUCCESS", {
+          attempt,
+          runninghubTaskId: r.taskId || "",
+          hasMp4: Boolean(r.upscaledVideoUrl),
+          hasCover: Boolean(r.upscaledCoverUrl),
+        });
+        return r;
+      }
       last = r;
       const msg = r.errorMessage || "超分失败";
       if (isUpscaleNonRetryable(msg) || !isUpscaleRetryable(msg)) {
         upscalePipelineLog("FINAL_FAILED", {
-          attempt,
+          attempts: attempt,
           maxAttempts: max,
-          delayMs: 0,
-          status: String(extractHttpStatusFromText(msg) ?? "non_retryable"),
-          code: pickLogCode(msg),
-          message: msg,
+          finalReason: msg,
+          lastStatus: String(extractHttpStatusFromText(msg) ?? "non_retryable"),
+          lastCode: pickLogCode(msg),
+          lastRunninghubTaskId: r.taskId || "",
         });
         return { ...r, errorMessage: msg };
       }
@@ -215,6 +234,8 @@ async function runUpscaleWithRetries(originalVideoUrl: string): Promise<UpscaleP
         status: String(extractHttpStatusFromText(msg) ?? "retryable"),
         code: pickLogCode(msg),
         message: msg,
+        runninghubTaskId: r.taskId || "",
+        retryable: true,
       });
       await delay(delayMs);
     } catch (error) {
@@ -222,12 +243,12 @@ async function runUpscaleWithRetries(originalVideoUrl: string): Promise<UpscaleP
       last = { success: false as const, errorMessage: msg } as UpscalePollResult;
       if (isUpscaleNonRetryable(msg) || !isUpscaleRetryable(msg, error)) {
         upscalePipelineLog("FINAL_FAILED", {
-          attempt,
+          attempts: attempt,
           maxAttempts: max,
-          delayMs: 0,
-          status: String(extractHttpStatusFromText(msg) ?? "non_retryable"),
-          code: pickLogCode(msg),
-          message: msg,
+          finalReason: msg,
+          lastStatus: String(extractHttpStatusFromText(msg) ?? "non_retryable"),
+          lastCode: pickLogCode(msg),
+          lastRunninghubTaskId: "",
         });
         return last;
       }
@@ -240,18 +261,20 @@ async function runUpscaleWithRetries(originalVideoUrl: string): Promise<UpscaleP
         status: String(extractHttpStatusFromText(msg) ?? "retryable"),
         code: pickLogCode(msg),
         message: msg,
+        runninghubTaskId: "",
+        retryable: true,
       });
       await delay(delayMs);
     }
   }
   const msg = last.errorMessage || "超分失败";
   upscalePipelineLog("FINAL_FAILED", {
-    attempt: max,
+    attempts: max,
     maxAttempts: max,
-    delayMs: 0,
-    status: String(extractHttpStatusFromText(msg) ?? "exhausted"),
-    code: pickLogCode(msg),
-    message: msg,
+    finalReason: msg,
+    lastStatus: String(extractHttpStatusFromText(msg) ?? "exhausted"),
+    lastCode: pickLogCode(msg),
+    lastRunninghubTaskId: last.taskId || "",
   });
   return last;
 }

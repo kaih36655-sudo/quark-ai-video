@@ -108,7 +108,7 @@ export async function uploadRunningHubBinaryFromRemoteUrl(remoteUrl: string): Pr
       statusCode: response.status,
       message: json?.message || json?.error,
     });
-    throw new Error(String(json?.message || json?.error || "RunningHub 上传失败"));
+    throw new Error(`RunningHub 上传失败 status=${response.status} message=${String(json?.message || json?.error || "空响应")}`);
   }
   const data = asObject(json.data);
   const fileName = pickString(data?.fileName) || pickString(data?.filename) || "";
@@ -176,7 +176,7 @@ export async function createRunningHubUpscaleTask(videoInput: string): Promise<{
     message: json?.message || json?.error,
   });
   if (!response.ok || !taskId) {
-    throw new Error(String(json?.message || json?.error || "RunningHub 创建超分任务失败"));
+    throw new Error(`RunningHub 创建超分任务失败 status=${response.status} message=${String(json?.message || json?.error || "未返回 taskId")}`);
   }
   return { taskId };
 }
@@ -193,6 +193,21 @@ export async function queryRunningHubTask(taskId: string): Promise<RunningHubQue
     body: JSON.stringify({ taskId }),
   });
   const json = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+  if (!response.ok || !json) {
+    const errorMessage = `RunningHub 查询任务失败 status=${response.status} message=${String(json?.message || json?.error || "空响应")}`;
+    log("QUERY_RESPONSE", {
+      taskId,
+      status: response.status,
+      mappedStatus: "failed",
+      hasMp4: false,
+      hasCover: false,
+      errorMessage,
+    });
+    return {
+      status: "failed",
+      errorMessage,
+    };
+  }
   const data = asObject(json?.data);
   const statusRaw = data?.status ?? json?.status;
   const status = mapStatus(statusRaw);
@@ -248,6 +263,25 @@ export async function runRunningHubUpscaleWithPolling(originalVideoUrl: string) 
           status: "SUCCESS_WITHOUT_MP4",
           hasMp4: false,
           hasCover: Boolean(result.upscaledCoverUrl),
+          errorMessage,
+          consumeMoney: result.consumeMoney,
+          taskCostTime: result.taskCostTime,
+        });
+        return {
+          success: false as const,
+          taskId,
+          errorMessage,
+          consumeMoney: result.consumeMoney,
+          taskCostTime: result.taskCostTime,
+        };
+      }
+      if (!result.upscaledCoverUrl) {
+        const errorMessage = result.errorMessage || "超分任务成功但未返回 cover 输出地址";
+        log("UPSCALE_FAILED", {
+          taskId,
+          status: "SUCCESS_WITHOUT_COVER",
+          hasMp4: true,
+          hasCover: false,
           errorMessage,
           consumeMoney: result.consumeMoney,
           taskCostTime: result.taskCostTime,
