@@ -1,3 +1,7 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { resolveLocalUploadsSource } from "./local-uploads";
+
 export type GrokVideoResult = {
   ok: boolean;
   providerTaskIds: string[];
@@ -32,6 +36,12 @@ const MAX_ATTEMPTS = 5;
 const RETRY_BACKOFF_MS = [5000, 15000, 30000, 60000];
 const QUERY_FETCH_MAX_ATTEMPTS = 3;
 const QUERY_FETCH_BACKOFF_MS = [3000, 5000];
+
+type PreparedGrokImage = {
+  payload: string;
+  mimeType: string;
+  mode: "images.base64";
+};
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -143,7 +153,11 @@ const isNonRetryableError = (message: string) => {
     text.includes("forbidden") ||
     text.includes("invalid parameter") ||
     text.includes("参数错误") ||
-    text.includes("参数无效")
+    text.includes("参数无效") ||
+    text.includes("failed to decode base64 image") ||
+    text.includes("illegal base64 data") ||
+    text.includes("invalid image base64") ||
+    text.includes("image decode failed")
   );
 };
 
@@ -161,14 +175,92 @@ const isQueryFetchRetryableError = (message: string) => {
   );
 };
 
-export async function createGrokVideoTask(params: { prompt: string; ratio: string; images?: string[]; attempt?: number }) {
+const mimeFromPathOrUrl = (value: string) => {
+  const ext = (() => {
+    try {
+      return path.extname(new URL(value).pathname).toLowerCase();
+    } catch {
+      return path.extname(value).toLowerCase();
+    }
+  })();
+  if (ext === ".png") return "image/png";
+  if (ext === ".webp") return "image/webp";
+  if (ext === ".gif") return "image/gif";
+  return "image/jpeg";
+};
+
+const stripDataUrl = (value: string) => {
+  const match = /^data:([^;,]+);base64,([\s\S]+)$/i.exec(value.trim());
+  if (!match) return null;
+  return {
+    mimeType: match[1].toLowerCase(),
+    base64: match[2].replace(/\s+/g, ""),
+  };
+};
+
+const assertBase64Image = (value: string) => {
+  if (!value || /[^a-zA-Z0-9+/=]/.test(value) || value.length % 4 === 1) {
+    throw new Error("invalid image base64");
+  }
+};
+
+async function prepareGrokReferenceImages(images?: string[]): Promise<PreparedGrokImage[]> {
+  const sourceImages = (images || []).filter((item) => typeof item === "string" && item.trim().length > 0);
+  const prepared: PreparedGrokImage[] = [];
+  for (const source of sourceImages) {
+    const trimmed = source.trim();
+    try {
+      const dataUrl = stripDataUrl(trimmed);
+      if (dataUrl) {
+        assertBase64Image(dataUrl.base64);
+        prepared.push({ payload: dataUrl.base64, mimeType: dataUrl.mimeType, mode: "images.base64" });
+        continue;
+      }
+
+      const localSource = await resolveLocalUploadsSource(trimmed);
+      if (localSource) {
+        if (!localSource.exists) {
+          throw new Error("本地参考图文件不存在");
+        }
+        const bytes = await readFile(localSource.resolvedPath);
+        prepared.push({ payload: bytes.toString("base64"), mimeType: mimeFromPathOrUrl(localSource.resolvedPath), mode: "images.base64" });
+        continue;
+      }
+
+      if (/^https?:\/\//i.test(trimmed)) {
+        const response = await fetch(trimmed);
+        if (!response.ok) {
+          throw new Error(`公网参考图下载失败 status=${response.status}`);
+        }
+        const bytes = Buffer.from(await response.arrayBuffer());
+        prepared.push({
+          payload: bytes.toString("base64"),
+          mimeType: response.headers.get("content-type")?.split(";")[0]?.trim() || mimeFromPathOrUrl(trimmed),
+          mode: "images.base64",
+        });
+        continue;
+      }
+
+      const rawBase64 = trimmed.replace(/\s+/g, "");
+      assertBase64Image(rawBase64);
+      prepared.push({ payload: rawBase64, mimeType: "image/jpeg", mode: "images.base64" });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`Grok 参考图读取失败：${reason}`);
+    }
+  }
+  return prepared;
+}
+
+export async function createGrokVideoTask(params: { prompt: string; ratio: string; images?: PreparedGrokImage[]; attempt?: number }) {
   const model = getModel();
+  const images = params.images?.map((item) => item.payload) ?? [];
   const payload = {
     model,
     prompt: `${params.prompt.trim()} --mode=custom`,
     aspect_ratio: params.ratio === "9:16" ? "9:16" : "16:9",
     size: "720P",
-    images: params.images ?? [],
+    images,
   };
   log("CREATE_REQUEST", {
     attempt: params.attempt ?? 1,
@@ -177,8 +269,10 @@ export async function createGrokVideoTask(params: { prompt: string; ratio: strin
     ratio: payload.aspect_ratio,
     size: payload.size,
     hasReferenceImage: payload.images.length > 0,
-    referenceImageMode: payload.images.length > 0 ? "images" : "none",
+    referenceImageMode: payload.images.length > 0 ? "images.base64" : "none",
     imagesCount: payload.images.length,
+    imagePayloadPreviewLength: payload.images[0]?.length ?? 0,
+    mimeType: params.images?.[0]?.mimeType || "",
   });
   const response = await fetch(`${getBaseUrl()}${CREATE_PATH}`, {
     method: "POST",
@@ -288,7 +382,7 @@ async function runStepWithRetry(params: {
   ratio: string;
   previousTaskId?: string;
   startTime: number;
-  images?: string[];
+  images?: PreparedGrokImage[];
 }) {
   let lastTaskId = "";
   let lastError = "";
@@ -333,11 +427,12 @@ export async function runGrokVideoWithExtensions(params: {
   const segmentVideoUrls: string[] = [];
   let successfulUnits = 0;
   try {
+    const baseImages = await prepareGrokReferenceImages(params.referenceImages);
     const baseResult = await runStepWithRetry({
       stage: "create",
       prompt: params.basePrompt,
       ratio: params.ratio,
-      images: params.referenceImages,
+      images: baseImages,
       startTime: 0,
     });
     providerTaskIds.push(baseResult.taskId);
@@ -422,7 +517,8 @@ export async function runGrokVideoSegments(params: {
     let previousVideoUrl = "";
     for (let index = 0; index < params.prompts.length; index += 1) {
       log("STITCH_SEGMENT_START", { segmentIndex: index + 1, totalSegments: params.prompts.length, hasPreviousVideo: Boolean(previousVideoUrl) });
-      const images = await params.getReferenceImagesForSegment?.(index + 1, previousVideoUrl);
+      const imageSources = await params.getReferenceImagesForSegment?.(index + 1, previousVideoUrl);
+      const images = await prepareGrokReferenceImages(imageSources);
       const result = await runStepWithRetry({
         stage: "create",
         prompt: params.prompts[index],
@@ -434,7 +530,7 @@ export async function runGrokVideoSegments(params: {
       if (result.videoUrl) segmentVideoUrls.push(result.videoUrl);
       previousVideoUrl = result.videoUrl || "";
       successfulUnits += 1;
-      log("STITCH_SEGMENT_SUCCESS", { segmentIndex: index + 1, taskId: result.taskId, hasVideoUrl: Boolean(result.videoUrl), imagesCount: images?.length ?? 0 });
+      log("STITCH_SEGMENT_SUCCESS", { segmentIndex: index + 1, taskId: result.taskId, hasVideoUrl: Boolean(result.videoUrl), imagesCount: images.length });
     }
     const finalVideoUrl = segmentVideoUrls[segmentVideoUrls.length - 1] || "";
     log("FINAL_SUCCESS", {

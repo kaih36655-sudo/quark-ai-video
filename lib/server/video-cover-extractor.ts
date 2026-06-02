@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fetchProviderVideo } from "./provider-video-fetch";
+import { resolveLocalUploadsSource } from "./local-uploads";
 
 const COVER_DIR = "/www/wwwroot/quark-video-git/public/uploads/covers";
 
@@ -82,8 +83,23 @@ export async function extractCoverAt015FromVideoUrl(params: {
   });
 
   try {
-    tempInputPath = await downloadToTempFile(sourceVideoUrl);
-    await runFfmpegExtract(tempInputPath, tempOutputPath);
+    const localSource = await resolveLocalUploadsSource(sourceVideoUrl);
+    log("LOCAL_SOURCE", {
+      videoId,
+      kind,
+      sourceVideoUrlPreview: sourceVideoUrl.slice(0, 140),
+      resolvedPath: localSource?.resolvedPath || "",
+      exists: Boolean(localSource?.exists),
+    });
+    if (localSource) {
+      if (!localSource.exists) {
+        throw new Error("本地视频文件不存在，无法抽取封面");
+      }
+      await runFfmpegExtract(localSource.resolvedPath, tempOutputPath);
+    } else {
+      tempInputPath = await downloadToTempFile(sourceVideoUrl);
+      await runFfmpegExtract(tempInputPath, tempOutputPath);
+    }
     await rename(tempOutputPath, finalPath);
     const coverUrl = `/api/uploads/covers/${finalFilename}`;
     log("EXTRACT_SUCCESS", { videoId, kind, coverUrl, finalPath });
@@ -93,4 +109,3 @@ export async function extractCoverAt015FromVideoUrl(params: {
     await rm(tempOutputPath, { force: true }).catch(() => {});
   }
 }
-
