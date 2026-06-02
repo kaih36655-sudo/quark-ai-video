@@ -1,13 +1,14 @@
 import { getStore } from "./store";
 import { tasksRepository, videosRepository } from "./repositories";
-import { Task } from "./types";
+import { Task, Video } from "./types";
 import { generateGrokMediumVideoPlan, generateVideoScript } from "./gpt";
 import { createSora2Task, downloadSora2Video, querySora2Task } from "./sora2";
-import { runGrokVideoWithExtensions } from "./grok-video";
+import { runGrokVideoSegments, runGrokVideoWithExtensions } from "./grok-video";
 import { runRunningHubUpscaleWithPolling } from "./runninghub";
 import { generateYunwuImage } from "./yunwu-image";
 import { enqueueUpscaleJob } from "./upscale-queue";
 import { extractCoverAt015FromVideoUrl } from "./video-cover-extractor";
+import { concatMediumVideoSegments, extractMediumVideoReferenceFrame } from "./medium-video-frame";
 import { adjustUserBalance } from "./auth-store";
 import { getMediumVideoUnitPrice, getUnitPrice } from "./pricing";
 import { getManagedAgentById } from "./agent-store";
@@ -45,7 +46,7 @@ const sora2PipelineLog = (stage: "CREATE_RETRY" | "CREATE_FINAL_FAILED" | "CREAT
   console.log(`[SORA2][${stage}]`, JSON.stringify(payload));
 };
 
-const upscalePipelineLog = (stage: "RETRY" | "FINAL_FAILED" | "FINAL_SUCCESS", payload: Record<string, unknown>) => {
+const upscalePipelineLog = (stage: "RETRY" | "FINAL_FAILED" | "FINAL_SUCCESS" | "SKIP_DUPLICATE", payload: Record<string, unknown>) => {
   console.log(`[UPSCALE][${stage}]`, JSON.stringify(payload));
 };
 
@@ -88,6 +89,15 @@ function updateSuccessfulRecordCosts(videoIds: string[], unitPrice: number | nul
 
 const getImageModelLabel = (imageModel?: "image2" | "banana2") => (imageModel === "banana2" ? "Nano Banana2" : imageModel === "image2" ? "image2" : "未记录");
 const getImageApiModel = (imageModel?: "image2" | "banana2") => (imageModel === "banana2" ? "gemini-3.1-flash-image-preview" : imageModel === "image2" ? "gpt-image-2" : undefined);
+const pickCoverFallback = (...items: unknown[]) => {
+  for (const item of items) {
+    const value = item && typeof item === "object" ? item as { upscaledCoverUrl?: unknown; coverUrl?: unknown; coverData?: unknown; originalCoverUrl?: unknown } : null;
+    const candidates = [value?.upscaledCoverUrl, value?.coverUrl, value?.coverData, value?.originalCoverUrl];
+    const found = candidates.find((candidate) => typeof candidate === "string" && candidate.trim().length > 0);
+    if (typeof found === "string") return found;
+  }
+  return "";
+};
 
 function resolveSoraSeconds(duration: string): number {
   if (duration === "4s") return 4;
@@ -197,12 +207,23 @@ async function runSora2GenerationWithRetry(
   return last;
 }
 
-async function runUpscaleWithRetries(originalVideoUrl: string): Promise<UpscalePollResult> {
+async function runUpscaleWithRetries(
+  originalVideoUrl: string,
+  options?: { existingTaskId?: string; onTaskId?: (taskId: string) => void | Promise<void>; videoId?: string }
+): Promise<UpscalePollResult> {
   const max = PIPELINE_RETRY_MAX_ATTEMPTS;
   let last = { success: false as const, errorMessage: "超分失败" } as UpscalePollResult;
+  let currentExistingTaskId = options?.existingTaskId || "";
   for (let attempt = 1; attempt <= max; attempt += 1) {
     try {
-      const r = await runRunningHubUpscaleWithPolling(originalVideoUrl);
+      const r = await runRunningHubUpscaleWithPolling(originalVideoUrl, {
+        ...options,
+        existingTaskId: currentExistingTaskId,
+        onTaskId: async (taskId) => {
+          currentExistingTaskId = taskId;
+          await options?.onTaskId?.(taskId);
+        },
+      });
       if (r.success) {
         upscalePipelineLog("FINAL_SUCCESS", {
           attempt,
@@ -213,6 +234,7 @@ async function runUpscaleWithRetries(originalVideoUrl: string): Promise<UpscaleP
         return r;
       }
       last = r;
+      currentExistingTaskId = "";
       const msg = r.errorMessage || "超分失败";
       if (isUpscaleNonRetryable(msg) || !isUpscaleRetryable(msg)) {
         upscalePipelineLog("FINAL_FAILED", {
@@ -241,6 +263,7 @@ async function runUpscaleWithRetries(originalVideoUrl: string): Promise<UpscaleP
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       last = { success: false as const, errorMessage: msg } as UpscalePollResult;
+      currentExistingTaskId = "";
       if (isUpscaleNonRetryable(msg) || !isUpscaleRetryable(msg, error)) {
         upscalePipelineLog("FINAL_FAILED", {
           attempts: attempt,
@@ -518,6 +541,117 @@ async function executeTask(taskId: string) {
   let failedCount = 0;
   const successfulRecordIds: string[] = [];
   const upscaleJobs: Promise<void>[] = [];
+  const enqueueMediumVideoUpscale = (created: Video) => {
+    const upscaleJob = enqueueUpscaleJob(task.userId, { videoId: created.id, taskId: task.id }, async () => {
+      const currentVideo = videosRepository.getById(created.id);
+      if (currentVideo?.upscaledVideoUrl) {
+        upscalePipelineLog("SKIP_DUPLICATE", {
+          videoId: created.id,
+          existingTaskId: currentVideo.upscaleTaskId || "",
+          upscaleStatus: currentVideo.upscaleStatus || "",
+          reason: "already_has_upscaled_url",
+        });
+        return;
+      }
+      const existingTaskId = currentVideo?.upscaleTaskId && ["queued", "pending", "processing"].includes(String(currentVideo.upscaleStatus || ""))
+        ? currentVideo.upscaleTaskId
+        : "";
+      if (existingTaskId) {
+        upscalePipelineLog("SKIP_DUPLICATE", {
+          videoId: created.id,
+          existingTaskId,
+          upscaleStatus: currentVideo?.upscaleStatus || "",
+          reason: "continue_existing_runninghub_task",
+        });
+      }
+      videosRepository.update(created.id, {
+        upscaleStatus: "processing",
+        upscaleTaskId: existingTaskId || currentVideo?.upscaleTaskId || "",
+        upscaleErrorMessage: "",
+      });
+      let upscaleResult: UpscalePollResult;
+      try {
+        upscaleResult = await runUpscaleWithRetries(created.originalVideoUrl!, {
+          existingTaskId,
+          videoId: created.id,
+          onTaskId: (runningHubTaskId) => {
+            videosRepository.update(created.id, { upscaleTaskId: runningHubTaskId });
+          },
+        });
+      } catch (error) {
+        upscaleResult = {
+          success: false as const,
+          errorMessage: stringifyUnknownError(error) || "超分任务异常",
+        } as UpscalePollResult;
+      }
+      if (upscaleResult.success) {
+        const upscaledVideoUrl = upscaleResult.upscaledVideoUrl || "";
+        const latestVideo = videosRepository.getById(created.id);
+        const coverFallback = pickCoverFallback({ upscaledCoverUrl: upscaleResult.upscaledCoverUrl }, latestVideo, created);
+        videosRepository.update(created.id, {
+          upscaledVideoUrl,
+          upscaledCoverUrl: upscaleResult.upscaledCoverUrl,
+          upscaleStatus: "success",
+          upscaleTaskId: upscaleResult.taskId,
+          upscaleErrorMessage: "",
+          upscaleConsumeMoney: upscaleResult.consumeMoney ?? 0,
+          upscaleTaskCostTime: upscaleResult.taskCostTime ?? 0,
+          videoUrl: upscaledVideoUrl,
+          coverUrl: coverFallback,
+          previewImageUrl: upscaledVideoUrl,
+        });
+        if (!coverFallback && upscaledVideoUrl) {
+          void (async () => {
+            runnerLog("VIDEO_COVER_ASYNC_START", {
+              taskId: task.id,
+              videoId: created.id,
+              stage: "upscaled",
+            });
+            try {
+              const extracted = await extractCoverAt015FromVideoUrl({
+                videoId: created.id,
+                sourceVideoUrl: upscaledVideoUrl,
+                kind: "upscaled",
+              });
+              videosRepository.updateCoverFields(created.id, {
+                upscaledCoverUrl: extracted.coverUrl,
+                coverUrl: extracted.coverUrl,
+              });
+            } catch (error) {
+              runnerLog("VIDEO_COVER_EXTRACT_FAILED", {
+                taskId: task.id,
+                videoId: created.id,
+                stage: "upscaled",
+                errorMessage: stringifyUnknownError(error),
+              });
+            }
+          })();
+        }
+        return;
+      }
+      videosRepository.update(created.id, {
+        upscaleStatus: "failed",
+        upscaleTaskId: upscaleResult.taskId,
+        upscaleErrorMessage: upscaleResult.errorMessage,
+        upscaleConsumeMoney: upscaleResult.consumeMoney ?? 0,
+        upscaleTaskCostTime: upscaleResult.taskCostTime ?? 0,
+        videoUrl: created.originalVideoUrl,
+        coverUrl: created.originalCoverUrl || "",
+        previewImageUrl: created.originalVideoUrl,
+      });
+    }).then(
+      () => undefined,
+      (error) => {
+        runnerLog("UPSCALE_JOB_ERROR", {
+          taskId: task.id,
+          videoId: created.id,
+          errorMessage: stringifyUnknownError(error),
+        });
+      }
+    );
+    upscaleJobs.push(upscaleJob);
+    return upscaleJob;
+  };
   if (task.mode === "image") {
     for (let index = 0; index < task.count; index += 1) {
       const latestTask = tasksRepository.getById(taskId);
@@ -678,8 +812,9 @@ async function executeTask(taskId: string) {
       totalUnits,
       extendCount,
       ratio: targetRatio,
-      provider: "grok-video-3-10s",
-      referenceImageSupport: "disabled",
+      provider: task.mediumVideoProvider || "grok",
+      strategy: task.mediumVideoStrategy || "extend",
+      referenceImageSupport: task.referenceImageUrl ? "images" : "none",
     });
 
     try {
@@ -705,11 +840,170 @@ async function executeTask(taskId: string) {
         extensionPromptCount: plan.extensionPrompts.length,
       });
 
+      if (task.mediumVideoProvider === "sora2") {
+        throw new Error("当前中视频 Sora2 模式暂不可用，请在后台切换为 Grok。");
+      }
+
+      const mediumVideoStrategy = task.mediumVideoStrategy === "stitch" ? "stitch" : "extend";
+      const referenceImages = task.referenceImageUrl ? [task.referenceImageUrl] : [];
+
+      if (mediumVideoStrategy === "stitch") {
+        const stitchPrompts = [plan.basePrompt, ...plan.extensionPrompts].map((promptText, index) =>
+          `${promptText}\n\n硬性要求：这是 Grok 分段拼接模式第 ${index + 1}/${totalUnits} 段；每段约 10 秒；承接上一段最后动作继续，不要重新开头；主体、场景、动作、情绪连续；不要字幕、水印、Logo。`
+        );
+        const grokResult = await runGrokVideoSegments({
+          prompts: stitchPrompts,
+          ratio: targetRatio,
+          targetDurationSeconds,
+          getReferenceImagesForSegment: async (segmentIndex, previousVideoUrl) => {
+            if (segmentIndex === 1) return referenceImages;
+            if (!previousVideoUrl) return undefined;
+            const frame = await extractMediumVideoReferenceFrame({
+              taskId: task.id,
+              segmentIndex,
+              sourceVideoUrl: previousVideoUrl,
+            });
+            console.log("[GROK_VIDEO][STITCH_FRAME_EXTRACT_SUCCESS]", JSON.stringify({ taskId: task.id, segmentIndex, referenceUrl: frame.referenceUrl }));
+            return [frame.referenceUrl];
+          },
+        });
+        successCount = grokResult.successfulUnits;
+        failedCount = Math.max(0, totalUnits - successCount);
+        let finalVideoUrl = "";
+        let completeness = "分段展示";
+        let concatError = "";
+        if (grokResult.segmentVideoUrls && grokResult.segmentVideoUrls.length > 1 && successCount === totalUnits) {
+          console.log("[GROK_VIDEO][STITCH_CONCAT_START]", JSON.stringify({ taskId: task.id, segments: grokResult.segmentVideoUrls.length }));
+          try {
+            const merged = await concatMediumVideoSegments({ taskId: task.id, segmentUrls: grokResult.segmentVideoUrls });
+            finalVideoUrl = merged.mergedVideoUrl;
+            completeness = "已拼接";
+            console.log("[GROK_VIDEO][STITCH_CONCAT_SUCCESS]", JSON.stringify({ taskId: task.id, mergedVideoUrl: merged.mergedVideoUrl }));
+          } catch (error) {
+            concatError = stringifyUnknownError(error);
+            completeness = "拼接失败";
+            console.log("[GROK_VIDEO][STITCH_CONCAT_FAILED]", JSON.stringify({ taskId: task.id, reason: concatError }));
+          }
+        } else if (grokResult.finalVideoUrl && successCount === 1) {
+          finalVideoUrl = grokResult.finalVideoUrl;
+          completeness = "单段";
+        }
+
+        const createdRecords = finalVideoUrl
+          ? videosRepository.createMany([
+              {
+                taskId: task.id,
+                providerTaskId: grokResult.finalTaskId || grokResult.providerTaskIds.join(","),
+                title: `中视频：${targetDurationSeconds}秒 - ${plan.title}`,
+                content: `中视频：${targetDurationSeconds}秒｜模型：Grok｜策略：分段拼接｜目标时长：${targetDurationSeconds}秒｜成功时长：${successCount * 10}秒｜完整性：${completeness}${concatError ? `｜拼接失败：${concatError}` : ""}`,
+                script: plan.outline.map((item) => `${item.start}-${item.end}s：${item.summary}`),
+                prompt: stitchPrompts.join("\n\n--- SEGMENT ---\n\n"),
+                status: "success" as const,
+                originalCoverUrl: "",
+                originalVideoUrl: finalVideoUrl,
+                upscaledVideoUrl: "",
+                upscaledCoverUrl: "",
+                upscaleStatus: "queued" as const,
+                upscaleTaskId: "",
+                upscaleErrorMessage: "",
+                upscaleConsumeMoney: 0,
+                upscaleTaskCostTime: 0,
+                coverUrl: "",
+                videoUrl: finalVideoUrl,
+                previewImageUrl: finalVideoUrl,
+                referenceImageUrl: task.referenceImageUrl || "",
+                referenceImageName: task.referenceImageName || "",
+                cost: 0,
+                seconds: successCount * 10,
+                duration: `${successCount * 10}s`,
+                ratio: targetRatio,
+                size: targetSize,
+                displayModel: "Grok",
+                apiModel: process.env.YUNWU_GROK_VIDEO_MODEL || "grok-video-3-10s",
+                mediumVideo: true,
+                mediumVideoTaskId: task.id,
+                chainId,
+                providerTaskIds: grokResult.providerTaskIds,
+                segmentVideoUrls: grokResult.segmentVideoUrls,
+                isFinalVideoLikelyComplete: completeness === "已拼接",
+                mediumVideoProvider: "grok",
+                mediumVideoStrategy: "stitch",
+                videoModelLabel: "Grok",
+                mediumVideoCompleteness: completeness,
+                segmentIndex: 1,
+                totalSegments: 1,
+                segmentTitle: `Grok 中视频 ${completeness}`,
+              },
+            ])
+          : (grokResult.segmentVideoUrls || []).map((url, index) =>
+              videosRepository.createMany([
+                {
+                  taskId: task.id,
+                  providerTaskId: grokResult.providerTaskIds[index] || "",
+                  title: `中视频片段 ${index + 1}/${totalUnits} - ${plan.title}`,
+                  content: `中视频片段 ${index + 1}/${totalUnits}｜模型：Grok｜策略：分段拼接｜完整性：${completeness}${concatError ? `｜拼接失败：${concatError}` : ""}`,
+                  script: plan.outline.map((item) => `${item.start}-${item.end}s：${item.summary}`),
+                  prompt: stitchPrompts[index] || "",
+                  status: "success" as const,
+                  originalCoverUrl: "",
+                  originalVideoUrl: url,
+                  upscaledVideoUrl: "",
+                  upscaledCoverUrl: "",
+                  upscaleStatus: "idle" as const,
+                  upscaleTaskId: "",
+                  upscaleErrorMessage: "",
+                  upscaleConsumeMoney: 0,
+                  upscaleTaskCostTime: 0,
+                  coverUrl: "",
+                  videoUrl: url,
+                  previewImageUrl: url,
+                  referenceImageUrl: "",
+                  referenceImageName: "",
+                  cost: 0,
+                  seconds: 10,
+                  duration: "10s",
+                  ratio: targetRatio,
+                  size: targetSize,
+                  displayModel: "Grok",
+                  apiModel: process.env.YUNWU_GROK_VIDEO_MODEL || "grok-video-3-10s",
+                  mediumVideo: true,
+                  mediumVideoTaskId: task.id,
+                  chainId,
+                  providerTaskIds: grokResult.providerTaskIds,
+                  segmentVideoUrls: grokResult.segmentVideoUrls,
+                  isFinalVideoLikelyComplete: false,
+                  mediumVideoProvider: "grok",
+                  mediumVideoStrategy: "stitch",
+                  videoModelLabel: "Grok",
+                  mediumVideoCompleteness: completeness,
+                  segmentIndex: index + 1,
+                  totalSegments: successCount,
+                  segmentTitle: `Grok 中视频片段 ${index + 1}/${successCount}`,
+                },
+              ])[0]
+            );
+        createdRecords.forEach((record) => successfulRecordIds.push(record.id));
+        if (finalVideoUrl && createdRecords[0]) {
+          enqueueMediumVideoUpscale(createdRecords[0]);
+          void Promise.allSettled(upscaleJobs);
+        }
+        await settleSuccessfulMediumCharges();
+        tasksRepository.update(taskId, {
+          status: failedCount === 0 && completeness !== "拼接失败" ? "success" : successCount > 0 ? "failed" : "failed",
+          mediumVideoSuccessUnits: successCount,
+          mediumVideoFailedUnits: failedCount,
+          mediumVideoFailedStage: concatError ? "拼接视频" : successCount > 0 ? "分段生成" : "创建视频",
+          mediumVideoErrorMessage: concatError || grokResult.error || "",
+        });
+        return;
+      }
+
       const grokResult = await runGrokVideoWithExtensions({
         basePrompt: plan.basePrompt,
         extensionPrompts: plan.extensionPrompts,
         ratio: targetRatio,
         targetDurationSeconds,
+        referenceImages,
       });
       successCount = grokResult.successfulUnits;
 
@@ -753,6 +1047,10 @@ async function executeTask(taskId: string) {
               providerTaskIds: grokResult.providerTaskIds,
               segmentVideoUrls: grokResult.segmentVideoUrls,
               isFinalVideoLikelyComplete: false,
+              mediumVideoProvider: "grok",
+              mediumVideoStrategy: "extend",
+              videoModelLabel: "Grok",
+              mediumVideoCompleteness: "待验证",
               segmentIndex: 1,
               totalSegments: 1,
               segmentTitle: `Grok 中视频部分完成 ${successCount * 10}秒`,
@@ -761,7 +1059,13 @@ async function executeTask(taskId: string) {
           successfulRecordIds.push(partial.id);
         }
         await settleSuccessfulMediumCharges();
-        tasksRepository.update(taskId, { status: "failed" });
+        tasksRepository.update(taskId, {
+          status: "failed",
+          mediumVideoSuccessUnits: successCount,
+          mediumVideoFailedUnits: failedCount,
+          mediumVideoFailedStage: successCount > 0 ? "扩展视频" : "创建视频",
+          mediumVideoErrorMessage: errorMessage,
+        });
         mediumVideoLog("TASK_FAILED", {
           taskId: task.id,
           targetDurationSeconds,
@@ -810,6 +1114,10 @@ async function executeTask(taskId: string) {
           providerTaskIds: grokResult.providerTaskIds,
           segmentVideoUrls: grokResult.segmentVideoUrls,
           isFinalVideoLikelyComplete: grokResult.isFinalVideoLikelyComplete,
+          mediumVideoProvider: "grok",
+          mediumVideoStrategy: "extend",
+          videoModelLabel: "Grok",
+          mediumVideoCompleteness: grokResult.isFinalVideoLikelyComplete === true ? "已确认" : "待验证",
           segmentIndex: 1,
           totalSegments: 1,
           segmentTitle: `Grok 中视频 ${targetDurationSeconds}秒`,
@@ -856,13 +1164,41 @@ async function executeTask(taskId: string) {
       })();
 
       const upscaleJob = enqueueUpscaleJob(task.userId, { videoId: created.id, taskId: task.id }, async () => {
+        const currentVideo = videosRepository.getById(created.id);
+        if (currentVideo?.upscaledVideoUrl) {
+          upscalePipelineLog("SKIP_DUPLICATE", {
+            videoId: created.id,
+            existingTaskId: currentVideo.upscaleTaskId || "",
+            upscaleStatus: currentVideo.upscaleStatus || "",
+            reason: "already_has_upscaled_url",
+          });
+          return;
+        }
+        const existingTaskId = currentVideo?.upscaleTaskId && ["queued", "pending", "processing"].includes(String(currentVideo.upscaleStatus || ""))
+          ? currentVideo.upscaleTaskId
+          : "";
+        if (existingTaskId) {
+          upscalePipelineLog("SKIP_DUPLICATE", {
+            videoId: created.id,
+            existingTaskId,
+            upscaleStatus: currentVideo?.upscaleStatus || "",
+            reason: "continue_existing_runninghub_task",
+          });
+        }
         videosRepository.update(created.id, {
           upscaleStatus: "processing",
+          upscaleTaskId: existingTaskId || currentVideo?.upscaleTaskId || "",
           upscaleErrorMessage: "",
         });
         let upscaleResult: UpscalePollResult;
         try {
-          upscaleResult = await runUpscaleWithRetries(created.originalVideoUrl!);
+          upscaleResult = await runUpscaleWithRetries(created.originalVideoUrl!, {
+            existingTaskId,
+            videoId: created.id,
+            onTaskId: (taskId) => {
+              videosRepository.update(created.id, { upscaleTaskId: taskId });
+            },
+          });
         } catch (error) {
           upscaleResult = {
             success: false as const,
@@ -870,18 +1206,48 @@ async function executeTask(taskId: string) {
           } as UpscalePollResult;
         }
         if (upscaleResult.success) {
+          const upscaledVideoUrl = upscaleResult.upscaledVideoUrl || "";
+          const latestVideo = videosRepository.getById(created.id);
+          const coverFallback = pickCoverFallback({ upscaledCoverUrl: upscaleResult.upscaledCoverUrl }, latestVideo, created);
           videosRepository.update(created.id, {
-            upscaledVideoUrl: upscaleResult.upscaledVideoUrl,
+            upscaledVideoUrl,
             upscaledCoverUrl: upscaleResult.upscaledCoverUrl,
             upscaleStatus: "success",
             upscaleTaskId: upscaleResult.taskId,
             upscaleErrorMessage: "",
             upscaleConsumeMoney: upscaleResult.consumeMoney ?? 0,
             upscaleTaskCostTime: upscaleResult.taskCostTime ?? 0,
-            videoUrl: upscaleResult.upscaledVideoUrl,
-            coverUrl: upscaleResult.upscaledCoverUrl || created.originalCoverUrl || "",
-            previewImageUrl: upscaleResult.upscaledVideoUrl,
+            videoUrl: upscaledVideoUrl,
+            coverUrl: coverFallback,
+            previewImageUrl: upscaledVideoUrl,
           });
+          if (!coverFallback && upscaledVideoUrl) {
+            void (async () => {
+              runnerLog("VIDEO_COVER_ASYNC_START", {
+                taskId: task.id,
+                videoId: created.id,
+                stage: "upscaled",
+              });
+              try {
+                const extracted = await extractCoverAt015FromVideoUrl({
+                  videoId: created.id,
+                  sourceVideoUrl: upscaledVideoUrl,
+                  kind: "upscaled",
+                });
+                videosRepository.updateCoverFields(created.id, {
+                  upscaledCoverUrl: extracted.coverUrl,
+                  coverUrl: extracted.coverUrl,
+                });
+              } catch (error) {
+                runnerLog("VIDEO_COVER_EXTRACT_FAILED", {
+                  taskId: task.id,
+                  videoId: created.id,
+                  stage: "upscaled",
+                  errorMessage: stringifyUnknownError(error),
+                });
+              }
+            })();
+          }
           return;
         }
         videosRepository.update(created.id, {
@@ -913,7 +1279,13 @@ async function executeTask(taskId: string) {
       }
       void Promise.allSettled(upscaleJobs);
       await settleSuccessfulMediumCharges();
-      tasksRepository.update(taskId, { status: "success" });
+      tasksRepository.update(taskId, {
+        status: "success",
+        mediumVideoSuccessUnits: successCount,
+        mediumVideoFailedUnits: 0,
+        mediumVideoFailedStage: "",
+        mediumVideoErrorMessage: "",
+      });
       mediumVideoLog("TASK_SUCCESS", {
         taskId: task.id,
         targetDurationSeconds,
@@ -924,7 +1296,13 @@ async function executeTask(taskId: string) {
     } catch (error) {
       const reason = stringifyUnknownError(error) || "中视频任务异常";
       await settleSuccessfulMediumCharges();
-      tasksRepository.update(taskId, { status: "failed" });
+      tasksRepository.update(taskId, {
+        status: "failed",
+        mediumVideoSuccessUnits: successCount,
+        mediumVideoFailedUnits: Math.max(0, totalUnits - successCount),
+        mediumVideoFailedStage: successCount > 0 ? "扩展视频" : "创建视频",
+        mediumVideoErrorMessage: reason,
+      });
       mediumVideoLog("TASK_FAILED", {
         taskId: task.id,
         targetDurationSeconds,
@@ -1072,13 +1450,41 @@ async function executeTask(taskId: string) {
       })();
 
       const upscaleJob = enqueueUpscaleJob(task.userId, { videoId: created.id, taskId: task.id }, async () => {
+        const currentVideo = videosRepository.getById(created.id);
+        if (currentVideo?.upscaledVideoUrl) {
+          upscalePipelineLog("SKIP_DUPLICATE", {
+            videoId: created.id,
+            existingTaskId: currentVideo.upscaleTaskId || "",
+            upscaleStatus: currentVideo.upscaleStatus || "",
+            reason: "already_has_upscaled_url",
+          });
+          return;
+        }
+        const existingTaskId = currentVideo?.upscaleTaskId && ["queued", "pending", "processing"].includes(String(currentVideo.upscaleStatus || ""))
+          ? currentVideo.upscaleTaskId
+          : "";
+        if (existingTaskId) {
+          upscalePipelineLog("SKIP_DUPLICATE", {
+            videoId: created.id,
+            existingTaskId,
+            upscaleStatus: currentVideo?.upscaleStatus || "",
+            reason: "continue_existing_runninghub_task",
+          });
+        }
         videosRepository.update(created.id, {
           upscaleStatus: "processing",
+          upscaleTaskId: existingTaskId || currentVideo?.upscaleTaskId || "",
           upscaleErrorMessage: "",
         });
         let upscaleResult: UpscalePollResult;
         try {
-          upscaleResult = await runUpscaleWithRetries(created.originalVideoUrl!);
+          upscaleResult = await runUpscaleWithRetries(created.originalVideoUrl!, {
+            existingTaskId,
+            videoId: created.id,
+            onTaskId: (taskId) => {
+              videosRepository.update(created.id, { upscaleTaskId: taskId });
+            },
+          });
         } catch (error) {
           upscaleResult = {
             success: false as const,
@@ -1086,18 +1492,22 @@ async function executeTask(taskId: string) {
           } as UpscalePollResult;
         }
         if (upscaleResult.success) {
+          const upscaledVideoUrl = upscaleResult.upscaledVideoUrl || "";
+          const latestVideo = videosRepository.getById(created.id);
+          const coverFallback = pickCoverFallback({ upscaledCoverUrl: upscaleResult.upscaledCoverUrl }, latestVideo, created);
           videosRepository.update(created.id, {
-            upscaledVideoUrl: upscaleResult.upscaledVideoUrl,
+            upscaledVideoUrl,
             upscaledCoverUrl: upscaleResult.upscaledCoverUrl,
             upscaleStatus: "success",
             upscaleTaskId: upscaleResult.taskId,
             upscaleErrorMessage: "",
             upscaleConsumeMoney: upscaleResult.consumeMoney ?? 0,
             upscaleTaskCostTime: upscaleResult.taskCostTime ?? 0,
-            videoUrl: upscaleResult.upscaledVideoUrl,
-            coverUrl: upscaleResult.upscaledCoverUrl || created.originalCoverUrl || "",
-            previewImageUrl: upscaleResult.upscaledVideoUrl,
+            videoUrl: upscaledVideoUrl,
+            coverUrl: coverFallback,
+            previewImageUrl: upscaledVideoUrl,
           });
+          if (!upscaledVideoUrl) return;
           void (async () => {
             runnerLog("VIDEO_COVER_ASYNC_START", {
               taskId: task.id,
@@ -1107,7 +1517,7 @@ async function executeTask(taskId: string) {
             try {
               const extracted = await extractCoverAt015FromVideoUrl({
                 videoId: created.id,
-                sourceVideoUrl: upscaleResult.upscaledVideoUrl,
+                sourceVideoUrl: upscaledVideoUrl,
                 kind: "upscaled",
               });
               videosRepository.updateCoverFields(created.id, {

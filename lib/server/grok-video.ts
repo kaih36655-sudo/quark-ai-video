@@ -7,6 +7,8 @@ export type GrokVideoResult = {
   isFinalVideoLikelyComplete?: boolean;
   durationSeconds: number;
   successfulUnits: number;
+  stitchConcatFailed?: boolean;
+  stitchConcatError?: string;
   error?: string;
 };
 
@@ -168,7 +170,16 @@ export async function createGrokVideoTask(params: { prompt: string; ratio: strin
     size: "720P",
     images: params.images ?? [],
   };
-  log("CREATE_REQUEST", { attempt: params.attempt ?? 1, endpoint: CREATE_PATH, model, ratio: payload.aspect_ratio, size: payload.size, imagesCount: payload.images.length });
+  log("CREATE_REQUEST", {
+    attempt: params.attempt ?? 1,
+    endpoint: CREATE_PATH,
+    model,
+    ratio: payload.aspect_ratio,
+    size: payload.size,
+    hasReferenceImage: payload.images.length > 0,
+    referenceImageMode: payload.images.length > 0 ? "images" : "none",
+    imagesCount: payload.images.length,
+  });
   const response = await fetch(`${getBaseUrl()}${CREATE_PATH}`, {
     method: "POST",
     headers: buildHeaders(),
@@ -277,6 +288,7 @@ async function runStepWithRetry(params: {
   ratio: string;
   previousTaskId?: string;
   startTime: number;
+  images?: string[];
 }) {
   let lastTaskId = "";
   let lastError = "";
@@ -284,7 +296,7 @@ async function runStepWithRetry(params: {
     try {
       const created =
         params.stage === "create"
-          ? await createGrokVideoTask({ prompt: params.prompt, ratio: params.ratio, attempt })
+          ? await createGrokVideoTask({ prompt: params.prompt, ratio: params.ratio, images: params.images, attempt })
           : await extendGrokVideoTask({
               prompt: params.prompt,
               ratio: params.ratio,
@@ -315,6 +327,7 @@ export async function runGrokVideoWithExtensions(params: {
   extensionPrompts: string[];
   ratio: string;
   targetDurationSeconds: number;
+  referenceImages?: string[];
 }): Promise<GrokVideoResult> {
   const providerTaskIds: string[] = [];
   const segmentVideoUrls: string[] = [];
@@ -324,6 +337,7 @@ export async function runGrokVideoWithExtensions(params: {
       stage: "create",
       prompt: params.basePrompt,
       ratio: params.ratio,
+      images: params.referenceImages,
       startTime: 0,
     });
     providerTaskIds.push(baseResult.taskId);
@@ -373,6 +387,80 @@ export async function runGrokVideoWithExtensions(params: {
     const message = error instanceof Error ? error.message : String(error);
     log("FINAL_FAILED", {
       stage: "run",
+      attempts: 1,
+      finalReason: message,
+      lastTaskId: providerTaskIds[providerTaskIds.length - 1] || "",
+      providerTaskIdsCount: providerTaskIds.length,
+      segmentVideoUrlsCount: segmentVideoUrls.length,
+      targetDurationSeconds: params.targetDurationSeconds,
+      successfulUnits,
+    });
+    return {
+      ok: false,
+      providerTaskIds,
+      finalTaskId: providerTaskIds[providerTaskIds.length - 1],
+      finalVideoUrl: segmentVideoUrls[segmentVideoUrls.length - 1],
+      segmentVideoUrls,
+      isFinalVideoLikelyComplete: false,
+      durationSeconds: params.targetDurationSeconds,
+      successfulUnits,
+      error: message,
+    };
+  }
+}
+
+export async function runGrokVideoSegments(params: {
+  prompts: string[];
+  ratio: string;
+  targetDurationSeconds: number;
+  getReferenceImagesForSegment?: (segmentIndex: number, previousVideoUrl?: string) => Promise<string[] | undefined>;
+}): Promise<GrokVideoResult> {
+  const providerTaskIds: string[] = [];
+  const segmentVideoUrls: string[] = [];
+  let successfulUnits = 0;
+  try {
+    let previousVideoUrl = "";
+    for (let index = 0; index < params.prompts.length; index += 1) {
+      log("STITCH_SEGMENT_START", { segmentIndex: index + 1, totalSegments: params.prompts.length, hasPreviousVideo: Boolean(previousVideoUrl) });
+      const images = await params.getReferenceImagesForSegment?.(index + 1, previousVideoUrl);
+      const result = await runStepWithRetry({
+        stage: "create",
+        prompt: params.prompts[index],
+        ratio: params.ratio,
+        images,
+        startTime: 0,
+      });
+      providerTaskIds.push(result.taskId);
+      if (result.videoUrl) segmentVideoUrls.push(result.videoUrl);
+      previousVideoUrl = result.videoUrl || "";
+      successfulUnits += 1;
+      log("STITCH_SEGMENT_SUCCESS", { segmentIndex: index + 1, taskId: result.taskId, hasVideoUrl: Boolean(result.videoUrl), imagesCount: images?.length ?? 0 });
+    }
+    const finalVideoUrl = segmentVideoUrls[segmentVideoUrls.length - 1] || "";
+    log("FINAL_SUCCESS", {
+      providerTaskIdsCount: providerTaskIds.length,
+      finalTaskId: providerTaskIds[providerTaskIds.length - 1],
+      finalVideoUrl: Boolean(finalVideoUrl),
+      segmentVideoUrlsCount: segmentVideoUrls.length,
+      targetDurationSeconds: params.targetDurationSeconds,
+      successfulUnits,
+      isFinalVideoLikelyComplete: "segmented",
+    });
+    return {
+      ok: Boolean(finalVideoUrl),
+      providerTaskIds,
+      finalTaskId: providerTaskIds[providerTaskIds.length - 1],
+      finalVideoUrl,
+      segmentVideoUrls,
+      isFinalVideoLikelyComplete: false,
+      durationSeconds: params.targetDurationSeconds,
+      successfulUnits,
+      error: finalVideoUrl ? undefined : "Grok 分段生成完成但没有可用视频地址",
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log("FINAL_FAILED", {
+      stage: "stitch",
       attempts: 1,
       finalReason: message,
       lastTaskId: providerTaskIds[providerTaskIds.length - 1] || "",

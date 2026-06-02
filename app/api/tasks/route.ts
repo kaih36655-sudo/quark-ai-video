@@ -5,6 +5,7 @@ import { ApiResponse } from "@/lib/server/types";
 import { getCurrentUser, requireCurrentUser } from "@/lib/server/auth";
 import { estimateMediumVideoCost, estimateTaskCost, getPricingConfig } from "@/lib/server/pricing";
 import { canUserUseAgent, composeAgentPrompt, getManagedAgentById } from "@/lib/server/agent-store";
+import { getModelConfig } from "@/lib/server/model-config";
 
 export const runtime = "nodejs";
 
@@ -17,15 +18,17 @@ type CreateTaskBody = {
   imageModel?: "image2" | "banana2";
   count?: number;
   mediumVideoSegments?: number;
+  mediumVideoStrategy?: "extend" | "stitch";
   agentId?: string;
   referenceImageUrl?: string;
   referenceImageName?: string;
   scheduledAt?: string;
 };
 
-const parseMediumVideoDuration = (value: unknown) => {
+const parseMediumVideoDuration = (value: unknown, provider?: string) => {
   const seconds = Number(String(value ?? "").replace(/[^\d]/g, ""));
-  return [10, 20, 30, 40, 50, 60].includes(seconds) ? seconds : null;
+  const allowedSeconds = provider === "sora2" ? [12, 24, 36, 48, 60] : [10, 20, 30, 40, 50, 60];
+  return allowedSeconds.includes(seconds) ? seconds : null;
 };
 
 export async function GET() {
@@ -57,19 +60,49 @@ export async function POST(req: NextRequest) {
   const body = (await req.json()) as CreateTaskBody;
   const prompt = body.prompt?.trim() ?? "";
   const mode = body.mode === "agent" || body.mode === "image" || body.mode === "medium_video" ? body.mode : "normal";
-  const mediumVideoTargetSeconds = mode === "medium_video" ? parseMediumVideoDuration(body.duration) : null;
-  const mediumVideoSegments = mediumVideoTargetSeconds ? mediumVideoTargetSeconds / 10 : 1;
+  const modelConfig = await getModelConfig();
+  const mediumVideoProvider = mode === "medium_video" ? modelConfig.mediumVideo.activeModel : undefined;
+  const mediumVideoTargetSeconds = mode === "medium_video" ? parseMediumVideoDuration(body.duration, mediumVideoProvider) : null;
+  const mediumVideoUnitSeconds = mediumVideoProvider === "sora2" ? 12 : 10;
+  const mediumVideoSegments = mediumVideoTargetSeconds ? mediumVideoTargetSeconds / mediumVideoUnitSeconds : 1;
   const duration = mode === "medium_video" ? `${mediumVideoTargetSeconds ?? 10}s` : body.duration ?? "12s";
   const ratio = body.ratio ?? "16:9";
   const imageSize = body.imageSize === "1K" || body.imageSize === "4K" ? body.imageSize : "2K";
-  const imageModel = body.imageModel === "banana2" ? "banana2" : "image2";
+  const requestedImageModel = body.imageModel === "banana2" || body.imageModel === "image2" ? body.imageModel : undefined;
+  const imageAvailableModels = (body.agentId ? modelConfig.agentImage.availableModels : modelConfig.plainImage.availableModels)
+    .filter((item): item is "image2" | "banana2" => item === "image2" || item === "banana2");
+  const imageModel = mode === "image" ? requestedImageModel || imageAvailableModels[0] : requestedImageModel || "image2";
   const count = mode === "medium_video" ? mediumVideoSegments : Number(body.count ?? 1);
+  const mediumVideoStrategy = body.mediumVideoStrategy === "stitch" ? "stitch" : "extend";
 
   if (!prompt) {
     return NextResponse.json<ApiResponse<null>>({ success: false, message: "prompt 不能为空" }, { status: 400 });
   }
   if (mode === "medium_video" && !mediumVideoTargetSeconds) {
-    return NextResponse.json<ApiResponse<null>>({ success: false, message: "中视频目标时长必须是 10/20/30/40/50/60 秒" }, { status: 400 });
+    const allowedText = mediumVideoProvider === "sora2" ? "12/24/36/48/60" : "10/20/30/40/50/60";
+    return NextResponse.json<ApiResponse<null>>({ success: false, message: `中视频目标时长必须是 ${allowedText} 秒` }, { status: 400 });
+  }
+  if (mode === "medium_video" && mediumVideoProvider !== "grok" && mediumVideoProvider !== "sora2") {
+    return NextResponse.json<ApiResponse<null>>({ success: false, message: "当前中视频模型配置不可用，请联系管理员。" }, { status: 400 });
+  }
+  if (mode === "medium_video" && mediumVideoProvider === "sora2") {
+    return NextResponse.json<ApiResponse<null>>({ success: false, message: "当前中视频 Sora2 模式暂不可用，请在后台切换为 Grok。" }, { status: 400 });
+  }
+  if (mode === "image") {
+    if (!imageAvailableModels.length) {
+      return NextResponse.json<ApiResponse<null>>({ success: false, message: "当前图片模型不可用，请联系管理员" }, { status: 400 });
+    }
+    const rawImageModel = typeof body.imageModel === "string" && body.imageModel.trim() ? body.imageModel.trim() : "";
+    if (rawImageModel && (!requestedImageModel || !imageAvailableModels.includes(requestedImageModel))) {
+      console.log("[TASK_CREATE][IMAGE_MODEL_BLOCKED]", JSON.stringify({
+        userId: currentUser.id,
+        requestedModel: rawImageModel,
+        allowedModels: imageAvailableModels,
+        mode,
+        hasAgentId: Boolean(body.agentId),
+      }));
+      return NextResponse.json<ApiResponse<null>>({ success: false, message: "当前图片模型已被管理员停用，请切换其他模型" }, { status: 400 });
+    }
   }
   if (!Number.isFinite(count) || count < 1 || count > (mode === "medium_video" ? 6 : 10)) {
     return NextResponse.json<ApiResponse<null>>({ success: false, message: "count 必须在 1~10" }, { status: 400 });
@@ -127,9 +160,12 @@ export async function POST(req: NextRequest) {
     imageModel: mode === "image" ? imageModel : undefined,
     count,
     mediumVideoSegments: mode === "medium_video" ? mediumVideoSegments : undefined,
+    mediumVideoProvider: mode === "medium_video" ? (mediumVideoProvider as "grok" | "sora2") : undefined,
+    mediumVideoStrategy: mode === "medium_video" ? mediumVideoStrategy : undefined,
+    videoModelLabel: mode === "medium_video" ? (mediumVideoProvider === "sora2" ? "Sora2" : "Grok") : undefined,
     status: isScheduled ? "waiting" : "queued",
-    referenceImageUrl: mode === "medium_video" ? undefined : body.referenceImageUrl,
-    referenceImageName: mode === "medium_video" ? undefined : body.referenceImageName,
+    referenceImageUrl: body.referenceImageUrl,
+    referenceImageName: body.referenceImageName,
     scheduledAt: isScheduled ? new Date(body.scheduledAt!).toISOString() : undefined,
   });
 

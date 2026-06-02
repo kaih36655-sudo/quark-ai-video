@@ -1,4 +1,11 @@
 import { fetchProviderVideo } from "./provider-video-fetch";
+import { createReadStream, createWriteStream } from "node:fs";
+import { mkdir, rename, rm, stat } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import path from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 
 type RunningHubTaskStatus = "pending" | "processing" | "success" | "failed";
 
@@ -14,6 +21,8 @@ type RunningHubQueryResult = {
 const baseUrl = () => (process.env.RUNNINGHUB_BASE_URL || "https://www.runninghub.cn").replace(/\/$/, "");
 const appId = () => process.env.RUNNINGHUB_UPSCALE_APP_ID || "1996062530516795394";
 const maxResolution = () => process.env.RUNNINGHUB_MAX_RESOLUTION || "1920";
+const UPLOADS_DIR = "/www/wwwroot/quark-video-git/public/uploads";
+const UPLOADS_API_PREFIX = "/api/uploads/";
 
 const headers = () => {
   const token = process.env.RUNNINGHUB_API_KEY;
@@ -35,6 +44,8 @@ const pickString = (value: unknown): string | undefined => {
   return trimmed.length > 0 ? trimmed : undefined;
 };
 
+const urlPreview = (value?: string) => (value ? value.slice(0, 120) : "");
+
 const asObject = (value: unknown): Record<string, unknown> | null => {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
 };
@@ -54,15 +65,18 @@ const extractUrlFromResult = (result: Record<string, unknown> | null): string | 
 
 const extractOutputs = (payload: Record<string, unknown> | null) => {
   const data = asObject(payload?.data);
-  const resultsRaw = (data?.results ?? payload?.results) as unknown;
+  const result = asObject(payload?.result);
+  const resultsRaw = (data?.results ?? result?.results ?? payload?.results) as unknown;
   const results = Array.isArray(resultsRaw) ? resultsRaw.map(asObject).filter((item): item is Record<string, unknown> => Boolean(item)) : [];
   let videoUrl: string | undefined;
   let coverUrl: string | undefined;
+  const outputTypes: string[] = [];
   for (const result of results) {
     const outputType = String(result.outputType || result.type || "").toLowerCase();
+    outputTypes.push(outputType);
     const url = extractUrlFromResult(result);
     if (!url) continue;
-    if (!videoUrl && (outputType.includes("mp4") || url.toLowerCase().includes(".mp4"))) {
+    if (!videoUrl && (outputType.includes("mp4") || outputType.includes("video") || url.toLowerCase().endsWith(".mp4") || url.toLowerCase().includes(".mp4?"))) {
       videoUrl = url;
       continue;
     }
@@ -73,6 +87,8 @@ const extractOutputs = (payload: Record<string, unknown> | null) => {
   return {
     videoUrl,
     coverUrl,
+    resultsCount: results.length,
+    outputTypes,
     hasMp4: Boolean(videoUrl),
     hasCover: Boolean(coverUrl),
   };
@@ -87,7 +103,133 @@ const mapStatus = (value: unknown): RunningHubTaskStatus => {
   return "processing";
 };
 
-export async function uploadRunningHubBinaryFromRemoteUrl(remoteUrl: string): Promise<{ fileName: string; downloadUrl?: string }> {
+const responsePreview = (payload: unknown) => {
+  try {
+    return JSON.stringify(payload).slice(0, 300);
+  } catch {
+    return String(payload).slice(0, 300);
+  }
+};
+
+const extFromUrl = (url: string, fallback: string) => {
+  try {
+    const ext = path.extname(new URL(url).pathname).toLowerCase();
+    if (/^\.[a-z0-9]+$/.test(ext)) return ext;
+  } catch {}
+  return fallback;
+};
+
+const toLocalUploadsPath = async (sourceUrl: string) => {
+  let pathname = sourceUrl;
+  try {
+    const parsed = new URL(sourceUrl);
+    pathname = parsed.pathname;
+  } catch {
+    pathname = sourceUrl;
+  }
+  if (!pathname.startsWith(UPLOADS_API_PREFIX)) return null;
+  const relativePath = decodeURIComponent(pathname.slice(UPLOADS_API_PREFIX.length));
+  const resolvedPath = path.resolve(UPLOADS_DIR, relativePath);
+  const uploadsRoot = path.resolve(UPLOADS_DIR);
+  if (resolvedPath !== uploadsRoot && !resolvedPath.startsWith(`${uploadsRoot}${path.sep}`)) {
+    throw new Error("本地上传路径非法，无法提交超分");
+  }
+  try {
+    const localStat = await stat(resolvedPath);
+    return {
+      resolvedPath,
+      exists: localStat.isFile(),
+      size: localStat.size,
+    };
+  } catch {
+    return {
+      resolvedPath,
+      exists: false,
+      size: 0,
+    };
+  }
+};
+
+const isHttpUrl = (value: string) => /^https?:\/\//i.test(value);
+
+async function downloadRunningHubResult(params: { taskId: string; sourceUrl: string; folder: string; fallbackExt: string }) {
+  const targetDir = path.join(UPLOADS_DIR, params.folder);
+  await mkdir(targetDir, { recursive: true });
+  const ext = extFromUrl(params.sourceUrl, params.fallbackExt);
+  const fileName = `${params.taskId.replace(/[^a-zA-Z0-9_-]/g, "-")}-${Date.now()}-${randomUUID().slice(0, 8)}${ext}`;
+  const filePath = path.join(targetDir, fileName);
+  const tempFilePath = `${filePath}.tmp`;
+  const response = await fetch(params.sourceUrl);
+  if (!response.ok) {
+    throw new Error(`下载 RunningHub 结果失败 status=${response.status}`);
+  }
+  if (!response.body) {
+    throw new Error("RunningHub 结果下载失败：响应 body 为空");
+  }
+  try {
+    await pipeline(Readable.fromWeb(response.body as unknown as NodeReadableStream), createWriteStream(tempFilePath));
+    await rename(tempFilePath, filePath);
+  } catch (error) {
+    await rm(tempFilePath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+  const savedStat = await stat(filePath);
+  return {
+    localPath: filePath,
+    publicUrl: `/api/uploads/${params.folder}/${fileName}`,
+    bytes: savedStat.size,
+  };
+}
+
+async function persistRunningHubOutputs(taskId: string, outputs: { videoUrl?: string; coverUrl?: string }) {
+  let videoUrl = outputs.videoUrl;
+  let coverUrl = outputs.coverUrl;
+  if (outputs.videoUrl) {
+    log("RESULT_DOWNLOAD_START", { taskId, mp4UrlPreview: urlPreview(outputs.videoUrl) });
+    try {
+      const saved = await downloadRunningHubResult({ taskId, sourceUrl: outputs.videoUrl, folder: "upscaled", fallbackExt: ".mp4" });
+      videoUrl = saved.publicUrl;
+      log("RESULT_DOWNLOAD_SUCCESS", { taskId, localPath: saved.localPath, publicUrl: saved.publicUrl, bytes: saved.bytes });
+    } catch (error) {
+      log("RESULT_DOWNLOAD_FAILED", {
+        taskId,
+        reason: error instanceof Error ? error.message : String(error),
+        fallbackExternalUrl: Boolean(outputs.videoUrl),
+      });
+    }
+  }
+  if (outputs.coverUrl) {
+    try {
+      const saved = await downloadRunningHubResult({ taskId, sourceUrl: outputs.coverUrl, folder: "upscaled-covers", fallbackExt: ".jpg" });
+      coverUrl = saved.publicUrl;
+    } catch (error) {
+      log("RESULT_DOWNLOAD_FAILED", {
+        taskId,
+        reason: `cover ${error instanceof Error ? error.message : String(error)}`,
+        fallbackExternalUrl: Boolean(outputs.coverUrl),
+      });
+    }
+  }
+  return { videoUrl, coverUrl };
+}
+
+export async function uploadRunningHubBinaryFromRemoteUrl(remoteUrl: string, context?: { videoId?: string }): Promise<{ fileName: string; downloadUrl?: string }> {
+  const localSource = await toLocalUploadsPath(remoteUrl);
+  if (localSource) {
+    console.log("[UPSCALE][LOCAL_UPLOAD_SOURCE]", JSON.stringify({
+      videoId: context?.videoId || "",
+      sourceVideoUrl: remoteUrl,
+      resolvedPath: localSource.resolvedPath,
+      exists: localSource.exists,
+    }));
+    if (!localSource.exists) {
+      throw new Error("本地拼接视频文件不存在，无法提交超分");
+    }
+    return uploadRunningHubBinaryFromLocalFile(localSource.resolvedPath, localSource.size);
+  }
+  if (!isHttpUrl(remoteUrl)) {
+    throw new Error("超分源视频必须是 http/https URL 或 /api/uploads/ 本地上传路径");
+  }
   log("UPLOAD_REQUEST", { source: "uploaded_binary", remoteUrlPreview: remoteUrl.slice(0, 120) });
   const videoRes = await fetchProviderVideo(remoteUrl);
   if (!videoRes.ok) {
@@ -101,6 +243,56 @@ export async function uploadRunningHubBinaryFromRemoteUrl(remoteUrl: string): Pr
     headers: headers(),
     body: formData,
   });
+  const json = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+  if (!response.ok || !json) {
+    log("UPLOAD_RESPONSE", {
+      ok: response.ok,
+      statusCode: response.status,
+      message: json?.message || json?.error,
+    });
+    throw new Error(`RunningHub 上传失败 status=${response.status} message=${String(json?.message || json?.error || "空响应")}`);
+  }
+  const data = asObject(json.data);
+  const fileName = pickString(data?.fileName) || pickString(data?.filename) || "";
+  if (!fileName) {
+    throw new Error("RunningHub 上传成功但未返回 fileName");
+  }
+  log("UPLOAD_RESPONSE", {
+    ok: response.ok,
+    statusCode: response.status,
+    fileName,
+    download_url: pickString(data?.download_url),
+    message: json?.message || json?.error,
+  });
+  return {
+    fileName,
+    downloadUrl: pickString(data?.download_url),
+  };
+}
+
+async function uploadRunningHubBinaryFromLocalFile(filePath: string, fileSize: number): Promise<{ fileName: string; downloadUrl?: string }> {
+  const boundary = `----quark-runninghub-${randomUUID()}`;
+  const safeName = path.basename(filePath).replace(/[^a-zA-Z0-9._-]/g, "-") || "source.mp4";
+  const header = Buffer.from(
+    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${safeName}"\r\nContent-Type: video/mp4\r\n\r\n`
+  );
+  const footer = Buffer.from(`\r\n--${boundary}--\r\n`);
+  async function* bodyStream() {
+    yield header;
+    yield* createReadStream(filePath);
+    yield footer;
+  }
+  log("UPLOAD_REQUEST", { source: "local_file_stream", filePath, fileSize });
+  const response = await fetch(`${baseUrl()}/openapi/v2/media/upload/binary`, {
+    method: "POST",
+    headers: {
+      ...headers(),
+      "Content-Type": `multipart/form-data; boundary=${boundary}`,
+      "Content-Length": String(header.length + fileSize + footer.length),
+    },
+    body: Readable.from(bodyStream()) as unknown as BodyInit,
+    duplex: "half",
+  } as RequestInit & { duplex: "half" });
   const json = (await response.json().catch(() => null)) as Record<string, unknown> | null;
   if (!response.ok || !json) {
     log("UPLOAD_RESPONSE", {
@@ -209,7 +401,8 @@ export async function queryRunningHubTask(taskId: string): Promise<RunningHubQue
     };
   }
   const data = asObject(json?.data);
-  const statusRaw = data?.status ?? json?.status;
+  const result = asObject(json?.result);
+  const statusRaw = data?.status ?? result?.status ?? json?.status;
   const status = mapStatus(statusRaw);
   const outputs = extractOutputs(json);
   const consumeMoneyValue = data?.consumeMoney ?? data?.consume_money ?? json?.consumeMoney;
@@ -223,14 +416,27 @@ export async function queryRunningHubTask(taskId: string): Promise<RunningHubQue
     pickString(json?.error);
   log("QUERY_RESPONSE", {
     taskId,
-    status: statusRaw,
+    rawStatus: statusRaw,
     mappedStatus: status,
+    resultsCount: outputs.resultsCount,
+    outputTypes: outputs.outputTypes,
     hasMp4: outputs.hasMp4,
+    mp4UrlPreview: urlPreview(outputs.videoUrl),
     hasCover: outputs.hasCover,
+    coverUrlPreview: urlPreview(outputs.coverUrl),
     errorMessage: errorMessage || "",
     consumeMoney: Number.isFinite(consumeMoney) ? consumeMoney : undefined,
     taskCostTime: Number.isFinite(taskCostTime) ? taskCostTime : undefined,
+    rawPreview: responsePreview(json),
   });
+  if (status === "success" && !outputs.hasMp4) {
+    return {
+      status: "failed",
+      consumeMoney: Number.isFinite(consumeMoney) ? consumeMoney : undefined,
+      taskCostTime: Number.isFinite(taskCostTime) ? taskCostTime : undefined,
+      errorMessage: errorMessage || "RunningHub SUCCESS 但未返回结果文件",
+    };
+  }
   return {
     status,
     upscaledVideoUrl: outputs.videoUrl,
@@ -241,17 +447,21 @@ export async function queryRunningHubTask(taskId: string): Promise<RunningHubQue
   };
 }
 
-export async function runRunningHubUpscaleWithPolling(originalVideoUrl: string) {
+export async function runRunningHubUpscaleWithPolling(originalVideoUrl: string, options?: { existingTaskId?: string; onTaskId?: (taskId: string) => void | Promise<void>; videoId?: string }) {
   const pollIntervalMs = Math.max(1000, Number(process.env.RUNNINGHUB_POLL_INTERVAL_MS || 5000));
   const maxAttempts = Math.max(1, Number(process.env.RUNNINGHUB_POLL_MAX_ATTEMPTS || 120));
 
-  const uploaded = await uploadRunningHubBinaryFromRemoteUrl(originalVideoUrl);
-  log("UPSCALE_INPUT", {
-    rhInputSource: "uploaded_binary",
-    fileName: uploaded.fileName,
-    remoteUrlPreview: originalVideoUrl.slice(0, 120),
-  });
-  const { taskId } = await createRunningHubUpscaleTask(uploaded.fileName);
+  let taskId = options?.existingTaskId || "";
+  if (!taskId) {
+    const uploaded = await uploadRunningHubBinaryFromRemoteUrl(originalVideoUrl, { videoId: options?.videoId });
+    log("UPSCALE_INPUT", {
+      rhInputSource: "uploaded_binary",
+      fileName: uploaded.fileName,
+      remoteUrlPreview: originalVideoUrl.slice(0, 120),
+    });
+    taskId = (await createRunningHubUpscaleTask(uploaded.fileName)).taskId;
+  }
+  await options?.onTaskId?.(taskId);
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const result = await queryRunningHubTask(taskId);
@@ -275,30 +485,12 @@ export async function runRunningHubUpscaleWithPolling(originalVideoUrl: string) 
           taskCostTime: result.taskCostTime,
         };
       }
-      if (!result.upscaledCoverUrl) {
-        const errorMessage = result.errorMessage || "超分任务成功但未返回 cover 输出地址";
-        log("UPSCALE_FAILED", {
-          taskId,
-          status: "SUCCESS_WITHOUT_COVER",
-          hasMp4: true,
-          hasCover: false,
-          errorMessage,
-          consumeMoney: result.consumeMoney,
-          taskCostTime: result.taskCostTime,
-        });
-        return {
-          success: false as const,
-          taskId,
-          errorMessage,
-          consumeMoney: result.consumeMoney,
-          taskCostTime: result.taskCostTime,
-        };
-      }
+      const persisted = await persistRunningHubOutputs(taskId, { videoUrl: result.upscaledVideoUrl, coverUrl: result.upscaledCoverUrl });
       log("UPSCALE_SUCCESS", {
         taskId,
         status: "SUCCESS",
         hasMp4: true,
-        hasCover: Boolean(result.upscaledCoverUrl),
+        hasCover: Boolean(persisted.coverUrl),
         errorMessage: "",
         consumeMoney: result.consumeMoney,
         taskCostTime: result.taskCostTime,
@@ -306,8 +498,8 @@ export async function runRunningHubUpscaleWithPolling(originalVideoUrl: string) 
       return {
         success: true as const,
         taskId,
-        upscaledVideoUrl: result.upscaledVideoUrl,
-        upscaledCoverUrl: result.upscaledCoverUrl,
+        upscaledVideoUrl: persisted.videoUrl,
+        upscaledCoverUrl: persisted.coverUrl,
         consumeMoney: result.consumeMoney,
         taskCostTime: result.taskCostTime,
       };
@@ -348,8 +540,8 @@ export async function runRunningHubUpscaleWithPolling(originalVideoUrl: string) 
   };
 }
 
-export async function retryVideoUpscale(originalVideoUrl: string) {
-  return runRunningHubUpscaleWithPolling(originalVideoUrl);
+export async function retryVideoUpscale(originalVideoUrl: string, options?: { existingTaskId?: string; onTaskId?: (taskId: string) => void | Promise<void> }) {
+  return runRunningHubUpscaleWithPolling(originalVideoUrl, options);
 }
 
 /** @deprecated 使用 uploadRunningHubBinaryFromRemoteUrl；保留同名导出以兼容调用方 */

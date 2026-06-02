@@ -1,4 +1,4 @@
-import { mkdir, rename, rm } from "node:fs/promises";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
@@ -10,6 +10,7 @@ import { fetchProviderVideo } from "./provider-video-fetch";
 
 const UPLOADS_DIR = "/www/wwwroot/quark-video-git/public/uploads";
 const MEDIUM_VIDEO_REF_DIR = path.join(UPLOADS_DIR, "medium-video-refs");
+const MEDIUM_VIDEO_MERGED_DIR = path.join(UPLOADS_DIR, "medium-video-merged");
 
 type CommandCheckResult = {
   available: boolean;
@@ -66,6 +67,52 @@ async function downloadToTempFile(videoUrl: string): Promise<string> {
   const writeStream = createWriteStream(tempInputPath);
   await pipeline(Readable.fromWeb(res.body as any), writeStream);
   return tempInputPath;
+}
+
+export async function concatMediumVideoSegments(params: { taskId: string; segmentUrls: string[] }) {
+  if (params.segmentUrls.length < 2) {
+    throw new Error("拼接至少需要 2 个视频片段");
+  }
+  await mkdir(MEDIUM_VIDEO_MERGED_DIR, { recursive: true });
+  const tempDir = path.join(tmpdir(), `medium-video-concat-${params.taskId}-${Date.now()}-${randomUUID()}`);
+  await mkdir(tempDir, { recursive: true });
+  const outputName = `${params.taskId}-${Date.now()}-${randomUUID().slice(0, 8)}.mp4`;
+  const tempOutputPath = path.join(tmpdir(), `${outputName}.${randomUUID()}.tmp.mp4`);
+  const finalPath = path.join(MEDIUM_VIDEO_MERGED_DIR, outputName);
+  try {
+    const localSegments: string[] = [];
+    for (let index = 0; index < params.segmentUrls.length; index += 1) {
+      const downloaded = await downloadToTempFile(params.segmentUrls[index]);
+      const localPath = path.join(tempDir, `segment-${index + 1}.mp4`);
+      await rename(downloaded, localPath);
+      localSegments.push(localPath);
+    }
+    const listPath = path.join(tempDir, "concat.txt");
+    await writeFile(listPath, localSegments.map((item) => `file '${item.replace(/'/g, "'\\''")}'`).join("\n"), "utf-8");
+    await new Promise<void>((resolve, reject) => {
+      const cp = spawn("ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", tempOutputPath], { stdio: ["ignore", "ignore", "pipe"] });
+      let stderr = "";
+      cp.stderr.on("data", (chunk) => {
+        stderr += String(chunk || "");
+      });
+      cp.on("error", reject);
+      cp.on("close", (code) => {
+        if (code === 0) {
+          resolve();
+          return;
+        }
+        reject(new Error(`ffmpeg concat exit=${code}; stderr=${stderr.slice(0, 800)}`));
+      });
+    });
+    await rename(tempOutputPath, finalPath);
+    return {
+      mergedVideoUrl: `/api/uploads/medium-video-merged/${outputName}`,
+      finalPath,
+    };
+  } finally {
+    await rm(tempOutputPath, { force: true }).catch(() => {});
+    await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 async function probeDurationSeconds(inputPath: string): Promise<number | null> {

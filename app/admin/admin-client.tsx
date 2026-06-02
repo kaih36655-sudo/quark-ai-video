@@ -44,6 +44,14 @@ type PricingConfig = {
   image2_4K: number;
 };
 
+type ModelConfig = {
+  normalVideo: { activeModel: string; availableModels: string[] };
+  agentVideo: { activeModel: string; availableModels: string[] };
+  mediumVideo: { activeModel: string; availableModels: string[] };
+  plainImage: { activeModel: string; availableModels: string[] };
+  agentImage: { activeModel: string; availableModels: string[] };
+};
+
 type VideoRecord = {
   id: string;
   taskId: string;
@@ -89,6 +97,7 @@ export default function AdminClient() {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [agents, setAgents] = useState<ManagedAgent[]>([]);
   const [pricing, setPricing] = useState<PricingConfig | null>(null);
+  const [modelConfig, setModelConfig] = useState<ModelConfig | null>(null);
   const [message, setMessage] = useState("");
   const [deltas, setDeltas] = useState<Record<string, string>>({});
   const [editingAgent, setEditingAgent] = useState<ManagedAgent>(emptyAgent);
@@ -144,6 +153,16 @@ export default function AdminClient() {
     setPricing(json.data.pricing);
   };
 
+  const loadModelConfig = async () => {
+    const res = await fetch("/api/admin/model-config", { cache: "no-store" });
+    const json = await res.json();
+    if (!res.ok || !json?.success) {
+      setMessage(json?.message || "加载模型配置失败");
+      return;
+    }
+    setModelConfig(json.data.config);
+  };
+
   const loadVideoRecords = async () => {
     const params = new URLSearchParams({
       page: String(videoRecordPage),
@@ -167,6 +186,7 @@ export default function AdminClient() {
     void loadUsers();
     void loadAgents();
     void loadPricing();
+    void loadModelConfig();
   }, []);
 
   useEffect(() => {
@@ -263,6 +283,22 @@ export default function AdminClient() {
     setMessage("价格已保存");
   };
 
+  const saveModelConfig = async () => {
+    if (!modelConfig) return;
+    const res = await fetch("/api/admin/model-config", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(modelConfig),
+    });
+    const json = await res.json();
+    if (!res.ok || !json?.success) {
+      setMessage(json?.message || "保存模型配置失败");
+      return;
+    }
+    setModelConfig(json.data.config);
+    setMessage("模型配置已保存");
+  };
+
   const fieldClass = "rounded-2xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-gray-300 focus:bg-gray-50";
   const agentPromptHints: Record<
     "scenePrompt" | "characterPrompt" | "languagePrompt" | "cameraPrompt" | "stylePrompt" | "negativePrompt" | "extraPrompt",
@@ -291,6 +327,7 @@ export default function AdminClient() {
           <a href="#users" className="rounded-full border border-indigo-100 bg-indigo-50 px-4 py-2 font-medium text-indigo-700 transition hover:bg-indigo-100">用户管理</a>
           <a href="#agents" className="rounded-full border border-violet-100 bg-violet-50 px-4 py-2 font-medium text-violet-700 transition hover:bg-violet-100">智能体管理</a>
           <a href="#pricing" className="rounded-full border border-sky-100 bg-sky-50 px-4 py-2 font-medium text-sky-700 transition hover:bg-sky-100">价格配置</a>
+          <a href="#model-config" className="rounded-full border border-emerald-100 bg-emerald-50 px-4 py-2 font-medium text-emerald-700 transition hover:bg-emerald-100">模型管理</a>
           <a href="#video-records" className="rounded-full border border-slate-200 bg-white px-4 py-2 font-medium text-slate-700 transition hover:bg-slate-50">视频任务历史记录</a>
         </div>
         {message && <div className="rounded-2xl border border-gray-200 bg-white/95 px-4 py-3 text-sm text-gray-700 shadow-sm">{message}</div>}
@@ -325,6 +362,63 @@ export default function AdminClient() {
               ))}
               <button onClick={() => void savePricing()} className="self-end rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-sky-500 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-200/70 transition hover:-translate-y-0.5 hover:brightness-105">保存价格</button>
               </div>
+            </div>
+          )}
+        </section>
+
+        <section id="model-config" className="rounded-3xl border border-gray-200 bg-white/95 p-6 shadow-md shadow-gray-200/70">
+          <h2 className="mb-4 text-lg font-semibold">模型管理</h2>
+          {modelConfig && (
+            <div className="space-y-4 text-sm">
+              <div className="grid gap-3 md:grid-cols-3">
+                <label className="space-y-1">
+                  <span className="text-xs text-gray-500">通用视频</span>
+                  <select className={fieldClass} value={modelConfig.normalVideo.activeModel} onChange={(e) => setModelConfig((prev) => prev ? { ...prev, normalVideo: { ...prev.normalVideo, activeModel: e.target.value } } : prev)}>
+                    <option value="sora2">Sora2</option>
+                  </select>
+                </label>
+                <label className="space-y-1">
+                  <span className="text-xs text-gray-500">智能体批量视频</span>
+                  <select className={fieldClass} value={modelConfig.agentVideo.activeModel} onChange={(e) => setModelConfig((prev) => prev ? { ...prev, agentVideo: { ...prev.agentVideo, activeModel: e.target.value } } : prev)}>
+                    <option value="sora2">Sora2</option>
+                  </select>
+                </label>
+                <label className="space-y-1">
+                  <span className="text-xs text-gray-500">中视频</span>
+                  <select className={fieldClass} value={modelConfig.mediumVideo.activeModel} onChange={(e) => setModelConfig((prev) => prev ? { ...prev, mediumVideo: { ...prev.mediumVideo, activeModel: e.target.value } } : prev)}>
+                    <option value="grok">Grok</option>
+                    <option value="sora2">Sora2（实验/待恢复）</option>
+                  </select>
+                </label>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                {(["plainImage", "agentImage"] as const).map((key) => (
+                  <div key={key} className="rounded-2xl border border-gray-100 bg-gray-50 p-3">
+                    <div className="mb-2 text-xs font-medium text-gray-500">{key === "plainImage" ? "通用图片可用模型" : "智能体批量图片可用模型"}</div>
+                    <div className="flex flex-wrap gap-4">
+                      {[
+                        { label: "image2", value: "image2" },
+                        { label: "Nano Banana2", value: "banana2" },
+                      ].map((item) => (
+                        <label key={`${key}-${item.value}`} className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={modelConfig[key].availableModels.includes(item.value)}
+                            onChange={(event) => setModelConfig((prev) => {
+                              if (!prev) return prev;
+                              const current = prev[key].availableModels;
+                              const next = event.target.checked ? Array.from(new Set([...current, item.value])) : current.filter((value) => value !== item.value);
+                              return { ...prev, [key]: { ...prev[key], availableModels: next.length ? next : [item.value] } };
+                            })}
+                          />
+                          {item.label}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <button onClick={() => void saveModelConfig()} className="rounded-full bg-gradient-to-r from-emerald-500 to-sky-500 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-emerald-200/70 transition hover:-translate-y-0.5 hover:brightness-105">保存模型配置</button>
             </div>
           )}
         </section>

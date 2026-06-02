@@ -6,6 +6,10 @@ import { enqueueUpscaleJob } from "@/lib/server/upscale-queue";
 
 export const runtime = "nodejs";
 
+const upscaleLog = (stage: string, payload: Record<string, unknown>) => {
+  console.log(`[UPSCALE][${stage}]`, JSON.stringify(payload));
+};
+
 async function runUpscaleCore(videoId: string): Promise<NextResponse> {
   const video = videosRepository.getById(videoId);
   if (!video) {
@@ -18,17 +22,46 @@ async function runUpscaleCore(videoId: string): Promise<NextResponse> {
   if (!originalVideoUrl || originalVideoUrl.startsWith("/api/")) {
     return NextResponse.json<ApiResponse<null>>({ success: false, message: "缺少原始视频地址，无法超分" }, { status: 400 });
   }
+  if (video.upscaledVideoUrl) {
+    upscaleLog("SKIP_DUPLICATE", {
+      videoId,
+      existingTaskId: video.upscaleTaskId || "",
+      upscaleStatus: video.upscaleStatus || "",
+      reason: "already_has_upscaled_url",
+    });
+    return NextResponse.json<ApiResponse<{ video: typeof video }>>({
+      success: true,
+      data: { video },
+    });
+  }
+  const existingTaskId = video.upscaleTaskId && ["queued", "pending", "processing"].includes(String(video.upscaleStatus || ""))
+    ? video.upscaleTaskId
+    : "";
+  if (existingTaskId) {
+    upscaleLog("SKIP_DUPLICATE", {
+      videoId,
+      existingTaskId,
+      upscaleStatus: video.upscaleStatus || "",
+      reason: "continue_existing_runninghub_task",
+    });
+  }
 
   videosRepository.update(videoId, {
     originalVideoUrl,
     originalCoverUrl: video.originalCoverUrl || video.coverUrl || "",
     upscaleStatus: "processing",
+    upscaleTaskId: existingTaskId || video.upscaleTaskId || "",
     upscaleErrorMessage: "",
   });
 
   let result: Awaited<ReturnType<typeof retryVideoUpscale>>;
   try {
-    result = await retryVideoUpscale(originalVideoUrl);
+    result = await retryVideoUpscale(originalVideoUrl, {
+      existingTaskId,
+      onTaskId: (taskId) => {
+        videosRepository.update(videoId, { upscaleTaskId: taskId });
+      },
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "超分任务异常";
     const updated = videosRepository.update(videoId, {
@@ -92,6 +125,27 @@ export async function POST(_: Request, ctx: { params: Promise<{ id: string }> })
   const task = tasksRepository.getById(video.taskId);
   if (!task) {
     return NextResponse.json<ApiResponse<null>>({ success: false, message: "任务不存在" }, { status: 404 });
+  }
+  if (video.upscaledVideoUrl) {
+    upscaleLog("SKIP_DUPLICATE", {
+      videoId: id,
+      existingTaskId: video.upscaleTaskId || "",
+      upscaleStatus: video.upscaleStatus || "",
+      reason: "already_has_upscaled_url",
+    });
+    return NextResponse.json<ApiResponse<{ video: typeof video }>>({
+      success: true,
+      data: { video },
+    });
+  }
+  if (video.upscaleTaskId && ["queued", "pending", "processing"].includes(String(video.upscaleStatus || ""))) {
+    upscaleLog("SKIP_DUPLICATE", {
+      videoId: id,
+      existingTaskId: video.upscaleTaskId,
+      upscaleStatus: video.upscaleStatus || "",
+      reason: "queued_existing_runninghub_task",
+    });
+    return enqueueUpscaleJob(task.userId, { videoId: id, taskId: video.taskId }, () => runUpscaleCore(id));
   }
 
   videosRepository.update(id, {

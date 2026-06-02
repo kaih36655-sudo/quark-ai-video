@@ -21,6 +21,13 @@ type Task = {
   promptSnapshot?: string;
   countSnapshot?: number;
   mediumVideoSegments?: number;
+  mediumVideoSuccessUnits?: number;
+  mediumVideoFailedUnits?: number;
+  mediumVideoFailedStage?: string;
+  mediumVideoErrorMessage?: string;
+  mediumVideoProvider?: "grok" | "sora2";
+  mediumVideoStrategy?: "extend" | "stitch" | "sora2";
+  videoModelLabel?: string;
   duration?: string;
   ratio?: "1:1" | "9:16" | "16:9";
   agentId?: string;
@@ -68,6 +75,10 @@ type Video = {
   providerTaskIds?: string[];
   segmentVideoUrls?: string[];
   isFinalVideoLikelyComplete?: boolean;
+  mediumVideoProvider?: "grok" | "sora2";
+  mediumVideoStrategy?: "extend" | "stitch" | "sora2";
+  videoModelLabel?: string;
+  mediumVideoCompleteness?: string;
   segmentIndex?: number;
   totalSegments?: number;
   segmentTitle?: string;
@@ -97,6 +108,14 @@ type PricingConfig = {
   image2_4K: number;
 };
 
+type ModelConfig = {
+  normalVideo: { activeModel: string; availableModels: string[] };
+  agentVideo: { activeModel: string; availableModels: string[] };
+  mediumVideo: { activeModel: string; availableModels: string[] };
+  plainImage: { activeModel: string; availableModels: string[] };
+  agentImage: { activeModel: string; availableModels: string[] };
+};
+
 const DEFAULT_PRICING: PricingConfig = {
   video_enabled: true,
   image_enabled: true,
@@ -110,6 +129,17 @@ const DEFAULT_PRICING: PricingConfig = {
   image2_2K: 0.8,
   image2_4K: 1.5,
 };
+const DEFAULT_MODEL_CONFIG: ModelConfig = {
+  normalVideo: { activeModel: "sora2", availableModels: ["sora2"] },
+  agentVideo: { activeModel: "sora2", availableModels: ["sora2"] },
+  mediumVideo: { activeModel: "grok", availableModels: ["grok", "sora2"] },
+  plainImage: { activeModel: "user_select", availableModels: ["image2", "banana2"] },
+  agentImage: { activeModel: "user_select", availableModels: ["image2", "banana2"] },
+};
+const IMAGE_MODEL_OPTIONS = [
+  { label: "image2", value: "image2" },
+  { label: "Nano Banana2", value: "banana2" },
+] as const;
 
 const RESULT_PAGE_SIZE = 30;
 const PAGE_SIZE = 50;
@@ -184,12 +214,14 @@ export default function Home() {
   const [agentSearch, setAgentSearch] = useState("");
   const [agentProfiles, setAgentProfiles] = useState<AgentProfile[]>(AGENT_PROFILES);
   const [pricing, setPricing] = useState<PricingConfig>(DEFAULT_PRICING);
+  const [modelConfig, setModelConfig] = useState<ModelConfig>(DEFAULT_MODEL_CONFIG);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [duration, setDuration] = useState("12s");
   const [ratio, setRatio] = useState("16:9");
   const [imageSize, setImageSize] = useState<"1K" | "2K" | "4K">("2K");
   const [imageModel, setImageModel] = useState<"image2" | "banana2">("image2");
   const [mediumVideoSegments, setMediumVideoSegments] = useState(3);
+  const [mediumVideoStrategy, setMediumVideoStrategy] = useState<"extend" | "stitch">("extend");
   const [timingEnabled, setTimingEnabled] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateProgress, setGenerateProgress] = useState(0);
@@ -329,6 +361,7 @@ export default function Home() {
     void refreshCurrentUser();
     void refreshAgents();
     void refreshPricing();
+    void refreshModelConfig();
   }, []);
 
 
@@ -385,6 +418,18 @@ export default function Home() {
       });
     } catch {
       setPricing(DEFAULT_PRICING);
+    }
+  };
+
+  const refreshModelConfig = async () => {
+    try {
+      const res = await fetch("/api/model-config", { cache: "no-store" });
+      const json = await res.json();
+      if (res.ok && json?.success && json.data?.config) {
+        setModelConfig(json.data.config);
+      }
+    } catch {
+      setModelConfig(DEFAULT_MODEL_CONFIG);
     }
   };
 
@@ -483,6 +528,13 @@ export default function Home() {
     promptSnapshot: typeof task.promptSnapshot === "string" ? task.promptSnapshot : typeof task.prompt === "string" ? task.prompt : undefined,
     countSnapshot: typeof task.count === "number" ? task.count : undefined,
     mediumVideoSegments: typeof task.mediumVideoSegments === "number" ? task.mediumVideoSegments : task.mode === "medium_video" && typeof task.count === "number" ? task.count : undefined,
+    mediumVideoSuccessUnits: typeof task.mediumVideoSuccessUnits === "number" ? task.mediumVideoSuccessUnits : undefined,
+    mediumVideoFailedUnits: typeof task.mediumVideoFailedUnits === "number" ? task.mediumVideoFailedUnits : undefined,
+    mediumVideoFailedStage: typeof task.mediumVideoFailedStage === "string" ? task.mediumVideoFailedStage : undefined,
+    mediumVideoErrorMessage: typeof task.mediumVideoErrorMessage === "string" ? task.mediumVideoErrorMessage : undefined,
+    mediumVideoProvider: task.mediumVideoProvider === "sora2" ? "sora2" : task.mediumVideoProvider === "grok" ? "grok" : undefined,
+    mediumVideoStrategy: task.mediumVideoStrategy === "stitch" ? "stitch" : task.mediumVideoStrategy === "sora2" ? "sora2" : task.mediumVideoStrategy === "extend" ? "extend" : undefined,
+    videoModelLabel: typeof task.videoModelLabel === "string" ? task.videoModelLabel : undefined,
     duration: typeof task.duration === "string" ? task.duration : undefined,
     ratio: task.ratio === "1:1" || task.ratio === "9:16" || task.ratio === "16:9" ? task.ratio : undefined,
     agentId: typeof task.agentId === "string" ? task.agentId : undefined,
@@ -616,6 +668,10 @@ export default function Home() {
       providerTaskIds: Array.isArray(video.providerTaskIds) ? video.providerTaskIds.filter((item): item is string => typeof item === "string") : undefined,
       segmentVideoUrls: Array.isArray(video.segmentVideoUrls) ? video.segmentVideoUrls.filter((item): item is string => typeof item === "string") : undefined,
       isFinalVideoLikelyComplete: typeof video.isFinalVideoLikelyComplete === "boolean" ? video.isFinalVideoLikelyComplete : undefined,
+      mediumVideoProvider: video.mediumVideoProvider === "sora2" ? "sora2" : video.mediumVideoProvider === "grok" ? "grok" : undefined,
+      mediumVideoStrategy: video.mediumVideoStrategy === "stitch" ? "stitch" : video.mediumVideoStrategy === "sora2" ? "sora2" : video.mediumVideoStrategy === "extend" ? "extend" : undefined,
+      videoModelLabel: typeof video.videoModelLabel === "string" ? video.videoModelLabel : undefined,
+      mediumVideoCompleteness: typeof video.mediumVideoCompleteness === "string" ? video.mediumVideoCompleteness : undefined,
       segmentIndex: typeof video.segmentIndex === "number" ? video.segmentIndex : undefined,
       totalSegments: typeof video.totalSegments === "number" ? video.totalSegments : undefined,
       segmentTitle: typeof video.segmentTitle === "string" ? video.segmentTitle : undefined,
@@ -657,7 +713,7 @@ export default function Home() {
 
     const isCurrentMediumVideoMode = mode === "medium_video";
     const effectiveCount = isCurrentMediumVideoMode ? mediumVideoSegments : countValue ?? generateCount;
-    const useReference = isCurrentMediumVideoMode ? false : typeof refEnabled === "boolean" ? refEnabled : hasReferenceImage;
+    const useReference = isCurrentMediumVideoMode ? isGrokMediumVideo && (typeof refEnabled === "boolean" ? refEnabled : hasReferenceImage) : typeof refEnabled === "boolean" ? refEnabled : hasReferenceImage;
     const useReferenceName = refName ?? referenceImageName;
     const useReferenceThumbData = refThumbData ?? referenceImageThumbData;
     const isCurrentRemixMode = mode === "remix";
@@ -679,12 +735,13 @@ export default function Home() {
     const payload = {
       prompt: seedPrompt.trim(),
       mode: submitMode as "agent" | "normal" | "image" | "medium_video",
-      duration: isCurrentMediumVideoMode ? `${mediumVideoSegments * 10}s` : duration,
+      duration: isCurrentMediumVideoMode ? `${mediumVideoSegments * (mediumVideoActiveModel === "sora2" ? 12 : 10)}s` : duration,
       ratio: isCurrentImageMode ? ratio : ratio === "9:16" ? "9:16" : "16:9",
       imageSize: isCurrentImageMode ? imageSize : undefined,
       imageModel: isCurrentImageMode ? imageModel : undefined,
       count: effectiveCount,
       mediumVideoSegments: isCurrentMediumVideoMode ? mediumVideoSegments : undefined,
+      mediumVideoStrategy: isCurrentMediumVideoMode ? mediumVideoStrategy : undefined,
       agentId: activeAgentId,
       referenceImageUrl: shouldSubmitReference ? referenceImageData ?? undefined : undefined,
       referenceImageName: shouldSubmitReference ? useReferenceName || undefined : undefined,
@@ -807,19 +864,20 @@ export default function Home() {
     const isCurrentMediumVideoMode = mode === "medium_video";
     const isCurrentImageMode = mode === "image" || mode === "agent_image";
     const submitMode = mode === "agent_image" ? "image" : isCurrentRemixMode ? "normal" : mode;
-    const shouldSubmitReference = isCurrentMediumVideoMode ? false : hasReferenceImage;
+    const shouldSubmitReference = isCurrentMediumVideoMode ? isGrokMediumVideo && hasReferenceImage : hasReferenceImage;
     const createRes = await fetch("/api/tasks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         prompt: prompt.trim(),
         mode: submitMode as "agent" | "normal" | "image" | "medium_video",
-        duration: isCurrentMediumVideoMode ? `${mediumVideoSegments * 10}s` : duration,
+        duration: isCurrentMediumVideoMode ? `${mediumVideoSegments * (mediumVideoActiveModel === "sora2" ? 12 : 10)}s` : duration,
         ratio,
         imageSize: isCurrentImageMode ? imageSize : undefined,
         imageModel: isCurrentImageMode ? imageModel : undefined,
         count: isCurrentMediumVideoMode ? mediumVideoSegments : generateCount,
         mediumVideoSegments: isCurrentMediumVideoMode ? mediumVideoSegments : undefined,
+        mediumVideoStrategy: isCurrentMediumVideoMode ? mediumVideoStrategy : undefined,
         agentId: mode === "agent" || mode === "agent_image" || mode === "medium_video" ? selectedAgent?.id : undefined,
         referenceImageUrl: shouldSubmitReference ? referenceImageData ?? undefined : undefined,
         referenceImageName: shouldSubmitReference ? referenceImageName || undefined : undefined,
@@ -1429,6 +1487,9 @@ export default function Home() {
   const selectedAgent = agentProfiles.find((agent) => agent.id === selectedAgentId) ?? null;
   const isRemixMode = mode === "remix";
   const isMediumVideoMode = mode === "medium_video";
+  const mediumVideoActiveModel = modelConfig.mediumVideo.activeModel === "sora2" ? "sora2" : "grok";
+  const isGrokMediumVideo = isMediumVideoMode && mediumVideoActiveModel === "grok";
+  const isSoraMediumVideo = isMediumVideoMode && mediumVideoActiveModel === "sora2";
   const isImageMode = mode === "image" || mode === "agent_image";
   const isAgentMode = mode === "agent" || mode === "agent_image" || isMediumVideoMode;
   const modeLabel =
@@ -1466,6 +1527,7 @@ export default function Home() {
   })();
   const isBalanceInsufficient = isLoggedIn && Number(balance) < estimatedCost;
   const currentChannelEnabled = isImageMode ? pricing.image_enabled : pricing.video_enabled;
+  const availableImageModels = (mode === "agent_image" ? modelConfig.agentImage.availableModels : modelConfig.plainImage.availableModels).filter((item) => item === "image2" || item === "banana2");
   const imageModelRestrictionMessage =
     isImageMode && imageModel === "image2" && imageSize === "2K" && ratio === "9:16"
       ? "image2模型暂不支持该比例/分辨率组合"
@@ -1571,6 +1633,15 @@ export default function Home() {
         prompt: parentTask?.prompt ?? "未知任务",
         agentName: parentTask?.agentName,
         mediumVideo: video.mediumVideo,
+        mediumVideoTargetSeconds: parentTask?.mode === "medium_video" ? Number(String(parentTask.duration || "").replace(/[^\d]/g, "")) || (parentTask.mediumVideoSegments ?? 1) * 10 : undefined,
+        mediumVideoSuccessUnits: parentTask?.mediumVideoSuccessUnits,
+        mediumVideoFailedUnits: parentTask?.mediumVideoFailedUnits,
+        mediumVideoFailedStage: parentTask?.mediumVideoFailedStage,
+        mediumVideoErrorMessage: parentTask?.mediumVideoErrorMessage,
+        mediumVideoProvider: video.mediumVideoProvider ?? parentTask?.mediumVideoProvider,
+        mediumVideoStrategy: video.mediumVideoStrategy ?? parentTask?.mediumVideoStrategy,
+        videoModelLabel: video.videoModelLabel ?? parentTask?.videoModelLabel,
+        mediumVideoCompleteness: video.mediumVideoCompleteness,
         isFinalVideoLikelyComplete: video.isFinalVideoLikelyComplete,
         segmentIndex: video.segmentIndex,
         totalSegments: video.totalSegments,
@@ -1632,6 +1703,15 @@ export default function Home() {
       prompt: task.prompt,
       agentName: task.agentName,
       mediumVideo: task.mode === "medium_video",
+      mediumVideoTargetSeconds: task.mode === "medium_video" ? Number(String(task.duration || "").replace(/[^\d]/g, "")) || (task.mediumVideoSegments ?? 1) * 10 : undefined,
+      mediumVideoSuccessUnits: task.mediumVideoSuccessUnits,
+      mediumVideoFailedUnits: task.mediumVideoFailedUnits,
+      mediumVideoFailedStage: task.mediumVideoFailedStage,
+      mediumVideoErrorMessage: task.mediumVideoErrorMessage,
+      mediumVideoProvider: task.mediumVideoProvider,
+      mediumVideoStrategy: task.mediumVideoStrategy,
+      videoModelLabel: task.videoModelLabel,
+      mediumVideoCompleteness: undefined,
       isFinalVideoLikelyComplete: undefined,
       segmentIndex: task.mode === "medium_video" ? 1 : undefined,
       totalSegments: task.mode === "medium_video" ? expectedCount : undefined,
@@ -1875,6 +1955,20 @@ export default function Home() {
     if (!mounted) return;
     localStorage.setItem("quark_image_model", imageModel);
   }, [imageModel, mounted]);
+
+  useEffect(() => {
+    if (!mounted) return;
+    if (availableImageModels.length > 0 && !availableImageModels.includes(imageModel)) {
+      setImageModel(availableImageModels[0] as "image2" | "banana2");
+    }
+  }, [availableImageModels, imageModel, mounted]);
+
+  useEffect(() => {
+    if (!mounted) return;
+    if (mediumVideoActiveModel === "sora2" && mediumVideoSegments > 5) {
+      setMediumVideoSegments(5);
+    }
+  }, [mediumVideoActiveModel, mediumVideoSegments, mounted]);
 
   useEffect(() => {
     if (!mounted || !isImageMode || imageModel !== "image2") return;
@@ -2161,7 +2255,7 @@ export default function Home() {
               </div>
             </div>
 
-            {!isRemixMode && !isMediumVideoMode && hasReferenceImage && referenceImageData && (
+            {!isRemixMode && (!isMediumVideoMode || isGrokMediumVideo) && hasReferenceImage && referenceImageData && (
               <div className={isDark ? "rounded-2xl border border-gray-800 bg-[#18181b] p-3" : "rounded-2xl border border-gray-200 bg-gray-50 p-3"}>
                 <div className="flex flex-wrap items-center gap-3">
                   {(() => {
@@ -2202,11 +2296,7 @@ export default function Home() {
               <button
                 onClick={() => {
                   setMode("medium_video");
-                  setDuration(`${mediumVideoSegments * 10}s`);
-                  setReferenceImageData(null);
-                  setReferenceImageThumbData(null);
-                  setReferenceImageName("");
-                  setHasReferenceImage(false);
+                  setDuration(`${mediumVideoSegments * (mediumVideoActiveModel === "sora2" ? 12 : 10)}s`);
                   if (ratio === "1:1") setRatio("16:9");
                 }}
                 className={modeTabClass(mode === "medium_video")}
@@ -2549,7 +2639,7 @@ export default function Home() {
 
             <div className={isDark ? "order-3 rounded-3xl border border-white/10 bg-[#11121a]/80 p-3 shadow-inner shadow-black/20" : "order-3 rounded-3xl border border-indigo-100 bg-white/70 p-3 shadow-sm shadow-indigo-100/60"}>
               <div className="flex flex-wrap items-center gap-2">
-                {!isRemixMode && !isMediumVideoMode && (
+                {!isRemixMode && (!isMediumVideoMode || isGrokMediumVideo) && (
                   <button
                     onClick={handleToggleReferenceImage}
                     className={toolButtonClass(hasReferenceImage)}
@@ -2582,7 +2672,7 @@ export default function Home() {
                 )}
                 <div className={isDark ? "rounded-full border border-white/10 bg-white/[0.05] px-4 py-2 text-sm font-medium text-gray-300" : "rounded-full border border-sky-100 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-700 shadow-sm"}>
                   {isMediumVideoMode
-                    ? `${mediumVideoSegments * 10}s / Grok / ${ratio === "9:16" ? "竖屏" : "横屏"}`
+                    ? `${mediumVideoSegments * (isSoraMediumVideo ? 12 : 10)}s / ${isSoraMediumVideo ? "Sora2" : "Grok"} / ${ratio === "9:16" ? "竖屏" : "横屏"}`
                     : isImageMode
                       ? `${imageModel === "banana2" ? "Nano Banana2" : "image2"} / ${imageSize} / ${generateCount}张`
                       : `${duration} / ${ratio === "9:16" ? "竖屏" : "横屏"} / ${generateCount}条`}
@@ -2624,12 +2714,29 @@ export default function Home() {
                               onClick={() => setMediumVideoSegments(segments)}
                               className={`rounded-full px-4 py-2 text-sm transition ${pillClass(mediumVideoSegments === segments)}`}
                             >
-                              {segments * 10}秒
+                              {segments * (isSoraMediumVideo ? 12 : 10)}秒
                             </button>
                           ))}
                         </div>
+                        {isGrokMediumVideo && (
+                          <div className="mt-3">
+                            <div className={isDark ? "mb-2 text-xs font-medium text-gray-400" : "mb-2 text-xs font-medium text-gray-500"}>Grok 生成方式</div>
+                            <div className="flex flex-wrap gap-2">
+                              {[
+                                { label: "扩展视频", value: "extend" },
+                                { label: "分段拼接", value: "stitch" },
+                              ].map((item) => (
+                                <button key={item.value} onClick={() => setMediumVideoStrategy(item.value as "extend" | "stitch")} className={`rounded-full px-4 py-2 text-sm transition ${pillClass(mediumVideoStrategy === item.value)}`}>
+                                  {item.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                         <div className={isDark ? "mt-2 text-xs text-gray-400" : "mt-2 text-xs text-slate-500"}>
-                          Grok 中视频会先生成 10 秒视频，再按目标时长逐步扩展，每次扩展约 10 秒。当前先固定一次只生成 1 个中视频任务。
+                          {isSoraMediumVideo
+                            ? "当前中视频模型：Sora2。Sora2 每段 12 秒，将按片段顺序生成；当前后端暂标记为实验/待恢复。"
+                            : "当前中视频模型：Grok。Grok 单次生成约 10 秒，可选择扩展视频或分段拼接。"}
                         </div>
                       </div>
                     ) : !isImageMode && (
@@ -2686,10 +2793,7 @@ export default function Home() {
                         <div>
                           <div className={isDark ? "mb-2 text-xs font-medium text-gray-400" : "mb-2 text-xs font-medium text-gray-500"}>图片模型</div>
                           <div className="flex flex-wrap gap-2">
-                            {[
-                              { label: "image2", value: "image2" },
-                              { label: "Nano Banana2", value: "banana2" },
-                            ].map((item) => (
+                            {IMAGE_MODEL_OPTIONS.filter((item) => availableImageModels.length === 0 || availableImageModels.includes(item.value)).map((item) => (
                               <button
                                 key={item.value}
                                 onClick={() => setImageModel(item.value as "image2" | "banana2")}
@@ -2743,7 +2847,7 @@ export default function Home() {
                       </div>
                     )}
 
-                    {!isMediumVideoMode && (
+                    {(!isMediumVideoMode || isGrokMediumVideo) && (
                       <div>
                         <div className={isDark ? "mb-2 text-xs font-medium text-gray-400" : "mb-2 text-xs font-medium text-gray-500"}>参考图状态</div>
                         <div className={isDark ? "rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-gray-300" : "rounded-2xl border border-indigo-100 bg-indigo-50/50 px-4 py-3 text-sm text-slate-600"}>
@@ -2882,7 +2986,7 @@ export default function Home() {
               </div>
             ) : (
               <div className="space-y-4">
-                {pagedVisibleResults.map(({ item, id, taskId, mediaType, title, prompt: fromTaskPrompt, isFavorite, status, isLatestDone, cost, seconds, duration: videoDuration, upscaleStatus, upscaleErrorMessage, hasReferenceImage: taskHasRef, referenceImageName, referenceImageThumbData: taskRefThumbData, coverData, videoUrl, ratio: videoRatio, size: videoSize, imageSize: resultImageSize, imageModel, displayModel, imageModelLabel, apiModel, kind, scheduledAt, createdAt, taskStatus, agentName, isPlaceholder, mediumVideo, isFinalVideoLikelyComplete, segmentIndex, totalSegments, segmentTitle }) => (
+                {pagedVisibleResults.map(({ item, id, taskId, mediaType, title, prompt: fromTaskPrompt, isFavorite, status, isLatestDone, cost, seconds, duration: videoDuration, upscaleStatus, upscaleErrorMessage, hasReferenceImage: taskHasRef, referenceImageName, referenceImageThumbData: taskRefThumbData, coverData, videoUrl, ratio: videoRatio, size: videoSize, imageSize: resultImageSize, imageModel, displayModel, imageModelLabel, apiModel, kind, scheduledAt, createdAt, taskStatus, agentName, isPlaceholder, mediumVideo, mediumVideoTargetSeconds, mediumVideoSuccessUnits, mediumVideoFailedUnits, mediumVideoFailedStage, mediumVideoErrorMessage, mediumVideoProvider, mediumVideoStrategy: resultMediumVideoStrategy, videoModelLabel, mediumVideoCompleteness, isFinalVideoLikelyComplete, segmentIndex, totalSegments, segmentTitle }) => (
               <div
                 key={id}
                 className={`relative p-3 text-sm ${surfaceCardClass}`}
@@ -2917,11 +3021,21 @@ export default function Home() {
                             displayModel,
                             imageModelLabel,
                             apiModel,
+                            taskStatus,
                             upscaleStatus,
                             upscaleErrorMessage,
                             hasReferenceImage: taskHasRef,
                             referenceImageName,
                             mediumVideo,
+                            mediumVideoTargetSeconds,
+                            mediumVideoSuccessUnits,
+                            mediumVideoFailedUnits,
+                            mediumVideoFailedStage,
+                            mediumVideoErrorMessage,
+                            mediumVideoProvider,
+                            mediumVideoStrategy: resultMediumVideoStrategy,
+                            videoModelLabel,
+                            mediumVideoCompleteness,
                             isFinalVideoLikelyComplete,
                             segmentIndex,
                             totalSegments,
@@ -2964,7 +3078,18 @@ export default function Home() {
                         )}
                         {isLatestDone && <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[11px] font-semibold text-indigo-700 shadow-sm">最新完成</span>}
                         {mediumVideo && <span className="rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-[11px] font-semibold text-violet-700 shadow-sm">中视频</span>}
-                        {mediumVideo && <span className={softChipClass}>完整性：{isFinalVideoLikelyComplete ? "已确认" : "待验证"}</span>}
+                        {mediumVideo && <span className={softChipClass}>模型：{videoModelLabel || (mediumVideoProvider === "sora2" ? "Sora2" : "Grok")}</span>}
+                        {mediumVideo && (
+                          <span className={softChipClass}>
+                            策略：{resultMediumVideoStrategy === "stitch" ? "分段拼接" : resultMediumVideoStrategy === "sora2" ? "Sora2分段" : "扩展视频"}
+                          </span>
+                        )}
+                        {mediumVideo && taskStatus === "failed" && (mediumVideoSuccessUnits ?? 0) > 0 && (
+                          <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700 shadow-sm">
+                            部分成功：已生成 {(mediumVideoSuccessUnits ?? 0) * 10}秒
+                          </span>
+                        )}
+                        {mediumVideo && <span className={softChipClass}>完整性：{mediumVideoCompleteness || (isFinalVideoLikelyComplete ? "已确认" : "待验证")}</span>}
                         {mediumVideo && segmentIndex && totalSegments && <span className={softChipClass}>片段 {segmentIndex}/{totalSegments}</span>}
                       </div>
 
@@ -3385,7 +3510,7 @@ export default function Home() {
                             : "暂无任务记录"}
                   </div>
                 ) : (
-                  pagedDrawerRecords.map(({ item, id, isFavorite, status, isLatestDone, cost, hasReferenceImage: taskHasRef, referenceImageName, referenceImageThumbData: taskRefThumbData, kind, scheduledAt, createdAt, totalVideos, successVideos, failedVideos, agentName, agentAccess, mode: recordMode, mediumVideoSegments: recordMediumSegments }) => (
+                  pagedDrawerRecords.map(({ item, id, isFavorite, status, isLatestDone, cost, hasReferenceImage: taskHasRef, referenceImageName, referenceImageThumbData: taskRefThumbData, kind, scheduledAt, createdAt, totalVideos, successVideos, failedVideos, agentName, agentAccess, mode: recordMode, mediumVideoSegments: recordMediumSegments, mediumVideoProvider: recordMediumProvider, mediumVideoStrategy: recordMediumStrategy, videoModelLabel: recordVideoModelLabel, duration: recordDuration }) => (
                     <div key={id} className="flex items-start gap-2">
                       <input
                         type="checkbox"
@@ -3420,9 +3545,9 @@ export default function Home() {
                           {recordMode === "medium_video" && (
                             <>
                               <span className="rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700">中视频</span>
-                              <span className={softChipClass}>模型：Grok</span>
-                              <span className={softChipClass}>目标时长：{(recordMediumSegments ?? 1) * 10}s</span>
-                              <span className={softChipClass}>扩展次数：{Math.max(0, (recordMediumSegments ?? 1) - 1)}</span>
+                              <span className={softChipClass}>模型：{recordVideoModelLabel || (recordMediumProvider === "sora2" ? "Sora2" : "Grok")}</span>
+                              <span className={softChipClass}>目标时长：{recordDuration || `${(recordMediumSegments ?? 1) * (recordMediumProvider === "sora2" ? 12 : 10)}s`}</span>
+                              <span className={softChipClass}>策略：{recordMediumStrategy === "stitch" ? "分段拼接" : recordMediumStrategy === "sora2" ? "Sora2分段" : "扩展视频"}</span>
                             </>
                           )}
                           {agentName && (
@@ -3718,13 +3843,29 @@ export default function Home() {
                     </span>
                     {previewVideo.mediumVideo && (
                       <span className={softChipClass}>
+                        模型：{previewVideo.videoModelLabel || (previewVideo.mediumVideoProvider === "sora2" ? "Sora2" : "Grok")}
+                      </span>
+                    )}
+                    {previewVideo.mediumVideo && (
+                      <span className={softChipClass}>
+                        策略：{previewVideo.mediumVideoStrategy === "stitch" ? "分段拼接" : previewVideo.mediumVideoStrategy === "sora2" ? "Sora2分段" : "扩展视频"}
+                      </span>
+                    )}
+                    {previewVideo.mediumVideo && (
+                      <span className={softChipClass}>
                         目标时长：{getDurationLabel(previewVideo.seconds, previewVideo.duration)}
                       </span>
                     )}
                     {previewVideo.mediumVideo && (
                       <span className={softChipClass}>
-                        Grok返回结果完整性：{previewVideo.isFinalVideoLikelyComplete ? "已确认" : "未知"}
+                        完整性：{previewVideo.mediumVideoCompleteness || (previewVideo.isFinalVideoLikelyComplete ? "已确认" : "未知")}
                       </span>
+                    )}
+                    {previewVideo.mediumVideo && previewVideo.taskStatus === "failed" && (previewVideo.mediumVideoSuccessUnits ?? 0) > 0 && (
+                      <>
+                        <span className={softChipClass}>部分成功：已生成 {(previewVideo.mediumVideoSuccessUnits ?? 0) * 10}秒</span>
+                        <span className={softChipClass}>失败阶段：{previewVideo.mediumVideoFailedStage || "扩展视频"}</span>
+                      </>
                     )}
                     {!previewVideo.mediumVideo && (
                       <span className={softChipClass}>
@@ -3860,10 +4001,18 @@ export default function Home() {
                       {detailTask.mode === "medium_video" && (
                         <>
                           <span className="rounded-full border border-violet-200 bg-violet-50 px-3 py-1 text-xs font-semibold text-violet-700">中视频任务</span>
-                          <span className={softChipClass}>模型：Grok</span>
+                          <span className={softChipClass}>模型：{detailTask.videoModelLabel || (detailTask.mediumVideoProvider === "sora2" ? "Sora2" : "Grok")}</span>
                           <span className={softChipClass}>目标时长：{detailTask.duration || `${(detailTask.mediumVideoSegments ?? detailTask.countSnapshot ?? 1) * 10}s`}</span>
-                          <span className={softChipClass}>扩展次数：{Math.max(0, (detailTask.mediumVideoSegments ?? detailTask.countSnapshot ?? 1) - 1)}</span>
-                          <span className={softChipClass}>完整性：{activeDetailVideo?.isFinalVideoLikelyComplete ? "已确认" : "待验证"}</span>
+                          <span className={softChipClass}>策略：{detailTask.mediumVideoStrategy === "stitch" ? "分段拼接" : detailTask.mediumVideoStrategy === "sora2" ? "Sora2分段" : "扩展视频"}</span>
+                          <span className={softChipClass}>完整性：{activeDetailVideo?.mediumVideoCompleteness || (activeDetailVideo?.isFinalVideoLikelyComplete ? "已确认" : "待验证")}</span>
+                          {detailTask.status === "failed" && (detailTask.mediumVideoSuccessUnits ?? 0) > 0 && (
+                            <>
+                              <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">部分成功</span>
+                              <span className={softChipClass}>已成功：{(detailTask.mediumVideoSuccessUnits ?? 0) * 10}秒</span>
+                              <span className={softChipClass}>失败阶段：{detailTask.mediumVideoFailedStage || "扩展视频"}</span>
+                              <span className={softChipClass}>失败原因：{detailTask.mediumVideoErrorMessage || "上游扩展失败"}</span>
+                            </>
+                          )}
                         </>
                       )}
                       <span className={softChipClass}>
@@ -3968,7 +4117,9 @@ export default function Home() {
                                     {video.mediumVideo && (
                                       <>
                                         <span className="rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-xs font-semibold text-violet-700">中视频</span>
-                                        <span className={softChipClass}>完整性：{video.isFinalVideoLikelyComplete ? "已确认" : "待验证"}</span>
+                                        <span className={softChipClass}>模型：{video.videoModelLabel || (video.mediumVideoProvider === "sora2" ? "Sora2" : "Grok")}</span>
+                                        <span className={softChipClass}>策略：{video.mediumVideoStrategy === "stitch" ? "分段拼接" : video.mediumVideoStrategy === "sora2" ? "Sora2分段" : "扩展视频"}</span>
+                                        <span className={softChipClass}>完整性：{video.mediumVideoCompleteness || (video.isFinalVideoLikelyComplete ? "已确认" : "待验证")}</span>
                                         {video.segmentIndex && video.totalSegments && <span className={softChipClass}>片段 {video.segmentIndex}/{video.totalSegments}</span>}
                                       </>
                                     )}

@@ -33,6 +33,13 @@ export type Task = {
   imageModel?: "image2" | "banana2";
   count: number;
   mediumVideoSegments?: number;
+  mediumVideoProvider?: "grok" | "sora2";
+  mediumVideoStrategy?: "extend" | "stitch" | "sora2";
+  mediumVideoSuccessUnits?: number;
+  mediumVideoFailedUnits?: number;
+  mediumVideoFailedStage?: string;
+  mediumVideoErrorMessage?: string;
+  videoModelLabel?: string;
   status: TaskStatus;
   referenceImageUrl?: string;
   referenceImageName?: string;
@@ -83,6 +90,10 @@ export type Video = {
   providerTaskIds?: string[];
   segmentVideoUrls?: string[];
   isFinalVideoLikelyComplete?: boolean;
+  mediumVideoProvider?: "grok" | "sora2";
+  mediumVideoStrategy?: "extend" | "stitch" | "sora2";
+  videoModelLabel?: string;
+  mediumVideoCompleteness?: string;
   segmentIndex?: number;
   totalSegments?: number;
   segmentTitle?: string;
