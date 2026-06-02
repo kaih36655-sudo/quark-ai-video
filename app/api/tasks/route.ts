@@ -3,7 +3,7 @@ import { tasksRepository, videosRepository } from "@/lib/server/repositories";
 import { scheduleTask } from "@/lib/server/task-runner";
 import { ApiResponse } from "@/lib/server/types";
 import { getCurrentUser, requireCurrentUser } from "@/lib/server/auth";
-import { estimateTaskCost, getPricingConfig } from "@/lib/server/pricing";
+import { estimateMediumVideoCost, estimateTaskCost, getPricingConfig } from "@/lib/server/pricing";
 import { canUserUseAgent, composeAgentPrompt, getManagedAgentById } from "@/lib/server/agent-store";
 
 export const runtime = "nodejs";
@@ -21,6 +21,11 @@ type CreateTaskBody = {
   referenceImageUrl?: string;
   referenceImageName?: string;
   scheduledAt?: string;
+};
+
+const parseMediumVideoDuration = (value: unknown) => {
+  const seconds = Number(String(value ?? "").replace(/[^\d]/g, ""));
+  return [10, 20, 30, 40, 50, 60].includes(seconds) ? seconds : null;
 };
 
 export async function GET() {
@@ -52,9 +57,9 @@ export async function POST(req: NextRequest) {
   const body = (await req.json()) as CreateTaskBody;
   const prompt = body.prompt?.trim() ?? "";
   const mode = body.mode === "agent" || body.mode === "image" || body.mode === "medium_video" ? body.mode : "normal";
-  const rawMediumVideoSegments = Math.floor(Number(body.mediumVideoSegments ?? body.count ?? 1));
-  const mediumVideoSegments = rawMediumVideoSegments;
-  const duration = mode === "medium_video" ? "12s" : body.duration ?? "12s";
+  const mediumVideoTargetSeconds = mode === "medium_video" ? parseMediumVideoDuration(body.duration) : null;
+  const mediumVideoSegments = mediumVideoTargetSeconds ? mediumVideoTargetSeconds / 10 : 1;
+  const duration = mode === "medium_video" ? `${mediumVideoTargetSeconds ?? 10}s` : body.duration ?? "12s";
   const ratio = body.ratio ?? "16:9";
   const imageSize = body.imageSize === "1K" || body.imageSize === "4K" ? body.imageSize : "2K";
   const imageModel = body.imageModel === "banana2" ? "banana2" : "image2";
@@ -63,10 +68,10 @@ export async function POST(req: NextRequest) {
   if (!prompt) {
     return NextResponse.json<ApiResponse<null>>({ success: false, message: "prompt 不能为空" }, { status: 400 });
   }
-  if (mode === "medium_video" && (!Number.isFinite(rawMediumVideoSegments) || rawMediumVideoSegments < 1 || rawMediumVideoSegments > 5)) {
-    return NextResponse.json<ApiResponse<null>>({ success: false, message: "中视频片段数必须在 1~5" }, { status: 400 });
+  if (mode === "medium_video" && !mediumVideoTargetSeconds) {
+    return NextResponse.json<ApiResponse<null>>({ success: false, message: "中视频目标时长必须是 10/20/30/40/50/60 秒" }, { status: 400 });
   }
-  if (!Number.isFinite(count) || count < 1 || count > 10) {
+  if (!Number.isFinite(count) || count < 1 || count > (mode === "medium_video" ? 6 : 10)) {
     return NextResponse.json<ApiResponse<null>>({ success: false, message: "count 必须在 1~10" }, { status: 400 });
   }
   const pricing = await getPricingConfig();
@@ -76,7 +81,7 @@ export async function POST(req: NextRequest) {
   if (mode !== "image" && !pricing.video_enabled) {
     return NextResponse.json<ApiResponse<null>>({ success: false, message: "通道维护升级中请稍后再试" }, { status: 503 });
   }
-  const estimateCost = await estimateTaskCost({ mode, duration, imageSize, imageModel, count });
+  const estimateCost = mode === "medium_video" ? await estimateMediumVideoCost(mediumVideoSegments) : await estimateTaskCost({ mode, duration, imageSize, imageModel, count });
   if (currentUser.balance < estimateCost) {
     return NextResponse.json<ApiResponse<null>>({ success: false, message: `余额不足，预计需要 ¥${estimateCost.toFixed(2)}` }, { status: 402 });
   }
@@ -123,8 +128,8 @@ export async function POST(req: NextRequest) {
     count,
     mediumVideoSegments: mode === "medium_video" ? mediumVideoSegments : undefined,
     status: isScheduled ? "waiting" : "queued",
-    referenceImageUrl: body.referenceImageUrl,
-    referenceImageName: body.referenceImageName,
+    referenceImageUrl: mode === "medium_video" ? undefined : body.referenceImageUrl,
+    referenceImageName: mode === "medium_video" ? undefined : body.referenceImageName,
     scheduledAt: isScheduled ? new Date(body.scheduledAt!).toISOString() : undefined,
   });
 

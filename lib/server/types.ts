@@ -80,6 +80,9 @@ export type Video = {
   mediumVideo?: boolean;
   mediumVideoTaskId?: string;
   chainId?: string;
+  providerTaskIds?: string[];
+  segmentVideoUrls?: string[];
+  isFinalVideoLikelyComplete?: boolean;
   segmentIndex?: number;
   totalSegments?: number;
   segmentTitle?: string;

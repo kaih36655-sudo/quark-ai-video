@@ -101,6 +101,16 @@ export async function getUnitPrice(input: Pick<Task, "mode" | "duration" | "imag
   return pricing.video_4s;
 }
 
+export async function getMediumVideoUnitPrice() {
+  const pricing = await getPricingConfig();
+  return pricing.video_12s;
+}
+
+export async function estimateMediumVideoCost(units: number) {
+  const normalizedUnits = Math.max(1, Math.min(6, Math.floor(units)));
+  return Number(((await getMediumVideoUnitPrice()) * normalizedUnits).toFixed(2));
+}
+
 export async function estimateTaskCost(input: Pick<Task, "mode" | "duration" | "imageSize" | "imageModel" | "count">) {
   return Number(((await getUnitPrice(input)) * input.count).toFixed(2));
 }

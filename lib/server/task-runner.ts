@@ -1,15 +1,15 @@
 import { getStore } from "./store";
 import { tasksRepository, videosRepository } from "./repositories";
 import { Task } from "./types";
-import { generateMediumVideoSegments, generateVideoScript } from "./gpt";
+import { generateGrokMediumVideoPlan, generateVideoScript } from "./gpt";
 import { createSora2Task, downloadSora2Video, querySora2Task } from "./sora2";
+import { runGrokVideoWithExtensions } from "./grok-video";
 import { runRunningHubUpscaleWithPolling } from "./runninghub";
 import { generateYunwuImage } from "./yunwu-image";
 import { enqueueUpscaleJob } from "./upscale-queue";
 import { extractCoverAt015FromVideoUrl } from "./video-cover-extractor";
-import { checkMediumVideoFrameTools, extractMediumVideoReferenceFrame } from "./medium-video-frame";
 import { adjustUserBalance } from "./auth-store";
-import { getUnitPrice } from "./pricing";
+import { getMediumVideoUnitPrice, getUnitPrice } from "./pricing";
 import { getManagedAgentById } from "./agent-store";
 import {
   PIPELINE_RETRY_BACKOFF_MS,
@@ -513,7 +513,7 @@ async function executeTask(taskId: string) {
 
   const agent = task.agentId ? await getManagedAgentById(task.agentId) : null;
   const effectivePrompt = task.promptSnapshot || task.prompt;
-  const unitPrice = await getUnitPrice(task);
+  const unitPrice = task.mode === "medium_video" ? await getMediumVideoUnitPrice() : await getUnitPrice(task);
   let successCount = 0;
   let failedCount = 0;
   const successfulRecordIds: string[] = [];
@@ -649,157 +649,142 @@ async function executeTask(taskId: string) {
   }
 
   if (task.mode === "medium_video") {
-    const totalSegments = Math.max(1, Math.min(5, Math.floor(task.mediumVideoSegments ?? task.count ?? 1)));
+    const targetDurationSeconds = (() => {
+      const numeric = Number(String(task.duration || "").replace(/[^\d]/g, ""));
+      return [10, 20, 30, 40, 50, 60].includes(numeric) ? numeric : Math.max(1, Math.min(6, Math.floor(task.mediumVideoSegments ?? task.count ?? 1))) * 10;
+    })();
+    const totalUnits = Math.max(1, Math.min(6, targetDurationSeconds / 10));
+    const extendCount = Math.max(0, totalUnits - 1);
     const targetSize = task.ratio === "9:16" ? "720x1280" : "1280x720";
     const targetRatio = task.ratio === "9:16" ? "9:16" : "16:9";
     const chainId = `medium-video-${task.id}`;
-    let currentReferenceImageUrl = task.referenceImageUrl;
     let chargedHandled = false;
 
     const settleSuccessfulMediumCharges = async () => {
       if (chargedHandled) return;
       chargedHandled = true;
       const chargedUnitPrice = await chargeSuccessfulGenerations(task, successCount, unitPrice);
-      updateSuccessfulRecordCosts(successfulRecordIds, chargedUnitPrice);
+      if (chargedUnitPrice === null) return;
+      const totalCost = Number((chargedUnitPrice * successCount).toFixed(2));
+      successfulRecordIds.forEach((videoId) => {
+        videosRepository.update(videoId, { cost: totalCost });
+      });
     };
 
     mediumVideoLog("TASK_START", {
       taskId: task.id,
       userId: task.userId,
-      totalSegments,
+      targetDurationSeconds,
+      totalUnits,
+      extendCount,
       ratio: targetRatio,
-      hasInitialReferenceImage: Boolean(task.referenceImageUrl),
+      provider: "grok-video-3-10s",
+      referenceImageSupport: "disabled",
     });
 
     try {
-    if (totalSegments > 1) {
-      const frameTools = await checkMediumVideoFrameTools();
-      mediumVideoLog("FRAME_TOOL_CHECK", {
-        taskId: task.id,
-        totalSegments,
-        ffmpegAvailable: frameTools.ffmpegAvailable,
-        ffprobeAvailable: frameTools.ffprobeAvailable,
-        error: frameTools.error || "",
+      const latestTask = tasksRepository.getById(taskId);
+      if (!latestTask || latestTask.status === "cancelled") {
+        runnerLog("TASK_ABORTED", { taskId, reason: "medium video task removed or cancelled before Grok execution" });
+        return;
+      }
+
+      const plan = await generateGrokMediumVideoPlan({
+        theme: effectivePrompt,
+        targetDurationSeconds,
+        ratio: targetRatio,
+        agentName: task.agentName,
+        agentDescription: agent?.description,
       });
-      if (!frameTools.ffmpegAvailable) {
-        const reason = "服务器缺少 ffmpeg，无法生成多段中视频";
+      mediumVideoLog("GROK_PLAN_CREATED", {
+        taskId: task.id,
+        title: plan.title,
+        targetDurationSeconds,
+        outline: plan.outline,
+        basePromptPreview: plan.basePrompt.slice(0, 160),
+        extensionPromptCount: plan.extensionPrompts.length,
+      });
+
+      const grokResult = await runGrokVideoWithExtensions({
+        basePrompt: plan.basePrompt,
+        extensionPrompts: plan.extensionPrompts,
+        ratio: targetRatio,
+        targetDurationSeconds,
+      });
+      successCount = grokResult.successfulUnits;
+
+      if (!grokResult.ok || !grokResult.finalVideoUrl) {
+        failedCount = Math.max(1, totalUnits - successCount);
+        const errorMessage = grokResult.error || "Grok 中视频生成失败";
+        if (grokResult.finalVideoUrl) {
+          const partial = videosRepository.createMany([
+            {
+              taskId: task.id,
+              providerTaskId: grokResult.finalTaskId || grokResult.providerTaskIds.join(","),
+              title: `中视频部分完成：${successCount * 10}秒 - ${plan.title}`,
+              content: `中视频部分完成：目标 ${targetDurationSeconds} 秒，已成功 ${successCount * 10} 秒｜模型：${process.env.YUNWU_GROK_VIDEO_MODEL || "grok-video-3-10s"}｜providerTaskIds：${grokResult.providerTaskIds.join(", ")}｜是否疑似完整视频：未知｜${task.agentName ? `智能体：${task.agentName}｜` : ""}${errorMessage}`,
+              script: plan.outline.map((item) => `${item.start}-${item.end}s：${item.summary}`),
+              prompt: [plan.basePrompt, ...plan.extensionPrompts].join("\n\n--- EXTEND ---\n\n"),
+              status: "success" as const,
+              originalCoverUrl: "",
+              originalVideoUrl: grokResult.finalVideoUrl,
+              upscaledVideoUrl: "",
+              upscaledCoverUrl: "",
+              upscaleStatus: "idle" as const,
+              upscaleTaskId: "",
+              upscaleErrorMessage: "",
+              upscaleConsumeMoney: 0,
+              upscaleTaskCostTime: 0,
+              coverUrl: "",
+              videoUrl: grokResult.finalVideoUrl,
+              previewImageUrl: grokResult.finalVideoUrl,
+              referenceImageUrl: "",
+              referenceImageName: "",
+              cost: 0,
+              seconds: successCount * 10,
+              duration: `${successCount * 10}s`,
+              ratio: targetRatio,
+              size: targetSize,
+              displayModel: "Grok",
+              apiModel: process.env.YUNWU_GROK_VIDEO_MODEL || "grok-video-3-10s",
+              mediumVideo: true,
+              mediumVideoTaskId: task.id,
+              chainId,
+              providerTaskIds: grokResult.providerTaskIds,
+              segmentVideoUrls: grokResult.segmentVideoUrls,
+              isFinalVideoLikelyComplete: false,
+              segmentIndex: 1,
+              totalSegments: 1,
+              segmentTitle: `Grok 中视频部分完成 ${successCount * 10}秒`,
+            },
+          ])[0];
+          successfulRecordIds.push(partial.id);
+        }
+        await settleSuccessfulMediumCharges();
         tasksRepository.update(taskId, { status: "failed" });
         mediumVideoLog("TASK_FAILED", {
           taskId: task.id,
-          failedSegment: 1,
-          reason,
+          targetDurationSeconds,
+          successUnits: successCount,
+          failedUnits: failedCount,
+          providerTaskIds: grokResult.providerTaskIds,
+          reason: errorMessage,
         });
         return;
       }
-    }
 
-    const segmentPrompts = await generateMediumVideoSegments({
-      theme: effectivePrompt,
-      totalSegments,
-      ratio: targetRatio,
-      agentName: task.agentName,
-      agentDescription: agent?.description,
-      hasReferenceImage: Boolean(task.referenceImageUrl),
-      referenceImageName: task.referenceImageName,
-    });
-    mediumVideoLog("PROMPTS_CREATED", {
-      taskId: task.id,
-      totalSegments,
-      promptPreviewList: segmentPrompts.map((segment) => ({
-        segmentIndex: segment.segmentIndex,
-        title: segment.title,
-        promptPreview: segment.prompt.slice(0, 120),
-      })),
-    });
-
-    mediumVideoLog("INITIAL_REFERENCE_USED", {
-      taskId: task.id,
-      hasReferenceImage: Boolean(task.referenceImageUrl),
-      source: task.referenceImageUrl ? "original_reference" : "none",
-    });
-
-    const failMediumTask = async (failedSegment: number, reason: string) => {
-      await settleSuccessfulMediumCharges();
-      tasksRepository.update(taskId, { status: "failed" });
-      mediumVideoLog("TASK_FAILED", {
-        taskId: task.id,
-        failedSegment,
-        reason,
-      });
-    };
-
-    for (let index = 0; index < totalSegments; index += 1) {
-      const segmentIndex = index + 1;
-      const segment = segmentPrompts[index] ?? segmentPrompts[segmentPrompts.length - 1];
-      const latestTask = tasksRepository.getById(taskId);
-      if (!latestTask || latestTask.status === "cancelled") {
-        runnerLog("TASK_ABORTED", { taskId, reason: "medium video task removed or cancelled during execution" });
-        return;
-      }
-
-      mediumVideoLog("SEGMENT_START", {
-        taskId: task.id,
-        segmentIndex,
-        totalSegments,
-        hasReferenceImage: Boolean(currentReferenceImageUrl),
-      });
-
-      const soraResult = await runSora2GenerationWithRetry(segment.prompt, "12s", targetRatio, currentReferenceImageUrl);
-      if (!soraResult.success) {
-        failedCount += 1;
-        const errorMessage = soraResult.errorMessage || "中视频片段生成失败";
-        videosRepository.createMany([
-          {
-            taskId: task.id,
-            providerTaskId: soraResult.providerTaskId,
-            title: `中视频片段 ${segmentIndex}/${totalSegments}（失败）`,
-            content: `中视频片段 ${segmentIndex}/${totalSegments}：生成失败｜${errorMessage}`,
-            script: segment.scenes,
-            prompt: segment.prompt,
-            status: "failed" as const,
-            originalCoverUrl: "",
-            originalVideoUrl: "",
-            upscaledVideoUrl: "",
-            upscaledCoverUrl: "",
-            upscaleStatus: "idle" as const,
-            upscaleTaskId: "",
-            upscaleErrorMessage: "",
-            upscaleConsumeMoney: 0,
-            upscaleTaskCostTime: 0,
-            coverUrl: "",
-            previewImageUrl: "",
-            errorMessage,
-            referenceImageUrl: currentReferenceImageUrl,
-            referenceImageName: segmentIndex === 1 ? task.referenceImageName : `上段关键帧 ${segmentIndex - 1}`,
-            cost: 0,
-            seconds: 12,
-            duration: "12s",
-            ratio: targetRatio,
-            size: targetSize,
-            mediumVideo: true,
-            mediumVideoTaskId: task.id,
-            chainId,
-            segmentIndex,
-            totalSegments,
-            segmentTitle: segment.title,
-          },
-        ]);
-        await failMediumTask(segmentIndex, errorMessage);
-        return;
-      }
-
-      successCount += 1;
+      successCount = grokResult.successfulUnits;
       const created = videosRepository.createMany([
         {
           taskId: task.id,
-          providerTaskId: soraResult.providerTaskId,
-          title: `中视频片段 ${segmentIndex}/${totalSegments}：${segment.title}`,
-          content: `中视频片段 ${segmentIndex}/${totalSegments}：${segment.title}｜${task.prompt}｜灵感参考：${segment.scenes.join("｜")}${task.agentName ? `｜智能体：${task.agentName}` : ""}`,
-          script: segment.scenes,
-          prompt: segment.prompt,
+          providerTaskId: grokResult.finalTaskId || grokResult.providerTaskIds.join(","),
+          title: `中视频：${targetDurationSeconds}秒 - ${plan.title}`,
+          content: `中视频：${targetDurationSeconds}秒｜模型：${process.env.YUNWU_GROK_VIDEO_MODEL || "grok-video-3-10s"}｜目标时长：${targetDurationSeconds}秒｜扩展次数：${extendCount}｜providerTaskIds：${grokResult.providerTaskIds.join(", ")}｜是否疑似完整视频：${grokResult.isFinalVideoLikelyComplete === true ? "是" : "未知"}｜片段/阶段URL数：${grokResult.segmentVideoUrls?.length ?? 0}${task.agentName ? `｜智能体：${task.agentName}` : ""}`,
+          script: plan.outline.map((item) => `${item.start}-${item.end}s：${item.summary}`),
+          prompt: [plan.basePrompt, ...plan.extensionPrompts].join("\n\n--- EXTEND ---\n\n"),
           status: "success" as const,
-          originalCoverUrl: soraResult.coverUrl || "",
-          originalVideoUrl: soraResult.videoUrl || "",
+          originalCoverUrl: "",
+          originalVideoUrl: grokResult.finalVideoUrl,
           upscaledVideoUrl: "",
           upscaledCoverUrl: "",
           upscaleStatus: "queued" as const,
@@ -807,31 +792,38 @@ async function executeTask(taskId: string) {
           upscaleErrorMessage: "",
           upscaleConsumeMoney: 0,
           upscaleTaskCostTime: 0,
-          coverUrl: soraResult.coverUrl || "",
-          videoUrl: soraResult.videoUrl || "",
-          previewImageUrl: soraResult.videoUrl || "",
-          referenceImageUrl: currentReferenceImageUrl,
-          referenceImageName: segmentIndex === 1 ? task.referenceImageName : `上段关键帧 ${segmentIndex - 1}`,
+          coverUrl: "",
+          videoUrl: grokResult.finalVideoUrl,
+          previewImageUrl: grokResult.finalVideoUrl,
+          referenceImageUrl: "",
+          referenceImageName: "",
           cost: 0,
-          seconds: 12,
-          duration: "12s",
-          ratio: soraResult.ratio || targetRatio,
-          size: soraResult.size || targetSize,
+          seconds: targetDurationSeconds,
+          duration: `${targetDurationSeconds}s`,
+          ratio: targetRatio,
+          size: targetSize,
+          displayModel: "Grok",
+          apiModel: process.env.YUNWU_GROK_VIDEO_MODEL || "grok-video-3-10s",
           mediumVideo: true,
           mediumVideoTaskId: task.id,
           chainId,
-          segmentIndex,
-          totalSegments,
-          segmentTitle: segment.title,
+          providerTaskIds: grokResult.providerTaskIds,
+          segmentVideoUrls: grokResult.segmentVideoUrls,
+          isFinalVideoLikelyComplete: grokResult.isFinalVideoLikelyComplete,
+          segmentIndex: 1,
+          totalSegments: 1,
+          segmentTitle: `Grok 中视频 ${targetDurationSeconds}秒`,
         },
       ])[0];
       successfulRecordIds.push(created.id);
 
-      mediumVideoLog("SEGMENT_SUCCESS", {
+      mediumVideoLog("GROK_SUCCESS_WRITE", {
         taskId: task.id,
-        segmentIndex,
-        providerTaskId: soraResult.providerTaskId,
         videoId: created.id,
+        providerTaskIds: grokResult.providerTaskIds,
+        finalTaskId: grokResult.finalTaskId,
+        targetDurationSeconds,
+        isFinalVideoLikelyComplete: grokResult.isFinalVideoLikelyComplete ?? "unknown",
       });
 
       void (async () => {
@@ -914,103 +906,29 @@ async function executeTask(taskId: string) {
       );
       upscaleJobs.push(upscaleJob);
 
-      if (segmentIndex < totalSegments) {
-        mediumVideoLog("FRAME_EXTRACT_REQUEST", {
-          taskId: task.id,
-          segmentIndex,
-          sourceVideoId: created.id,
-        });
-        try {
-          const extractedFrame = await extractMediumVideoReferenceFrame({
-            taskId: task.id,
-            segmentIndex,
-            sourceVideoUrl: created.originalVideoUrl || created.videoUrl || "",
-          });
-          currentReferenceImageUrl = extractedFrame.referenceUrl;
-          mediumVideoLog("FRAME_EXTRACT_SUCCESS", {
-            taskId: task.id,
-            segmentIndex,
-            referenceUrlForNextSegment: extractedFrame.referenceUrl,
-          });
-        } catch (error) {
-          const reason = stringifyUnknownError(error) || "关键帧抽取失败，无法继续生成下一段";
-          mediumVideoLog("FRAME_EXTRACT_FAILED", {
-            taskId: task.id,
-            segmentIndex,
-            reason,
-          });
-          const failedNextSegment = segmentIndex + 1;
-          failedCount += 1;
-          videosRepository.createMany([
-            {
-              taskId: task.id,
-              providerTaskId: "",
-              title: `中视频片段 ${failedNextSegment}/${totalSegments}（失败）`,
-              content: `中视频片段 ${failedNextSegment}/${totalSegments}：关键帧抽取失败，无法继续生成下一段｜${reason}`,
-              script: [],
-              prompt: segmentPrompts[failedNextSegment - 1]?.prompt || "",
-              status: "failed" as const,
-              originalCoverUrl: "",
-              originalVideoUrl: "",
-              upscaledVideoUrl: "",
-              upscaledCoverUrl: "",
-              upscaleStatus: "idle" as const,
-              upscaleTaskId: "",
-              upscaleErrorMessage: "",
-              upscaleConsumeMoney: 0,
-              upscaleTaskCostTime: 0,
-              coverUrl: "",
-              previewImageUrl: "",
-              errorMessage: reason,
-              referenceImageUrl: "",
-              referenceImageName: "",
-              cost: 0,
-              seconds: 12,
-              duration: "12s",
-              ratio: targetRatio,
-              size: targetSize,
-              mediumVideo: true,
-              mediumVideoTaskId: task.id,
-              chainId,
-              segmentIndex: failedNextSegment,
-              totalSegments,
-              segmentTitle: segmentPrompts[failedNextSegment - 1]?.title || `中视频片段 ${failedNextSegment}/${totalSegments}`,
-            },
-          ]);
-          await failMediumTask(failedNextSegment, reason);
-          return;
-        }
+      const latestMediumTask = tasksRepository.getById(taskId);
+      if (!latestMediumTask || latestMediumTask.status === "cancelled") {
+        runnerLog("TASK_ABORTED", { taskId, reason: "medium video task removed before final status" });
+        return;
       }
-    }
-
-    const latestMediumTask = tasksRepository.getById(taskId);
-    if (!latestMediumTask || latestMediumTask.status === "cancelled") {
-      runnerLog("TASK_ABORTED", { taskId, reason: "medium video task removed before final status" });
-      return;
-    }
-    void Promise.allSettled(upscaleJobs);
-    await settleSuccessfulMediumCharges();
-    tasksRepository.update(taskId, { status: successCount === totalSegments ? "success" : "failed" });
-    if (successCount === totalSegments) {
+      void Promise.allSettled(upscaleJobs);
+      await settleSuccessfulMediumCharges();
+      tasksRepository.update(taskId, { status: "success" });
       mediumVideoLog("TASK_SUCCESS", {
         taskId: task.id,
-        successSegments: successCount,
+        targetDurationSeconds,
+        successUnits: successCount,
+        finalVideoId: created.id,
       });
-    } else {
-      mediumVideoLog("TASK_FAILED", {
-        taskId: task.id,
-        failedSegment: successCount + 1,
-        reason: "中视频片段未全部完成",
-      });
-    }
-    return;
+      return;
     } catch (error) {
       const reason = stringifyUnknownError(error) || "中视频任务异常";
       await settleSuccessfulMediumCharges();
       tasksRepository.update(taskId, { status: "failed" });
       mediumVideoLog("TASK_FAILED", {
         taskId: task.id,
-        failedSegment: Math.min(totalSegments, successCount + 1),
+        targetDurationSeconds,
+        successUnits: successCount,
         reason,
       });
       return;

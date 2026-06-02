@@ -21,6 +21,19 @@ export type MediumVideoSegmentPrompt = {
   prompt: string;
 };
 
+export type GrokMediumVideoPlan = {
+  title: string;
+  targetDurationSeconds: number;
+  basePrompt: string;
+  extensionPrompts: string[];
+  outline: Array<{
+    segmentIndex: number;
+    start: number;
+    end: number;
+    summary: string;
+  }>;
+};
+
 function getMediumVideoDynamicStartInstruction(params: {
   segmentIndex: number;
   totalSegments: number;
@@ -334,5 +347,154 @@ export async function generateMediumVideoSegments(params: {
     }));
   } catch {
     return mediumVideoFallback({ ...params, totalSegments });
+  }
+}
+
+const grokMediumVideoFallback = (params: {
+  theme: string;
+  targetDurationSeconds: number;
+  ratio: string;
+  agentName?: string;
+  agentDescription?: string;
+}): GrokMediumVideoPlan => {
+  const units = Math.max(1, Math.min(6, Math.ceil(params.targetDurationSeconds / 10)));
+  const ratioLabel = params.ratio === "9:16" ? "9:16竖屏" : "16:9横屏";
+  const title = params.theme ? params.theme.slice(0, 36) : "Grok 中视频";
+  const outline = Array.from({ length: units }, (_, index) => ({
+    segmentIndex: index + 1,
+    start: index * 10,
+    end: (index + 1) * 10,
+    summary:
+      index === 0
+        ? "建立主体、场景和核心冲突，画面立即运动"
+        : index === units - 1
+          ? "承接上一段动作完成结果与情绪收束"
+          : "承接上一段动作，推进新的变化和信息",
+  }));
+  const common = `主题：「${params.theme}」。智能体：${params.agentName || "未指定"}。智能体框架：${params.agentDescription || "无"}。画面比例 ${ratioLabel}。不要字幕、水印、Logo。`;
+  const basePrompt = `这是 ${params.targetDurationSeconds} 秒 Grok 中视频的第 1/${units} 段，先生成 10 秒基础视频。${common} 从第 0 秒立即开始动作，建立主体、场景、情绪和核心冲突，结尾保留明确连续动作，方便后续扩展。`;
+  const extensionPrompts = outline.slice(1).map((item) =>
+    `继续扩展同一条 Grok 中视频的第 ${item.segmentIndex}/${units} 段，目标总时长 ${params.targetDurationSeconds} 秒，当前扩展约 10 秒。${common} 必须承接上一段最后画面和动作继续推进，保持主体、服装、场景、光线、镜头语言、色彩风格一致；不要重新开头，不要重复第一段内容；本段目标：${item.summary}。`
+  );
+  return { title, targetDurationSeconds: params.targetDurationSeconds, basePrompt, extensionPrompts, outline };
+};
+
+export async function generateGrokMediumVideoPlan(params: {
+  theme: string;
+  targetDurationSeconds: number;
+  ratio: string;
+  agentName?: string;
+  agentDescription?: string;
+}): Promise<GrokMediumVideoPlan> {
+  const targetDurationSeconds = [10, 20, 30, 40, 50, 60].includes(params.targetDurationSeconds) ? params.targetDurationSeconds : 10;
+  const units = targetDurationSeconds / 10;
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return grokMediumVideoFallback({ ...params, targetDurationSeconds });
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20000);
+    const ratioLabel = params.ratio === "9:16" ? "9:16竖屏" : "16:9横屏";
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+        temperature: 0.55,
+        messages: [
+          {
+            role: "system",
+            content:
+              "你是 Grok 视频连续扩展提示词策划专家。必须仅返回 JSON。输出 title, targetDurationSeconds, basePrompt, extensionPrompts, outline。basePrompt 用于第一段 10 秒 create；extensionPrompts 每条用于基于上一条视频继续扩展约 10 秒。扩展提示词必须承接上一段，不要重新开头，不要重复第一段。",
+          },
+          {
+            role: "user",
+            content: `用户主题：${params.theme}
+智能体名称：${params.agentName || "未指定"}
+智能体描述/框架：${params.agentDescription || "无"}
+目标总时长：${targetDurationSeconds}秒
+10秒单位数：${units}
+扩展次数：${units - 1}
+画面比例：${ratioLabel}
+
+要求：
+1. 先规划完整故事结构，再拆成每 10 秒一个连续阶段。
+2. basePrompt 必须写明“第 1/${units} 段”、10秒、目标总时长、${ratioLabel}、不要字幕/水印/Logo。
+3. extensionPrompts 长度必须是 ${units - 1}。
+4. 每条 extension prompt 必须写明当前第几段、当前扩展目标、目标总时长、画面比例。
+5. 扩展提示词必须承接上一段：保持主体一致、场景连续、动作连续、情绪递进；不要重新开头，不要重复第一段内容。
+6. Grok 扩展会基于前一个视频自动延续，所以扩展提示词要像“继续延展下一段剧情”，不是重新生成完整视频。`,
+          },
+        ],
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "grok_medium_video_plan",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                title: { type: "string" },
+                targetDurationSeconds: { type: "number" },
+                basePrompt: { type: "string" },
+                extensionPrompts: {
+                  type: "array",
+                  minItems: units - 1,
+                  maxItems: units - 1,
+                  items: { type: "string" },
+                },
+                outline: {
+                  type: "array",
+                  minItems: units,
+                  maxItems: units,
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    properties: {
+                      segmentIndex: { type: "number" },
+                      start: { type: "number" },
+                      end: { type: "number" },
+                      summary: { type: "string" },
+                    },
+                    required: ["segmentIndex", "start", "end", "summary"],
+                  },
+                },
+              },
+              required: ["title", "targetDurationSeconds", "basePrompt", "extensionPrompts", "outline"],
+            },
+          },
+        },
+      }),
+    });
+    clearTimeout(timer);
+    if (!response.ok) return grokMediumVideoFallback({ ...params, targetDurationSeconds });
+    const data = await response.json();
+    const content = data?.choices?.[0]?.message?.content;
+    if (!content || typeof content !== "string") return grokMediumVideoFallback({ ...params, targetDurationSeconds });
+    const parsed = JSON.parse(content) as Partial<GrokMediumVideoPlan>;
+    if (!parsed.title || !parsed.basePrompt || !Array.isArray(parsed.extensionPrompts) || parsed.extensionPrompts.length !== units - 1 || !Array.isArray(parsed.outline) || parsed.outline.length !== units) {
+      return grokMediumVideoFallback({ ...params, targetDurationSeconds });
+    }
+    return {
+      title: parsed.title.trim(),
+      targetDurationSeconds,
+      basePrompt: parsed.basePrompt.trim(),
+      extensionPrompts: parsed.extensionPrompts.map((item, index) =>
+        `${String(item || "").trim()}\n\n硬性要求：这是第 ${index + 2}/${units} 段扩展；目标总时长 ${targetDurationSeconds} 秒；画面比例 ${ratioLabel}；承接上一段最后画面和动作继续推进，不要重新开头，不要重复第一段；不要字幕、水印、Logo。`
+      ),
+      outline: parsed.outline.map((item, index) => ({
+        segmentIndex: index + 1,
+        start: index * 10,
+        end: (index + 1) * 10,
+        summary: typeof item.summary === "string" && item.summary.trim() ? item.summary.trim() : `第 ${index + 1} 段`,
+      })),
+    };
+  } catch {
+    return grokMediumVideoFallback({ ...params, targetDurationSeconds });
   }
 }
