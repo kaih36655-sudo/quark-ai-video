@@ -7,7 +7,9 @@ export type GrokVideoResult = {
   providerTaskIds: string[];
   finalTaskId?: string;
   finalVideoUrl?: string;
+  finalCoverUrl?: string;
   segmentVideoUrls?: string[];
+  segmentCoverUrls?: string[];
   isFinalVideoLikelyComplete?: boolean;
   durationSeconds: number;
   successfulUnits: number;
@@ -425,6 +427,7 @@ export async function runGrokVideoWithExtensions(params: {
 }): Promise<GrokVideoResult> {
   const providerTaskIds: string[] = [];
   const segmentVideoUrls: string[] = [];
+  const segmentCoverUrls: string[] = [];
   let successfulUnits = 0;
   try {
     const baseImages = await prepareGrokReferenceImages(params.referenceImages);
@@ -437,6 +440,7 @@ export async function runGrokVideoWithExtensions(params: {
     });
     providerTaskIds.push(baseResult.taskId);
     if (baseResult.videoUrl) segmentVideoUrls.push(baseResult.videoUrl);
+    if (baseResult.coverUrl) segmentCoverUrls.push(baseResult.coverUrl);
     successfulUnits += 1;
 
     let previousTaskId = baseResult.taskId;
@@ -451,12 +455,14 @@ export async function runGrokVideoWithExtensions(params: {
       });
       providerTaskIds.push(extensionResult.taskId);
       if (extensionResult.videoUrl) segmentVideoUrls.push(extensionResult.videoUrl);
+      if (extensionResult.coverUrl) segmentCoverUrls.push(extensionResult.coverUrl);
       successfulUnits += 1;
       previousTaskId = extensionResult.taskId;
       finalResult = extensionResult;
     }
 
     const finalVideoUrl = finalResult.videoUrl || segmentVideoUrls[segmentVideoUrls.length - 1] || "";
+    const finalCoverUrl = finalResult.coverUrl || segmentCoverUrls[segmentCoverUrls.length - 1] || "";
     const isFinalVideoLikelyComplete = params.extensionPrompts.length === 0 ? true : undefined;
     log("FINAL_SUCCESS", {
       providerTaskIdsCount: providerTaskIds.length,
@@ -472,7 +478,9 @@ export async function runGrokVideoWithExtensions(params: {
       providerTaskIds,
       finalTaskId: finalResult.taskId,
       finalVideoUrl,
+      finalCoverUrl,
       segmentVideoUrls,
+      segmentCoverUrls,
       isFinalVideoLikelyComplete,
       durationSeconds: params.targetDurationSeconds,
       successfulUnits,
@@ -495,7 +503,9 @@ export async function runGrokVideoWithExtensions(params: {
       providerTaskIds,
       finalTaskId: providerTaskIds[providerTaskIds.length - 1],
       finalVideoUrl: segmentVideoUrls[segmentVideoUrls.length - 1],
+      finalCoverUrl: segmentCoverUrls[segmentCoverUrls.length - 1],
       segmentVideoUrls,
+      segmentCoverUrls,
       isFinalVideoLikelyComplete: false,
       durationSeconds: params.targetDurationSeconds,
       successfulUnits,
@@ -512,6 +522,7 @@ export async function runGrokVideoSegments(params: {
 }): Promise<GrokVideoResult> {
   const providerTaskIds: string[] = [];
   const segmentVideoUrls: string[] = [];
+  const segmentCoverUrls: string[] = [];
   let successfulUnits = 0;
   try {
     let previousVideoUrl = "";
@@ -528,11 +539,13 @@ export async function runGrokVideoSegments(params: {
       });
       providerTaskIds.push(result.taskId);
       if (result.videoUrl) segmentVideoUrls.push(result.videoUrl);
+      if (result.videoUrl) segmentCoverUrls.push(result.coverUrl || "");
       previousVideoUrl = result.videoUrl || "";
       successfulUnits += 1;
       log("STITCH_SEGMENT_SUCCESS", { segmentIndex: index + 1, taskId: result.taskId, hasVideoUrl: Boolean(result.videoUrl), imagesCount: images.length });
     }
     const finalVideoUrl = segmentVideoUrls[segmentVideoUrls.length - 1] || "";
+    const finalCoverUrl = segmentCoverUrls[segmentCoverUrls.length - 1] || "";
     log("FINAL_SUCCESS", {
       providerTaskIdsCount: providerTaskIds.length,
       finalTaskId: providerTaskIds[providerTaskIds.length - 1],
@@ -547,7 +560,9 @@ export async function runGrokVideoSegments(params: {
       providerTaskIds,
       finalTaskId: providerTaskIds[providerTaskIds.length - 1],
       finalVideoUrl,
+      finalCoverUrl,
       segmentVideoUrls,
+      segmentCoverUrls,
       isFinalVideoLikelyComplete: false,
       durationSeconds: params.targetDurationSeconds,
       successfulUnits,
@@ -570,7 +585,9 @@ export async function runGrokVideoSegments(params: {
       providerTaskIds,
       finalTaskId: providerTaskIds[providerTaskIds.length - 1],
       finalVideoUrl: segmentVideoUrls[segmentVideoUrls.length - 1],
+      finalCoverUrl: segmentCoverUrls[segmentCoverUrls.length - 1],
       segmentVideoUrls,
+      segmentCoverUrls,
       isFinalVideoLikelyComplete: false,
       durationSeconds: params.targetDurationSeconds,
       successfulUnits,

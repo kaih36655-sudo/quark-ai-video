@@ -6,6 +6,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
+import { resolveLocalUploadsSource } from "./local-uploads";
 
 type RunningHubTaskStatus = "pending" | "processing" | "success" | "failed";
 
@@ -16,13 +17,16 @@ type RunningHubQueryResult = {
   consumeMoney?: number;
   taskCostTime?: number;
   errorMessage?: string;
+  errorCode?: string;
+  exceptionType?: string;
+  nodeName?: string;
 };
 
 const baseUrl = () => (process.env.RUNNINGHUB_BASE_URL || "https://www.runninghub.cn").replace(/\/$/, "");
 const appId = () => process.env.RUNNINGHUB_UPSCALE_APP_ID || "1996062530516795394";
-const maxResolution = () => process.env.RUNNINGHUB_MAX_RESOLUTION || "1920";
+const defaultMaxResolution = () => process.env.RUNNINGHUB_UPSCALE_MAX_RESOLUTION || process.env.RUNNINGHUB_MAX_RESOLUTION || "1920";
+const defaultInstanceType = () => process.env.RUNNINGHUB_UPSCALE_INSTANCE_TYPE || "default";
 const UPLOADS_DIR = "/www/wwwroot/quark-video-git/public/uploads";
-const UPLOADS_API_PREFIX = "/api/uploads/";
 
 const headers = () => {
   const token = process.env.RUNNINGHUB_API_KEY;
@@ -42,6 +46,14 @@ const pickString = (value: unknown): string | undefined => {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+};
+
+const pickStringOrNumberAsString = (...values: unknown[]) => {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  }
+  return "";
 };
 
 const urlPreview = (value?: string) => (value ? value.slice(0, 120) : "");
@@ -119,37 +131,6 @@ const extFromUrl = (url: string, fallback: string) => {
   return fallback;
 };
 
-const toLocalUploadsPath = async (sourceUrl: string) => {
-  let pathname = sourceUrl;
-  try {
-    const parsed = new URL(sourceUrl);
-    pathname = parsed.pathname;
-  } catch {
-    pathname = sourceUrl;
-  }
-  if (!pathname.startsWith(UPLOADS_API_PREFIX)) return null;
-  const relativePath = decodeURIComponent(pathname.slice(UPLOADS_API_PREFIX.length));
-  const resolvedPath = path.resolve(UPLOADS_DIR, relativePath);
-  const uploadsRoot = path.resolve(UPLOADS_DIR);
-  if (resolvedPath !== uploadsRoot && !resolvedPath.startsWith(`${uploadsRoot}${path.sep}`)) {
-    throw new Error("本地上传路径非法，无法提交超分");
-  }
-  try {
-    const localStat = await stat(resolvedPath);
-    return {
-      resolvedPath,
-      exists: localStat.isFile(),
-      size: localStat.size,
-    };
-  } catch {
-    return {
-      resolvedPath,
-      exists: false,
-      size: 0,
-    };
-  }
-};
-
 const isHttpUrl = (value: string) => /^https?:\/\//i.test(value);
 
 async function downloadRunningHubResult(params: { taskId: string; sourceUrl: string; folder: string; fallbackExt: string }) {
@@ -214,7 +195,7 @@ async function persistRunningHubOutputs(taskId: string, outputs: { videoUrl?: st
 }
 
 export async function uploadRunningHubBinaryFromRemoteUrl(remoteUrl: string, context?: { videoId?: string }): Promise<{ fileName: string; downloadUrl?: string }> {
-  const localSource = await toLocalUploadsPath(remoteUrl);
+  const localSource = await resolveLocalUploadsSource(remoteUrl);
   if (localSource) {
     console.log("[UPSCALE][LOCAL_UPLOAD_SOURCE]", JSON.stringify({
       videoId: context?.videoId || "",
@@ -320,7 +301,41 @@ async function uploadRunningHubBinaryFromLocalFile(filePath: string, fileSize: n
   };
 }
 
-export async function createRunningHubUpscaleTask(videoInput: string): Promise<{ taskId: string }> {
+export function isRunningHubOomError(value: unknown) {
+  const text = typeof value === "string" ? value : responsePreview(value);
+  return (
+    text.includes('"805"') ||
+    text.includes("errorCode=805") ||
+    text.includes("errorCode:805") ||
+    text.includes("torch.OutOfMemoryError") ||
+    text.includes("OutOfMemory") ||
+    text.includes("显存不足") ||
+    text.includes("显存耗尽") ||
+    text.includes("CUDA out of memory") ||
+    text.includes("FlashVSR_SM_KSampler")
+  );
+}
+
+const extractFailureDetails = (json: Record<string, unknown> | null) => {
+  const data = asObject(json?.data);
+  const result = asObject(json?.result);
+  const failedReason =
+    asObject(data?.failedReason) ||
+    asObject(data?.failed_reason) ||
+    asObject(result?.failedReason) ||
+    asObject(result?.failed_reason) ||
+    asObject(json?.failedReason) ||
+    asObject(json?.failed_reason);
+  const errorCode = pickStringOrNumberAsString(data?.errorCode, result?.errorCode, json?.errorCode, failedReason?.errorCode);
+  const exceptionType = pickString(failedReason?.exception_type) || pickString(failedReason?.exceptionType) || pickString(data?.exception_type) || pickString(json?.exception_type);
+  const nodeName = pickString(failedReason?.node_name) || pickString(failedReason?.nodeName) || pickString(data?.node_name) || pickString(json?.node_name);
+  const exceptionMessage = pickString(failedReason?.exception_message) || pickString(failedReason?.exceptionMessage) || pickString(data?.exception_message) || pickString(json?.exception_message);
+  return { errorCode, exceptionType, nodeName, exceptionMessage };
+};
+
+export async function createRunningHubUpscaleTask(videoInput: string, options?: { instanceType?: string; maxResolution?: string }): Promise<{ taskId: string }> {
+  const instanceType = options?.instanceType || defaultInstanceType();
+  const resolution = options?.maxResolution || defaultMaxResolution();
   const body = {
     nodeInfoList: [
       {
@@ -332,11 +347,11 @@ export async function createRunningHubUpscaleTask(videoInput: string): Promise<{
       {
         nodeId: "16",
         fieldName: "value",
-        fieldValue: maxResolution(),
+        fieldValue: resolution,
         description: "最大分辨率设置（爆显存就降低）",
       },
     ],
-    instanceType: "default",
+    instanceType,
     usePersonalQueue: "false",
   };
   const url = `${baseUrl()}/openapi/v2/run/ai-app/${appId()}`;
@@ -345,7 +360,8 @@ export async function createRunningHubUpscaleTask(videoInput: string): Promise<{
     rhInputSource: "uploaded_binary",
     fileName: videoInput,
     fieldValuePreview: videoInput.slice(0, 120),
-    maxResolution: maxResolution(),
+    instanceType,
+    maxResolution: resolution,
   });
   const response = await fetch(url, {
     method: "POST",
@@ -409,11 +425,19 @@ export async function queryRunningHubTask(taskId: string): Promise<RunningHubQue
   const taskCostTimeValue = data?.taskCostTime ?? data?.task_cost_time ?? json?.taskCostTime;
   const consumeMoney = typeof consumeMoneyValue === "number" ? consumeMoneyValue : Number(consumeMoneyValue);
   const taskCostTime = typeof taskCostTimeValue === "number" ? taskCostTimeValue : Number(taskCostTimeValue);
+  const failureDetails = extractFailureDetails(json);
   const errorMessage =
     pickString(data?.errorMessage) ||
     pickString(data?.error_message) ||
+    failureDetails.exceptionMessage ||
     pickString(json?.message) ||
     pickString(json?.error);
+  const detailedErrorMessage = [
+    errorMessage,
+    failureDetails.errorCode ? `errorCode=${failureDetails.errorCode}` : "",
+    failureDetails.exceptionType ? `exception_type=${failureDetails.exceptionType}` : "",
+    failureDetails.nodeName ? `node_name=${failureDetails.nodeName}` : "",
+  ].filter(Boolean).join(" | ");
   log("QUERY_RESPONSE", {
     taskId,
     rawStatus: statusRaw,
@@ -424,7 +448,10 @@ export async function queryRunningHubTask(taskId: string): Promise<RunningHubQue
     mp4UrlPreview: urlPreview(outputs.videoUrl),
     hasCover: outputs.hasCover,
     coverUrlPreview: urlPreview(outputs.coverUrl),
-    errorMessage: errorMessage || "",
+    errorMessage: detailedErrorMessage || "",
+    errorCode: failureDetails.errorCode || "",
+    exceptionType: failureDetails.exceptionType || "",
+    nodeName: failureDetails.nodeName || "",
     consumeMoney: Number.isFinite(consumeMoney) ? consumeMoney : undefined,
     taskCostTime: Number.isFinite(taskCostTime) ? taskCostTime : undefined,
     rawPreview: responsePreview(json),
@@ -434,7 +461,10 @@ export async function queryRunningHubTask(taskId: string): Promise<RunningHubQue
       status: "failed",
       consumeMoney: Number.isFinite(consumeMoney) ? consumeMoney : undefined,
       taskCostTime: Number.isFinite(taskCostTime) ? taskCostTime : undefined,
-      errorMessage: errorMessage || "RunningHub SUCCESS 但未返回结果文件",
+      errorMessage: detailedErrorMessage || "RunningHub SUCCESS 但未返回结果文件",
+      errorCode: failureDetails.errorCode,
+      exceptionType: failureDetails.exceptionType,
+      nodeName: failureDetails.nodeName,
     };
   }
   return {
@@ -443,11 +473,14 @@ export async function queryRunningHubTask(taskId: string): Promise<RunningHubQue
     upscaledCoverUrl: outputs.coverUrl,
     consumeMoney: Number.isFinite(consumeMoney) ? consumeMoney : undefined,
     taskCostTime: Number.isFinite(taskCostTime) ? taskCostTime : undefined,
-    errorMessage,
+    errorMessage: detailedErrorMessage || errorMessage,
+    errorCode: failureDetails.errorCode,
+    exceptionType: failureDetails.exceptionType,
+    nodeName: failureDetails.nodeName,
   };
 }
 
-export async function runRunningHubUpscaleWithPolling(originalVideoUrl: string, options?: { existingTaskId?: string; onTaskId?: (taskId: string) => void | Promise<void>; videoId?: string }) {
+export async function runRunningHubUpscaleWithPolling(originalVideoUrl: string, options?: { existingTaskId?: string; onTaskId?: (taskId: string) => void | Promise<void>; videoId?: string; instanceType?: string; maxResolution?: string }) {
   const pollIntervalMs = Math.max(1000, Number(process.env.RUNNINGHUB_POLL_INTERVAL_MS || 5000));
   const maxAttempts = Math.max(1, Number(process.env.RUNNINGHUB_POLL_MAX_ATTEMPTS || 120));
 
@@ -459,7 +492,7 @@ export async function runRunningHubUpscaleWithPolling(originalVideoUrl: string, 
       fileName: uploaded.fileName,
       remoteUrlPreview: originalVideoUrl.slice(0, 120),
     });
-    taskId = (await createRunningHubUpscaleTask(uploaded.fileName)).taskId;
+    taskId = (await createRunningHubUpscaleTask(uploaded.fileName, { instanceType: options?.instanceType, maxResolution: options?.maxResolution })).taskId;
   }
   await options?.onTaskId?.(taskId);
 
@@ -506,12 +539,25 @@ export async function runRunningHubUpscaleWithPolling(originalVideoUrl: string, 
     }
     if (result.status === "failed") {
       const errorMessage = result.errorMessage || "超分任务失败";
+      if (isRunningHubOomError(`${result.errorCode || ""} ${result.exceptionType || ""} ${result.nodeName || ""} ${errorMessage}`)) {
+        console.log("[UPSCALE][OOM_DETECTED]", JSON.stringify({
+          taskId: options?.videoId || "",
+          runninghubTaskId: taskId,
+          errorCode: result.errorCode || "",
+          exceptionType: result.exceptionType || "",
+          nodeName: result.nodeName || "",
+          messagePreview: errorMessage.slice(0, 180),
+        }));
+      }
       log("UPSCALE_FAILED", {
         taskId,
         status: "FAILED",
         hasMp4: Boolean(result.upscaledVideoUrl),
         hasCover: Boolean(result.upscaledCoverUrl),
         errorMessage,
+        errorCode: result.errorCode,
+        exceptionType: result.exceptionType,
+        nodeName: result.nodeName,
         consumeMoney: result.consumeMoney,
         taskCostTime: result.taskCostTime,
       });
@@ -519,6 +565,9 @@ export async function runRunningHubUpscaleWithPolling(originalVideoUrl: string, 
         success: false as const,
         taskId,
         errorMessage,
+        errorCode: result.errorCode,
+        exceptionType: result.exceptionType,
+        nodeName: result.nodeName,
         consumeMoney: result.consumeMoney,
         taskCostTime: result.taskCostTime,
       };

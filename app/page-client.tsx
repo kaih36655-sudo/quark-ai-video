@@ -221,7 +221,7 @@ export default function Home() {
   const [imageSize, setImageSize] = useState<"1K" | "2K" | "4K">("2K");
   const [imageModel, setImageModel] = useState<"image2" | "banana2">("image2");
   const [mediumVideoSegments, setMediumVideoSegments] = useState(3);
-  const [mediumVideoStrategy, setMediumVideoStrategy] = useState<"extend" | "stitch">("extend");
+  const [mediumVideoStrategy, setMediumVideoStrategy] = useState<"extend" | "stitch">("stitch");
   const [timingEnabled, setTimingEnabled] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateProgress, setGenerateProgress] = useState(0);
@@ -2723,8 +2723,8 @@ export default function Home() {
                             <div className={isDark ? "mb-2 text-xs font-medium text-gray-400" : "mb-2 text-xs font-medium text-gray-500"}>Grok 生成方式</div>
                             <div className="flex flex-wrap gap-2">
                               {[
-                                { label: "扩展视频", value: "extend" },
-                                { label: "分段拼接", value: "stitch" },
+                                { label: "分段拼接（推荐）", value: "stitch" },
+                                { label: "扩展视频（实验，不稳定）", value: "extend" },
                               ].map((item) => (
                                 <button key={item.value} onClick={() => setMediumVideoStrategy(item.value as "extend" | "stitch")} className={`rounded-full px-4 py-2 text-sm transition ${pillClass(mediumVideoStrategy === item.value)}`}>
                                   {item.label}
@@ -2736,7 +2736,7 @@ export default function Home() {
                         <div className={isDark ? "mt-2 text-xs text-gray-400" : "mt-2 text-xs text-slate-500"}>
                           {isSoraMediumVideo
                             ? "当前中视频模型：Sora2。Sora2 每段 12 秒，将按片段顺序生成；当前后端暂标记为实验/待恢复。"
-                            : "当前中视频模型：Grok。Grok 单次生成约 10 秒，可选择扩展视频或分段拼接。"}
+                            : "当前中视频模型：Grok。默认使用分段拼接；扩展视频为实验能力，上游负载大时可能失败。"}
                         </div>
                       </div>
                     ) : !isImageMode && (

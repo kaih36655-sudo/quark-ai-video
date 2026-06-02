@@ -69,7 +69,7 @@ async function downloadToTempFile(videoUrl: string): Promise<string> {
   return tempInputPath;
 }
 
-export async function concatMediumVideoSegments(params: { taskId: string; segmentUrls: string[] }) {
+export async function concatMediumVideoSegments(params: { taskId: string; segmentUrls: string[]; targetDurationSeconds?: number }) {
   if (params.segmentUrls.length < 2) {
     throw new Error("拼接至少需要 2 个视频片段");
   }
@@ -77,8 +77,10 @@ export async function concatMediumVideoSegments(params: { taskId: string; segmen
   const tempDir = path.join(tmpdir(), `medium-video-concat-${params.taskId}-${Date.now()}-${randomUUID()}`);
   await mkdir(tempDir, { recursive: true });
   const outputName = `${params.taskId}-${Date.now()}-${randomUUID().slice(0, 8)}.mp4`;
-  const tempOutputPath = path.join(tmpdir(), `${outputName}.${randomUUID()}.tmp.mp4`);
+  const concatOutputPath = path.join(tmpdir(), `${outputName}.${randomUUID()}.concat.tmp.mp4`);
+  const normalizedOutputPath = path.join(tmpdir(), `${outputName}.${randomUUID()}.normalized.tmp.mp4`);
   const finalPath = path.join(MEDIUM_VIDEO_MERGED_DIR, outputName);
+  let normalized = false;
   try {
     const localSegments: string[] = [];
     for (let index = 0; index < params.segmentUrls.length; index += 1) {
@@ -90,7 +92,7 @@ export async function concatMediumVideoSegments(params: { taskId: string; segmen
     const listPath = path.join(tempDir, "concat.txt");
     await writeFile(listPath, localSegments.map((item) => `file '${item.replace(/'/g, "'\\''")}'`).join("\n"), "utf-8");
     await new Promise<void>((resolve, reject) => {
-      const cp = spawn("ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", tempOutputPath], { stdio: ["ignore", "ignore", "pipe"] });
+      const cp = spawn("ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", concatOutputPath], { stdio: ["ignore", "ignore", "pipe"] });
       let stderr = "";
       cp.stderr.on("data", (chunk) => {
         stderr += String(chunk || "");
@@ -104,13 +106,76 @@ export async function concatMediumVideoSegments(params: { taskId: string; segmen
         reject(new Error(`ffmpeg concat exit=${code}; stderr=${stderr.slice(0, 800)}`));
       });
     });
-    await rename(tempOutputPath, finalPath);
+    const targetDurationSeconds = params.targetDurationSeconds;
+    if (targetDurationSeconds && targetDurationSeconds > 0) {
+      const trimStartSeconds = 0.2;
+      console.log("[GROK_VIDEO][STITCH_NORMALIZE_START]", JSON.stringify({
+        targetDurationSeconds,
+        trimStartSeconds,
+        inputFilesCount: localSegments.length,
+      }));
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const cp = spawn(
+            "ffmpeg",
+            [
+              "-y",
+              "-ss",
+              trimStartSeconds.toFixed(2),
+              "-i",
+              concatOutputPath,
+              "-t",
+              targetDurationSeconds.toFixed(2),
+              "-c:v",
+              "libx264",
+              "-preset",
+              "veryfast",
+              "-pix_fmt",
+              "yuv420p",
+              "-c:a",
+              "aac",
+              "-movflags",
+              "+faststart",
+              normalizedOutputPath,
+            ],
+            { stdio: ["ignore", "ignore", "pipe"] }
+          );
+          let stderr = "";
+          cp.stderr.on("data", (chunk) => {
+            stderr += String(chunk || "");
+          });
+          cp.on("error", reject);
+          cp.on("close", (code) => {
+            if (code === 0) {
+              resolve();
+              return;
+            }
+            reject(new Error(`ffmpeg normalize exit=${code}; stderr=${stderr.slice(0, 800)}`));
+          });
+        });
+        await rename(normalizedOutputPath, finalPath);
+        normalized = true;
+        const outputDuration = await probeDurationSeconds(finalPath);
+        console.log("[GROK_VIDEO][STITCH_NORMALIZE_SUCCESS]", JSON.stringify({
+          outputPath: finalPath,
+          publicUrl: `/api/uploads/medium-video-merged/${outputName}`,
+          outputDuration,
+        }));
+      } catch (error) {
+        console.log("[GROK_VIDEO][STITCH_NORMALIZE_FAILED]", JSON.stringify({ reason: error instanceof Error ? error.message : String(error) }));
+        await rename(concatOutputPath, finalPath);
+      }
+    } else {
+      await rename(concatOutputPath, finalPath);
+    }
     return {
       mergedVideoUrl: `/api/uploads/medium-video-merged/${outputName}`,
       finalPath,
+      normalized,
     };
   } finally {
-    await rm(tempOutputPath, { force: true }).catch(() => {});
+    await rm(concatOutputPath, { force: true }).catch(() => {});
+    await rm(normalizedOutputPath, { force: true }).catch(() => {});
     await rm(tempDir, { recursive: true, force: true }).catch(() => {});
   }
 }
