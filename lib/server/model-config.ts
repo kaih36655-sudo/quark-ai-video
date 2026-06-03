@@ -1,13 +1,14 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-export type ModelKey = "sora2" | "grok" | "image2" | "banana2" | "user_select";
+export type ModelKey = "sora2" | "grok" | "image2" | "banana2" | "user_select" | "gemini-3.1-pro-preview";
 export type ModelConfig = {
   normalVideo: { activeModel: ModelKey; availableModels: ModelKey[] };
   agentVideo: { activeModel: ModelKey; availableModels: ModelKey[] };
   mediumVideo: { activeModel: ModelKey; availableModels: ModelKey[] };
   plainImage: { activeModel: ModelKey; availableModels: ModelKey[] };
   agentImage: { activeModel: ModelKey; availableModels: ModelKey[] };
+  videoRemix: { activeModel: ModelKey; availableModels: ModelKey[] };
 };
 
 const DATA_DIR = path.join(process.cwd(), "data");
@@ -19,6 +20,7 @@ export const DEFAULT_MODEL_CONFIG: ModelConfig = {
   mediumVideo: { activeModel: "grok", availableModels: ["grok", "sora2"] },
   plainImage: { activeModel: "user_select", availableModels: ["image2", "banana2"] },
   agentImage: { activeModel: "user_select", availableModels: ["image2", "banana2"] },
+  videoRemix: { activeModel: "gemini-3.1-pro-preview", availableModels: ["gemini-3.1-pro-preview"] },
 };
 
 const allowed: Record<keyof ModelConfig, ModelKey[]> = {
@@ -27,6 +29,7 @@ const allowed: Record<keyof ModelConfig, ModelKey[]> = {
   mediumVideo: ["grok", "sora2"],
   plainImage: ["image2", "banana2", "user_select"],
   agentImage: ["image2", "banana2", "user_select"],
+  videoRemix: ["gemini-3.1-pro-preview"],
 };
 
 const normalizeSection = <K extends keyof ModelConfig>(key: K, value: unknown): ModelConfig[K] => {
@@ -57,6 +60,7 @@ export async function getModelConfig() {
       mediumVideo: normalizeSection("mediumVideo", parsed.mediumVideo),
       plainImage: normalizeSection("plainImage", parsed.plainImage),
       agentImage: normalizeSection("agentImage", parsed.agentImage),
+      videoRemix: normalizeSection("videoRemix", parsed.videoRemix),
     };
   } catch {
     await writeModelConfig(DEFAULT_MODEL_CONFIG);
@@ -72,6 +76,7 @@ export async function updateModelConfig(patch: Partial<ModelConfig>) {
     mediumVideo: normalizeSection("mediumVideo", patch.mediumVideo ?? current.mediumVideo),
     plainImage: normalizeSection("plainImage", patch.plainImage ?? current.plainImage),
     agentImage: normalizeSection("agentImage", patch.agentImage ?? current.agentImage),
+    videoRemix: normalizeSection("videoRemix", patch.videoRemix ?? current.videoRemix),
   };
   await writeModelConfig(next);
   return next;

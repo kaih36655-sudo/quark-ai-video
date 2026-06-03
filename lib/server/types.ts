@@ -58,6 +58,7 @@ export type Video = {
   content: string;
   script: string[];
   prompt: string;
+  sourcePrompt?: string;
   status: VideoStatus;
   originalVideoUrl?: string;
   originalCoverUrl?: string;

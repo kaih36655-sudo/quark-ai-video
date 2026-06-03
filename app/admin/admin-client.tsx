@@ -50,6 +50,7 @@ type ModelConfig = {
   mediumVideo: { activeModel: string; availableModels: string[] };
   plainImage: { activeModel: string; availableModels: string[] };
   agentImage: { activeModel: string; availableModels: string[] };
+  videoRemix: { activeModel: string; availableModels: string[] };
 };
 
 type VideoRecord = {
@@ -370,7 +371,7 @@ export default function AdminClient() {
           <h2 className="mb-4 text-lg font-semibold">模型管理</h2>
           {modelConfig && (
             <div className="space-y-4 text-sm">
-              <div className="grid gap-3 md:grid-cols-3">
+              <div className="grid gap-3 md:grid-cols-4">
                 <label className="space-y-1">
                   <span className="text-xs text-gray-500">通用视频</span>
                   <select className={fieldClass} value={modelConfig.normalVideo.activeModel} onChange={(e) => setModelConfig((prev) => prev ? { ...prev, normalVideo: { ...prev.normalVideo, activeModel: e.target.value } } : prev)}>
@@ -388,6 +389,12 @@ export default function AdminClient() {
                   <select className={fieldClass} value={modelConfig.mediumVideo.activeModel} onChange={(e) => setModelConfig((prev) => prev ? { ...prev, mediumVideo: { ...prev.mediumVideo, activeModel: e.target.value } } : prev)}>
                     <option value="grok">Grok</option>
                     <option value="sora2">Sora2（实验/待恢复）</option>
+                  </select>
+                </label>
+                <label className="space-y-1">
+                  <span className="text-xs text-gray-500">爆款视频复刻</span>
+                  <select className={fieldClass} value={modelConfig.videoRemix?.activeModel || "gemini-3.1-pro-preview"} onChange={(e) => setModelConfig((prev) => prev ? { ...prev, videoRemix: { ...(prev.videoRemix || { availableModels: ["gemini-3.1-pro-preview"] }), activeModel: e.target.value } } : prev)}>
+                    <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro Preview</option>
                   </select>
                 </label>
               </div>

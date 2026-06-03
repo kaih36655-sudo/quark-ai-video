@@ -46,6 +46,7 @@ type Video = {
   content: string;
   script?: string[];
   promptText?: string;
+  sourcePrompt?: string;
   status: "success" | "failed";
   createdAt: number;
   cost: number;
@@ -114,6 +115,7 @@ type ModelConfig = {
   mediumVideo: { activeModel: string; availableModels: string[] };
   plainImage: { activeModel: string; availableModels: string[] };
   agentImage: { activeModel: string; availableModels: string[] };
+  videoRemix: { activeModel: string; availableModels: string[] };
 };
 
 const DEFAULT_PRICING: PricingConfig = {
@@ -135,6 +137,7 @@ const DEFAULT_MODEL_CONFIG: ModelConfig = {
   mediumVideo: { activeModel: "grok", availableModels: ["grok", "sora2"] },
   plainImage: { activeModel: "user_select", availableModels: ["image2", "banana2"] },
   agentImage: { activeModel: "user_select", availableModels: ["image2", "banana2"] },
+  videoRemix: { activeModel: "gemini-3.1-pro-preview", availableModels: ["gemini-3.1-pro-preview"] },
 };
 const IMAGE_MODEL_OPTIONS = [
   { label: "image2", value: "image2" },
@@ -152,6 +155,52 @@ const formatImageModelLabel = (video?: { mediaType?: "video" | "image"; imageMod
   if (video.imageModel === "banana2" || video.apiModel === "gemini-3.1-flash-image-preview") return "Nano Banana2";
   if (video.imageModel === "image2" || video.apiModel === "gpt-image-2") return "image2";
   return "未记录";
+};
+const getMediumVideoTitleText = (record: {
+  mediumVideo?: boolean;
+  sourcePrompt?: string;
+  prompt?: string;
+  promptText?: string;
+  title?: string;
+  segmentTitle?: string;
+}) => {
+  if (!record.mediumVideo) return record.title || record.prompt || "";
+  return record.sourcePrompt || record.prompt || record.promptText || record.title || record.segmentTitle || "Grok 中视频";
+};
+const inferMediumVideoTotalSegments = (record: {
+  mediumVideoTargetSeconds?: number;
+  totalSegments?: number;
+  providerTaskIds?: string[];
+  segmentVideoUrls?: string[];
+  mediumVideoStrategy?: "extend" | "stitch" | "sora2";
+}) => {
+  if (record.mediumVideoStrategy === "stitch" && record.mediumVideoTargetSeconds) {
+    return Math.max(1, Math.ceil(record.mediumVideoTargetSeconds / 10));
+  }
+  if (typeof record.totalSegments === "number" && record.totalSegments > 0) return record.totalSegments;
+  if (record.segmentVideoUrls?.length) return record.segmentVideoUrls.length;
+  if (record.providerTaskIds?.length) return record.providerTaskIds.length;
+  return undefined;
+};
+const getMediumVideoSegmentLabel = (record: {
+  mediumVideo?: boolean;
+  mediumVideoStrategy?: "extend" | "stitch" | "sora2";
+  segmentIndex?: number;
+  totalSegments?: number;
+  mediumVideoTargetSeconds?: number;
+  providerTaskIds?: string[];
+  segmentVideoUrls?: string[];
+}) => {
+  if (!record.mediumVideo) return "";
+  if (record.mediumVideoStrategy === "extend") return "扩展视频";
+  const total = inferMediumVideoTotalSegments(record);
+  if (record.mediumVideoStrategy === "stitch") {
+    if (record.segmentIndex && total) return `片段 ${record.segmentIndex}/${total}`;
+    if (total && total > 1) return `完整视频 · ${total}段拼接`;
+    return "单段";
+  }
+  if (record.segmentIndex && total) return `片段 ${record.segmentIndex}/${total}`;
+  return "";
 };
 const AGENT_PROFILES: AgentProfile[] = [
   {
@@ -639,6 +688,7 @@ export default function Home() {
       content: String(video.content ?? ""),
       script: Array.isArray(video.script) ? (video.script as unknown[]).filter((v): v is string => typeof v === "string") : undefined,
       promptText: typeof video.prompt === "string" ? video.prompt : undefined,
+      sourcePrompt: typeof video.sourcePrompt === "string" ? video.sourcePrompt : undefined,
       status: video.status === "failed" ? "failed" : "success",
       createdAt: Date.parse(String(video.createdAt ?? new Date().toISOString())),
       cost: typeof video.cost === "number" ? video.cost : 0,
@@ -1609,6 +1659,7 @@ export default function Home() {
         item: video.content,
         script: video.script,
         promptText: video.promptText,
+        sourcePrompt: video.sourcePrompt ?? parentTask?.prompt,
         status: video.status,
         createdAt: video.createdAt,
         cost: video.cost,
@@ -1643,6 +1694,8 @@ export default function Home() {
         videoModelLabel: video.videoModelLabel ?? parentTask?.videoModelLabel,
         mediumVideoCompleteness: video.mediumVideoCompleteness,
         isFinalVideoLikelyComplete: video.isFinalVideoLikelyComplete,
+        providerTaskIds: video.providerTaskIds,
+        segmentVideoUrls: video.segmentVideoUrls,
         segmentIndex: video.segmentIndex,
         totalSegments: video.totalSegments,
         segmentTitle: video.segmentTitle,
@@ -1679,6 +1732,7 @@ export default function Home() {
       item: task.mode === "medium_video" ? `中视频生成中：${placeholderText}` : placeholderText,
       script: [] as string[],
       promptText: task.promptSnapshot ?? task.prompt,
+      sourcePrompt: task.prompt,
       status: placeholderStatus,
       createdAt: task.createdAt + index,
       cost: 0,
@@ -1713,6 +1767,8 @@ export default function Home() {
       videoModelLabel: task.videoModelLabel,
       mediumVideoCompleteness: undefined,
       isFinalVideoLikelyComplete: undefined,
+      providerTaskIds: undefined,
+      segmentVideoUrls: undefined,
       segmentIndex: task.mode === "medium_video" ? 1 : undefined,
       totalSegments: task.mode === "medium_video" ? expectedCount : undefined,
       segmentTitle: task.mode === "medium_video" ? "Grok 中视频" : undefined,
@@ -2986,7 +3042,7 @@ export default function Home() {
               </div>
             ) : (
               <div className="space-y-4">
-                {pagedVisibleResults.map(({ item, id, taskId, mediaType, title, prompt: fromTaskPrompt, isFavorite, status, isLatestDone, cost, seconds, duration: videoDuration, upscaleStatus, upscaleErrorMessage, hasReferenceImage: taskHasRef, referenceImageName, referenceImageThumbData: taskRefThumbData, coverData, videoUrl, ratio: videoRatio, size: videoSize, imageSize: resultImageSize, imageModel, displayModel, imageModelLabel, apiModel, kind, scheduledAt, createdAt, taskStatus, agentName, isPlaceholder, mediumVideo, mediumVideoTargetSeconds, mediumVideoSuccessUnits, mediumVideoFailedUnits, mediumVideoFailedStage, mediumVideoErrorMessage, mediumVideoProvider, mediumVideoStrategy: resultMediumVideoStrategy, videoModelLabel, mediumVideoCompleteness, isFinalVideoLikelyComplete, segmentIndex, totalSegments, segmentTitle }) => (
+                {pagedVisibleResults.map(({ item, id, taskId, mediaType, title, prompt: fromTaskPrompt, sourcePrompt, isFavorite, status, isLatestDone, cost, seconds, duration: videoDuration, upscaleStatus, upscaleErrorMessage, hasReferenceImage: taskHasRef, referenceImageName, referenceImageThumbData: taskRefThumbData, coverData, videoUrl, ratio: videoRatio, size: videoSize, imageSize: resultImageSize, imageModel, displayModel, imageModelLabel, apiModel, kind, scheduledAt, createdAt, taskStatus, agentName, isPlaceholder, mediumVideo, mediumVideoTargetSeconds, mediumVideoSuccessUnits, mediumVideoFailedUnits, mediumVideoFailedStage, mediumVideoErrorMessage, mediumVideoProvider, mediumVideoStrategy: resultMediumVideoStrategy, videoModelLabel, mediumVideoCompleteness, isFinalVideoLikelyComplete, providerTaskIds, segmentVideoUrls, segmentIndex, totalSegments, segmentTitle }) => (
               <div
                 key={id}
                 className={`relative p-3 text-sm ${surfaceCardClass}`}
@@ -3027,6 +3083,7 @@ export default function Home() {
                             hasReferenceImage: taskHasRef,
                             referenceImageName,
                             mediumVideo,
+                            sourcePrompt,
                             mediumVideoTargetSeconds,
                             mediumVideoSuccessUnits,
                             mediumVideoFailedUnits,
@@ -3037,6 +3094,8 @@ export default function Home() {
                             videoModelLabel,
                             mediumVideoCompleteness,
                             isFinalVideoLikelyComplete,
+                            providerTaskIds,
+                            segmentVideoUrls,
                             segmentIndex,
                             totalSegments,
                             segmentTitle,
@@ -3090,7 +3149,9 @@ export default function Home() {
                           </span>
                         )}
                         {mediumVideo && <span className={softChipClass}>完整性：{mediumVideoCompleteness || (isFinalVideoLikelyComplete ? "已确认" : "待验证")}</span>}
-                        {mediumVideo && segmentIndex && totalSegments && <span className={softChipClass}>片段 {segmentIndex}/{totalSegments}</span>}
+                        {mediumVideo && getMediumVideoSegmentLabel({ mediumVideo, mediumVideoStrategy: resultMediumVideoStrategy, segmentIndex, totalSegments, mediumVideoTargetSeconds, providerTaskIds, segmentVideoUrls }) && (
+                          <span className={softChipClass}>{getMediumVideoSegmentLabel({ mediumVideo, mediumVideoStrategy: resultMediumVideoStrategy, segmentIndex, totalSegments, mediumVideoTargetSeconds, providerTaskIds, segmentVideoUrls })}</span>
+                        )}
                       </div>
 
                       {(() => {
@@ -3119,7 +3180,7 @@ export default function Home() {
                                 textOverflow: "ellipsis",
                               }}
                             >
-                              {mediumVideo ? truncateTitleByHanWidth(segmentTitle || title || "Grok 中视频", 25) : singleLineTitle}
+                              {mediumVideo ? truncateTitleByHanWidth(getMediumVideoTitleText({ mediumVideo, sourcePrompt, prompt: fromTaskPrompt, promptText: undefined, title, segmentTitle }), 30) : singleLineTitle}
                             </p>
                             {inspirationText ? (
                               <p className={isDark ? "truncate text-xs leading-tight text-gray-400" : "truncate text-xs leading-tight text-gray-500"}>
@@ -3861,6 +3922,9 @@ export default function Home() {
                         完整性：{previewVideo.mediumVideoCompleteness || (previewVideo.isFinalVideoLikelyComplete ? "已确认" : "未知")}
                       </span>
                     )}
+                    {previewVideo.mediumVideo && getMediumVideoSegmentLabel(previewVideo) && (
+                      <span className={softChipClass}>{getMediumVideoSegmentLabel(previewVideo)}</span>
+                    )}
                     {previewVideo.mediumVideo && previewVideo.taskStatus === "failed" && (previewVideo.mediumVideoSuccessUnits ?? 0) > 0 && (
                       <>
                         <span className={softChipClass}>部分成功：已生成 {(previewVideo.mediumVideoSuccessUnits ?? 0) * 10}秒</span>
@@ -4120,7 +4184,7 @@ export default function Home() {
                                         <span className={softChipClass}>模型：{video.videoModelLabel || (video.mediumVideoProvider === "sora2" ? "Sora2" : "Grok")}</span>
                                         <span className={softChipClass}>策略：{video.mediumVideoStrategy === "stitch" ? "分段拼接" : video.mediumVideoStrategy === "sora2" ? "Sora2分段" : "扩展视频"}</span>
                                         <span className={softChipClass}>完整性：{video.mediumVideoCompleteness || (video.isFinalVideoLikelyComplete ? "已确认" : "待验证")}</span>
-                                        {video.segmentIndex && video.totalSegments && <span className={softChipClass}>片段 {video.segmentIndex}/{video.totalSegments}</span>}
+                                        {getMediumVideoSegmentLabel(video) && <span className={softChipClass}>{getMediumVideoSegmentLabel(video)}</span>}
                                       </>
                                     )}
                                     {video.mediaType !== "image" && video.upscaleStatus === "failed" && (
