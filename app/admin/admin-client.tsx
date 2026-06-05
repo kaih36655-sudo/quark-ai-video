@@ -50,7 +50,8 @@ type ModelConfig = {
   mediumVideo: { activeModel: string; availableModels: string[] };
   plainImage: { activeModel: string; availableModels: string[] };
   agentImage: { activeModel: string; availableModels: string[] };
-  videoRemix: { activeModel: string; availableModels: string[] };
+  videoRemixAnalysis: { activeModel: string; availableModels: string[] };
+  videoRemixGeneration: { activeModel: string; availableModels: string[] };
 };
 
 type VideoRecord = {
@@ -392,9 +393,15 @@ export default function AdminClient() {
                   </select>
                 </label>
                 <label className="space-y-1">
-                  <span className="text-xs text-gray-500">爆款视频复刻</span>
-                  <select className={fieldClass} value={modelConfig.videoRemix?.activeModel || "gemini-3.1-pro-preview"} onChange={(e) => setModelConfig((prev) => prev ? { ...prev, videoRemix: { ...(prev.videoRemix || { availableModels: ["gemini-3.1-pro-preview"] }), activeModel: e.target.value } } : prev)}>
+                  <span className="text-xs text-gray-500">爆款视频复刻 · 视频分析</span>
+                  <select className={fieldClass} value={modelConfig.videoRemixAnalysis?.activeModel || "gemini-3.1-pro-preview"} onChange={(e) => setModelConfig((prev) => prev ? { ...prev, videoRemixAnalysis: { ...(prev.videoRemixAnalysis || { availableModels: ["gemini-3.1-pro-preview"] }), activeModel: e.target.value } } : prev)}>
                     <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro Preview</option>
+                  </select>
+                </label>
+                <label className="space-y-1">
+                  <span className="text-xs text-gray-500">爆款视频复刻 · 视频生成</span>
+                  <select className={fieldClass} value={modelConfig.videoRemixGeneration?.activeModel || "sora2"} onChange={(e) => setModelConfig((prev) => prev ? { ...prev, videoRemixGeneration: { ...(prev.videoRemixGeneration || { availableModels: ["sora2"] }), activeModel: e.target.value } } : prev)}>
+                    <option value="sora2">Sora2</option>
                   </select>
                 </label>
               </div>

@@ -42,6 +42,14 @@ const stringifyUnknownError = (value: unknown): string => {
   }
 };
 
+const createGrokCreateFailureDiagnostics = (errorMessage: string) =>
+  [
+    `provider=grok`,
+    `stage=create`,
+    `attemptCount=5`,
+    `originalProviderError=${errorMessage || "Grok create failed"}`,
+  ].join(" | ");
+
 const sora2PipelineLog = (stage: "CREATE_RETRY" | "CREATE_FINAL_FAILED" | "CREATE_FINAL_SUCCESS", payload: Record<string, unknown>) => {
   console.log(`[SORA2][${stage}]`, JSON.stringify(payload));
 };
@@ -213,7 +221,7 @@ async function runSora2GenerationWithRetry(
 
 async function runUpscaleWithRetries(
   originalVideoUrl: string,
-  options?: { existingTaskId?: string; onTaskId?: (taskId: string) => void | Promise<void>; videoId?: string }
+  options?: { existingTaskId?: string; onTaskId?: (taskId: string) => void | Promise<void>; videoId?: string; durationSeconds?: number }
 ): Promise<UpscalePollResult> {
   const max = PIPELINE_RETRY_MAX_ATTEMPTS;
   let last = { success: false as const, errorMessage: "超分失败" } as UpscalePollResult;
@@ -615,6 +623,7 @@ async function executeTask(taskId: string) {
         upscaleResult = await runUpscaleWithRetries(created.originalVideoUrl!, {
           existingTaskId,
           videoId: created.id,
+          durationSeconds: created.seconds || Number(String(created.duration || "").replace(/[^\d]/g, "")) || undefined,
           onTaskId: (runningHubTaskId) => {
             videosRepository.update(created.id, { upscaleTaskId: runningHubTaskId });
           },
@@ -955,6 +964,82 @@ async function executeTask(taskId: string) {
       referenceImageSupport: task.referenceImageUrl ? "images" : "none",
     });
 
+    const writeVisibleGrokCreateFailure = (plan: Awaited<ReturnType<typeof generateGrokMediumVideoPlan>>, rawErrorMessage: string) => {
+      const diagnosticError = createGrokCreateFailureDiagnostics(rawErrorMessage);
+      const created = videosRepository.createMany([
+        {
+          taskId: task.id,
+          providerTaskId: "",
+          title: `中视频创建失败 - ${plan.title}`,
+          content: `中视频创建失败｜模型：Grok｜阶段：create｜attemptCount：5｜${diagnosticError}`,
+          script: plan.outline.map((item) => `${item.start}-${item.end}s：${item.summary}`),
+          prompt: [plan.basePrompt, ...plan.extensionPrompts].join("\n\n--- EXTEND ---\n\n"),
+          sourcePrompt: task.prompt,
+          status: "failed" as const,
+          originalCoverUrl: "",
+          originalVideoUrl: "",
+          upscaledVideoUrl: "",
+          upscaledCoverUrl: "",
+          upscaleStatus: "idle" as const,
+          upscaleTaskId: "",
+          upscaleErrorMessage: "",
+          upscaleConsumeMoney: 0,
+          upscaleTaskCostTime: 0,
+          coverUrl: "",
+          videoUrl: "",
+          previewImageUrl: "",
+          errorMessage: diagnosticError,
+          referenceImageUrl: task.referenceImageUrl || "",
+          referenceImageName: task.referenceImageName || "",
+          cost: 0,
+          seconds: targetDurationSeconds,
+          duration: `${targetDurationSeconds}s`,
+          ratio: targetRatio,
+          size: targetSize,
+          displayModel: "Grok",
+          apiModel: process.env.YUNWU_GROK_VIDEO_MODEL || "grok-video-3-10s",
+          mediumVideo: true,
+          mediumVideoTaskId: task.id,
+          chainId,
+          providerTaskIds: [],
+          segmentVideoUrls: [],
+          isFinalVideoLikelyComplete: false,
+          mediumVideoProvider: "grok",
+          mediumVideoStrategy: task.mediumVideoStrategy === "stitch" ? "stitch" : "extend",
+          videoModelLabel: "Grok",
+          mediumVideoCompleteness: "创建失败",
+          segmentIndex: 1,
+          totalSegments: totalUnits,
+          segmentTitle: "Grok 中视频创建失败",
+        },
+      ])[0];
+      tasksRepository.update(taskId, {
+        status: "failed",
+        mediumVideoSuccessUnits: 0,
+        mediumVideoFailedUnits: totalUnits,
+        mediumVideoFailedStage: "创建视频",
+        mediumVideoErrorMessage: diagnosticError,
+      });
+      console.log("[TASK_CREATE][FAILED]", JSON.stringify({
+        taskId: task.id,
+        userId: task.userId,
+        stage: "create",
+        provider: "grok",
+        finalReason: rawErrorMessage,
+        successfulUnits: 0,
+      }));
+      console.log("[GROK_VIDEO][TASK_VISIBLE_FAILED]", JSON.stringify({
+        taskId: task.id,
+        userId: task.userId,
+        videoId: created.id,
+        stage: "create",
+        provider: "grok",
+        finalReason: rawErrorMessage,
+        successfulUnits: 0,
+      }));
+      return created;
+    };
+
     try {
       const latestTask = tasksRepository.getById(taskId);
       if (!latestTask || latestTask.status === "cancelled") {
@@ -986,7 +1071,7 @@ async function executeTask(taskId: string) {
       const referenceImages = task.referenceImageUrl ? [task.referenceImageUrl] : [];
 
       if (mediumVideoStrategy === "stitch") {
-        const stitchPrompts = [plan.basePrompt, ...plan.extensionPrompts].map((promptText, index) =>
+        const stitchPrompts = (plan.stitchPrompts?.length === totalUnits ? plan.stitchPrompts : [plan.basePrompt, ...plan.extensionPrompts]).map((promptText, index) =>
           `${promptText}\n\n硬性要求：这是 Grok 分段拼接模式第 ${index + 1}/${totalUnits} 段；每段约 10 秒；承接上一段最后动作继续，不要重新开头；主体、场景、动作、情绪连续；不要字幕、水印、Logo。`
         );
         const grokResult = await runGrokVideoSegments({
@@ -1025,6 +1110,20 @@ async function executeTask(taskId: string) {
         } else if (grokResult.finalVideoUrl && successCount === 1) {
           finalVideoUrl = grokResult.finalVideoUrl;
           completeness = "单段";
+        }
+
+        if (!finalVideoUrl && successCount === 0 && grokResult.providerTaskIds.length === 0 && (grokResult.segmentVideoUrls?.length ?? 0) === 0) {
+          const rawErrorMessage = grokResult.error || "Grok create 失败，未返回 provider taskId";
+          writeVisibleGrokCreateFailure(plan, rawErrorMessage);
+          mediumVideoLog("TASK_FAILED", {
+            taskId: task.id,
+            targetDurationSeconds,
+            successUnits: 0,
+            failedUnits: totalUnits,
+            providerTaskIds: [],
+            reason: rawErrorMessage,
+          });
+          return;
         }
 
         const createdRecords = finalVideoUrl
@@ -1157,6 +1256,18 @@ async function executeTask(taskId: string) {
         failedCount = Math.max(1, totalUnits - successCount);
         const rawErrorMessage = grokResult.error || "Grok 中视频生成失败";
         const errorMessage = successCount > 0 ? `扩展视频失败：${rawErrorMessage}` : rawErrorMessage;
+        if (successCount === 0 && grokResult.providerTaskIds.length === 0 && (grokResult.segmentVideoUrls?.length ?? 0) === 0) {
+          writeVisibleGrokCreateFailure(plan, rawErrorMessage);
+          mediumVideoLog("TASK_FAILED", {
+            taskId: task.id,
+            targetDurationSeconds,
+            successUnits: 0,
+            failedUnits: totalUnits,
+            providerTaskIds: [],
+            reason: rawErrorMessage,
+          });
+          return;
+        }
         if (grokResult.finalVideoUrl) {
           const partial = videosRepository.createMany([
             {
@@ -1318,6 +1429,7 @@ async function executeTask(taskId: string) {
           upscaleResult = await runUpscaleWithRetries(created.originalVideoUrl!, {
             existingTaskId,
             videoId: created.id,
+            durationSeconds: targetDurationSeconds,
             onTaskId: (taskId) => {
               videosRepository.update(created.id, { upscaleTaskId: taskId });
             },
@@ -1604,6 +1716,7 @@ async function executeTask(taskId: string) {
           upscaleResult = await runUpscaleWithRetries(created.originalVideoUrl!, {
             existingTaskId,
             videoId: created.id,
+            durationSeconds: created.seconds || resolveSoraSeconds(task.duration),
             onTaskId: (taskId) => {
               videosRepository.update(created.id, { upscaleTaskId: taskId });
             },

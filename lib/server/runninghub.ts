@@ -7,6 +7,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { resolveLocalUploadsSource } from "./local-uploads";
+import { tasksRepository, videosRepository } from "./repositories";
 
 type RunningHubTaskStatus = "pending" | "processing" | "success" | "failed";
 
@@ -42,6 +43,17 @@ const log = (stage: string, payload: Record<string, unknown>) => {
   console.log(`[RUNNINGHUB][${stage}]`, JSON.stringify(payload));
 };
 
+export function getUpscaleMaxWaitMs(durationSeconds?: number): number {
+  const duration = Number(durationSeconds);
+  if (!Number.isFinite(duration) || duration <= 0) return 15 * 60 * 1000;
+  if (duration <= 10) return 10 * 60 * 1000;
+  if (duration <= 20) return 15 * 60 * 1000;
+  if (duration <= 30) return 20 * 60 * 1000;
+  if (duration <= 40) return 25 * 60 * 1000;
+  if (duration <= 50) return 30 * 60 * 1000;
+  return 35 * 60 * 1000;
+}
+
 const pickString = (value: unknown): string | undefined => {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
@@ -60,6 +72,26 @@ const urlPreview = (value?: string) => (value ? value.slice(0, 120) : "");
 
 const asObject = (value: unknown): Record<string, unknown> | null => {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+};
+
+const parseDurationSeconds = (value: unknown) => {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
+  const numeric = Number(String(value || "").replace(/[^\d.]/g, ""));
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : undefined;
+};
+
+const resolveKnownVideoDurationSeconds = (originalVideoUrl: string) => {
+  const video = videosRepository.listAll().find((item) =>
+    [item.originalVideoUrl, item.videoUrl, item.previewImageUrl].some((url) => typeof url === "string" && url === originalVideoUrl)
+  );
+  if (!video) return undefined;
+  const task = tasksRepository.getById(video.taskId);
+  return (
+    parseDurationSeconds(video.seconds) ||
+    parseDurationSeconds(video.duration) ||
+    parseDurationSeconds(task?.duration) ||
+    (task?.mode === "medium_video" ? Math.max(1, Math.min(6, Math.floor(task.mediumVideoSegments ?? task.count ?? 1))) * 10 : undefined)
+  );
 };
 
 const extractUrlFromResult = (result: Record<string, unknown> | null): string | undefined => {
@@ -480,9 +512,12 @@ export async function queryRunningHubTask(taskId: string): Promise<RunningHubQue
   };
 }
 
-export async function runRunningHubUpscaleWithPolling(originalVideoUrl: string, options?: { existingTaskId?: string; onTaskId?: (taskId: string) => void | Promise<void>; videoId?: string; instanceType?: string; maxResolution?: string }) {
+export async function runRunningHubUpscaleWithPolling(originalVideoUrl: string, options?: { existingTaskId?: string; onTaskId?: (taskId: string) => void | Promise<void>; videoId?: string; instanceType?: string; maxResolution?: string; durationSeconds?: number; maxWaitMs?: number }) {
   const pollIntervalMs = Math.max(1000, Number(process.env.RUNNINGHUB_POLL_INTERVAL_MS || 5000));
-  const maxAttempts = Math.max(1, Number(process.env.RUNNINGHUB_POLL_MAX_ATTEMPTS || 120));
+  const durationSeconds = options?.durationSeconds || resolveKnownVideoDurationSeconds(originalVideoUrl);
+  const durationBasedMaxWaitMs = getUpscaleMaxWaitMs(durationSeconds);
+  const maxWaitMs = Math.max(durationBasedMaxWaitMs, Number(options?.maxWaitMs || 0), pollIntervalMs);
+  const maxAttempts = Math.max(1, Math.ceil(maxWaitMs / pollIntervalMs));
 
   let taskId = options?.existingTaskId || "";
   if (!taskId) {
@@ -495,7 +530,15 @@ export async function runRunningHubUpscaleWithPolling(originalVideoUrl: string, 
     taskId = (await createRunningHubUpscaleTask(uploaded.fileName, { instanceType: options?.instanceType, maxResolution: options?.maxResolution })).taskId;
   }
   await options?.onTaskId?.(taskId);
+  console.log("[UPSCALE][WAIT_LIMIT]", JSON.stringify({
+    videoId: options?.videoId || "",
+    runninghubTaskId: taskId,
+    durationSeconds,
+    maxWaitMs,
+    reason: durationSeconds ? "duration_based" : "default_duration_missing",
+  }));
 
+  const startedAt = Date.now();
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const result = await queryRunningHubTask(taskId);
     if (result.status === "success") {
@@ -572,6 +615,9 @@ export async function runRunningHubUpscaleWithPolling(originalVideoUrl: string, 
         taskCostTime: result.taskCostTime,
       };
     }
+    if (Date.now() - startedAt >= maxWaitMs) {
+      break;
+    }
     await new Promise<void>((resolve) => setTimeout(resolve, pollIntervalMs));
   }
 
@@ -589,7 +635,7 @@ export async function runRunningHubUpscaleWithPolling(originalVideoUrl: string, 
   };
 }
 
-export async function retryVideoUpscale(originalVideoUrl: string, options?: { existingTaskId?: string; onTaskId?: (taskId: string) => void | Promise<void> }) {
+export async function retryVideoUpscale(originalVideoUrl: string, options?: { existingTaskId?: string; onTaskId?: (taskId: string) => void | Promise<void>; durationSeconds?: number }) {
   return runRunningHubUpscaleWithPolling(originalVideoUrl, options);
 }
 

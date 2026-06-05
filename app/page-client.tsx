@@ -115,7 +115,8 @@ type ModelConfig = {
   mediumVideo: { activeModel: string; availableModels: string[] };
   plainImage: { activeModel: string; availableModels: string[] };
   agentImage: { activeModel: string; availableModels: string[] };
-  videoRemix: { activeModel: string; availableModels: string[] };
+  videoRemixAnalysis: { activeModel: string; availableModels: string[] };
+  videoRemixGeneration: { activeModel: string; availableModels: string[] };
 };
 
 const DEFAULT_PRICING: PricingConfig = {
@@ -137,7 +138,8 @@ const DEFAULT_MODEL_CONFIG: ModelConfig = {
   mediumVideo: { activeModel: "grok", availableModels: ["grok", "sora2"] },
   plainImage: { activeModel: "user_select", availableModels: ["image2", "banana2"] },
   agentImage: { activeModel: "user_select", availableModels: ["image2", "banana2"] },
-  videoRemix: { activeModel: "gemini-3.1-pro-preview", availableModels: ["gemini-3.1-pro-preview"] },
+  videoRemixAnalysis: { activeModel: "gemini-3.1-pro-preview", availableModels: ["gemini-3.1-pro-preview"] },
+  videoRemixGeneration: { activeModel: "sora2", availableModels: ["sora2"] },
 };
 const IMAGE_MODEL_OPTIONS = [
   { label: "image2", value: "image2" },
@@ -201,6 +203,18 @@ const getMediumVideoSegmentLabel = (record: {
   }
   if (record.segmentIndex && total) return `片段 ${record.segmentIndex}/${total}`;
   return "";
+};
+const formatGrokMediumVideoErrorMessage = (message?: string) => {
+  const raw = message || "";
+  if (
+    raw.includes("当前分组上游负载已饱和") ||
+    raw.includes("fail_to_fetch_task") ||
+    raw.includes("任务初始化失败") ||
+    raw.includes("Nexus Trace ID")
+  ) {
+    return "Grok 视频通道繁忙，任务创建失败，请稍后重试或切换其他模型。";
+  }
+  return raw || "Grok 中视频生成失败";
 };
 const AGENT_PROFILES: AgentProfile[] = [
   {
@@ -1718,7 +1732,9 @@ export default function Home() {
       placeholderStatus === "waiting"
         ? "任务已创建，等待定时执行"
         : placeholderStatus === "failed"
-          ? "任务生成失败，暂无作品记录"
+          ? task.mode === "medium_video"
+            ? formatGrokMediumVideoErrorMessage(task.mediumVideoErrorMessage)
+            : "任务生成失败，暂无作品记录"
           : placeholderStatus === "cancelled"
             ? "任务已取消，暂无作品记录"
             : mediaType === "image"
@@ -3056,7 +3072,7 @@ export default function Home() {
                         onClick={(event) => {
                           event.stopPropagation();
                           if (isPlaceholder) {
-                            showToast(status === "waiting" ? "任务待执行，暂不可预览" : "作品生成中，稍后可预览");
+                            showToast(status === "waiting" ? "任务待执行，暂不可预览" : status === "failed" ? formatGrokMediumVideoErrorMessage(mediumVideoErrorMessage) : "作品生成中，稍后可预览");
                             return;
                           }
                           setPreviewVideo({
@@ -3146,6 +3162,11 @@ export default function Home() {
                         {mediumVideo && taskStatus === "failed" && (mediumVideoSuccessUnits ?? 0) > 0 && (
                           <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700 shadow-sm">
                             部分成功：已生成 {(mediumVideoSuccessUnits ?? 0) * 10}秒
+                          </span>
+                        )}
+                        {mediumVideo && taskStatus === "failed" && (
+                          <span className="rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-semibold text-rose-700 shadow-sm">
+                            失败原因：{formatGrokMediumVideoErrorMessage(mediumVideoErrorMessage)}
                           </span>
                         )}
                         {mediumVideo && <span className={softChipClass}>完整性：{mediumVideoCompleteness || (isFinalVideoLikelyComplete ? "已确认" : "待验证")}</span>}
@@ -3258,6 +3279,19 @@ export default function Home() {
                             hasReferenceImage: taskHasRef,
                             referenceImageName,
                             mediumVideo,
+                            sourcePrompt,
+                            mediumVideoTargetSeconds,
+                            mediumVideoSuccessUnits,
+                            mediumVideoFailedUnits,
+                            mediumVideoFailedStage,
+                            mediumVideoErrorMessage,
+                            mediumVideoProvider,
+                            mediumVideoStrategy: resultMediumVideoStrategy,
+                            videoModelLabel,
+                            mediumVideoCompleteness,
+                            isFinalVideoLikelyComplete,
+                            providerTaskIds,
+                            segmentVideoUrls,
                             segmentIndex,
                             totalSegments,
                             segmentTitle,
@@ -3931,6 +3965,9 @@ export default function Home() {
                         <span className={softChipClass}>失败阶段：{previewVideo.mediumVideoFailedStage || "扩展视频"}</span>
                       </>
                     )}
+                    {previewVideo.mediumVideo && previewVideo.taskStatus === "failed" && (
+                      <span className={softChipClass}>失败原因：{formatGrokMediumVideoErrorMessage(previewVideo.mediumVideoErrorMessage)}</span>
+                    )}
                     {!previewVideo.mediumVideo && (
                       <span className={softChipClass}>
                         参考图：{previewVideo.hasReferenceImage ? `已添加${previewVideo.referenceImageName ? `（${previewVideo.referenceImageName}）` : ""}` : "未添加"}
@@ -4074,8 +4111,10 @@ export default function Home() {
                               <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">部分成功</span>
                               <span className={softChipClass}>已成功：{(detailTask.mediumVideoSuccessUnits ?? 0) * 10}秒</span>
                               <span className={softChipClass}>失败阶段：{detailTask.mediumVideoFailedStage || "扩展视频"}</span>
-                              <span className={softChipClass}>失败原因：{detailTask.mediumVideoErrorMessage || "上游扩展失败"}</span>
                             </>
+                          )}
+                          {detailTask.status === "failed" && (
+                            <span className={softChipClass}>失败原因：{formatGrokMediumVideoErrorMessage(detailTask.mediumVideoErrorMessage)}</span>
                           )}
                         </>
                       )}
@@ -4151,7 +4190,7 @@ export default function Home() {
                                   onClick={(event) => {
                                     event.stopPropagation();
                                     if (video.isPlaceholder) {
-                                      showToast(video.status === "waiting" ? "任务待执行，暂不可预览" : "作品生成中，稍后可预览");
+                                      showToast(video.status === "waiting" ? "任务待执行，暂不可预览" : video.status === "failed" ? formatGrokMediumVideoErrorMessage(video.mediumVideoErrorMessage) : "作品生成中，稍后可预览");
                                       return;
                                     }
                                     setPreviewVideo(video);

@@ -8,7 +8,8 @@ export type ModelConfig = {
   mediumVideo: { activeModel: ModelKey; availableModels: ModelKey[] };
   plainImage: { activeModel: ModelKey; availableModels: ModelKey[] };
   agentImage: { activeModel: ModelKey; availableModels: ModelKey[] };
-  videoRemix: { activeModel: ModelKey; availableModels: ModelKey[] };
+  videoRemixAnalysis: { activeModel: ModelKey; availableModels: ModelKey[] };
+  videoRemixGeneration: { activeModel: ModelKey; availableModels: ModelKey[] };
 };
 
 const DATA_DIR = path.join(process.cwd(), "data");
@@ -20,7 +21,8 @@ export const DEFAULT_MODEL_CONFIG: ModelConfig = {
   mediumVideo: { activeModel: "grok", availableModels: ["grok", "sora2"] },
   plainImage: { activeModel: "user_select", availableModels: ["image2", "banana2"] },
   agentImage: { activeModel: "user_select", availableModels: ["image2", "banana2"] },
-  videoRemix: { activeModel: "gemini-3.1-pro-preview", availableModels: ["gemini-3.1-pro-preview"] },
+  videoRemixAnalysis: { activeModel: "gemini-3.1-pro-preview", availableModels: ["gemini-3.1-pro-preview"] },
+  videoRemixGeneration: { activeModel: "sora2", availableModels: ["sora2"] },
 };
 
 const allowed: Record<keyof ModelConfig, ModelKey[]> = {
@@ -29,7 +31,8 @@ const allowed: Record<keyof ModelConfig, ModelKey[]> = {
   mediumVideo: ["grok", "sora2"],
   plainImage: ["image2", "banana2", "user_select"],
   agentImage: ["image2", "banana2", "user_select"],
-  videoRemix: ["gemini-3.1-pro-preview"],
+  videoRemixAnalysis: ["gemini-3.1-pro-preview"],
+  videoRemixGeneration: ["sora2"],
 };
 
 const normalizeSection = <K extends keyof ModelConfig>(key: K, value: unknown): ModelConfig[K] => {
@@ -53,14 +56,17 @@ async function writeModelConfig(config: ModelConfig) {
 
 export async function getModelConfig() {
   try {
-    const parsed = JSON.parse(await readFile(MODEL_CONFIG_FILE, "utf-8")) as Partial<ModelConfig>;
+    const parsed = JSON.parse(await readFile(MODEL_CONFIG_FILE, "utf-8")) as Partial<ModelConfig> & {
+      videoRemix?: { activeModel?: ModelKey; availableModels?: ModelKey[] };
+    };
     return {
       normalVideo: normalizeSection("normalVideo", parsed.normalVideo),
       agentVideo: normalizeSection("agentVideo", parsed.agentVideo),
       mediumVideo: normalizeSection("mediumVideo", parsed.mediumVideo),
       plainImage: normalizeSection("plainImage", parsed.plainImage),
       agentImage: normalizeSection("agentImage", parsed.agentImage),
-      videoRemix: normalizeSection("videoRemix", parsed.videoRemix),
+      videoRemixAnalysis: normalizeSection("videoRemixAnalysis", parsed.videoRemixAnalysis ?? parsed.videoRemix),
+      videoRemixGeneration: normalizeSection("videoRemixGeneration", parsed.videoRemixGeneration),
     };
   } catch {
     await writeModelConfig(DEFAULT_MODEL_CONFIG);
@@ -76,7 +82,8 @@ export async function updateModelConfig(patch: Partial<ModelConfig>) {
     mediumVideo: normalizeSection("mediumVideo", patch.mediumVideo ?? current.mediumVideo),
     plainImage: normalizeSection("plainImage", patch.plainImage ?? current.plainImage),
     agentImage: normalizeSection("agentImage", patch.agentImage ?? current.agentImage),
-    videoRemix: normalizeSection("videoRemix", patch.videoRemix ?? current.videoRemix),
+    videoRemixAnalysis: normalizeSection("videoRemixAnalysis", patch.videoRemixAnalysis ?? current.videoRemixAnalysis),
+    videoRemixGeneration: normalizeSection("videoRemixGeneration", patch.videoRemixGeneration ?? current.videoRemixGeneration),
   };
   await writeModelConfig(next);
   return next;

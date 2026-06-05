@@ -170,6 +170,13 @@ export async function POST(req: NextRequest) {
   });
 
   scheduleTask(task);
+  console.log("[TASK_CREATE][SUCCESS]", JSON.stringify({
+    taskId: task.id,
+    userId: currentUser.id,
+    mode,
+    provider: mode === "medium_video" ? mediumVideoProvider : undefined,
+    successfulUnits: 0,
+  }));
 
   return NextResponse.json<ApiResponse<{ taskId: string }>>({
     success: true,
