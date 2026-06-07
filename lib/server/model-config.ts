@@ -16,31 +16,32 @@ const DATA_DIR = path.join(process.cwd(), "data");
 const MODEL_CONFIG_FILE = path.join(DATA_DIR, "model-config.json");
 
 export const DEFAULT_MODEL_CONFIG: ModelConfig = {
-  normalVideo: { activeModel: "sora2", availableModels: ["sora2"] },
-  agentVideo: { activeModel: "sora2", availableModels: ["sora2"] },
+  normalVideo: { activeModel: "sora2", availableModels: ["sora2", "grok"] },
+  agentVideo: { activeModel: "sora2", availableModels: ["sora2", "grok"] },
   mediumVideo: { activeModel: "grok", availableModels: ["grok", "sora2"] },
   plainImage: { activeModel: "user_select", availableModels: ["image2", "banana2"] },
   agentImage: { activeModel: "user_select", availableModels: ["image2", "banana2"] },
   videoRemixAnalysis: { activeModel: "gemini-3.1-pro-preview", availableModels: ["gemini-3.1-pro-preview"] },
-  videoRemixGeneration: { activeModel: "sora2", availableModels: ["sora2"] },
+  videoRemixGeneration: { activeModel: "sora2", availableModels: ["sora2", "grok"] },
 };
 
 const allowed: Record<keyof ModelConfig, ModelKey[]> = {
-  normalVideo: ["sora2"],
-  agentVideo: ["sora2"],
+  normalVideo: ["sora2", "grok"],
+  agentVideo: ["sora2", "grok"],
   mediumVideo: ["grok", "sora2"],
   plainImage: ["image2", "banana2", "user_select"],
   agentImage: ["image2", "banana2", "user_select"],
   videoRemixAnalysis: ["gemini-3.1-pro-preview"],
-  videoRemixGeneration: ["sora2"],
+  videoRemixGeneration: ["sora2", "grok"],
 };
 
 const normalizeSection = <K extends keyof ModelConfig>(key: K, value: unknown): ModelConfig[K] => {
   const fallback = DEFAULT_MODEL_CONFIG[key];
   const input: Partial<ModelConfig[K]> = value && typeof value === "object" ? (value as Partial<ModelConfig[K]>) : {};
-  const available = Array.isArray(input.availableModels)
+  const configuredAvailable = Array.isArray(input.availableModels)
     ? input.availableModels.filter((item): item is ModelKey => allowed[key].includes(item as ModelKey))
     : fallback.availableModels;
+  const available = Array.from(new Set([...configuredAvailable, ...fallback.availableModels]));
   const availableModels = available.length ? available : fallback.availableModels;
   const activeModel = allowed[key].includes(input.activeModel as ModelKey) ? (input.activeModel as ModelKey) : fallback.activeModel;
   return {

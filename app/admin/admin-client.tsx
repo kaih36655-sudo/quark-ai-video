@@ -36,6 +36,12 @@ type PricingConfig = {
   video_4s: number;
   video_8s: number;
   video_12s: number;
+  grok_video_10s: number;
+  grok_video_20s: number;
+  grok_video_30s: number;
+  grok_video_40s: number;
+  grok_video_50s: number;
+  grok_video_60s: number;
   image_1K: number;
   image_2K: number;
   image_4K: number;
@@ -348,21 +354,59 @@ export default function AdminClient() {
                   图片生成开关
                 </label>
               </div>
-              <div className="grid gap-3 md:grid-cols-6">
-              {(Object.keys(pricing).filter((key) => typeof pricing[key as keyof PricingConfig] === "number") as (keyof PricingConfig)[]).map((key) => (
-                <label key={key} className="space-y-1 text-xs text-gray-500">
-                  <span>{key}</span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.1"
-                    value={pricing[key] as number}
-                    onChange={(event) => setPricing((prev) => prev ? { ...prev, [key]: Number(event.target.value) } : prev)}
-                    className={fieldClass}
-                  />
-                </label>
-              ))}
-              <button onClick={() => void savePricing()} className="self-end rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-sky-500 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-200/70 transition hover:-translate-y-0.5 hover:brightness-105">保存价格</button>
+              <div className="space-y-4">
+                {[
+                  {
+                    title: "Sora2 视频价格",
+                    items: [
+                      ["video_4s", "Sora2 4秒"],
+                      ["video_8s", "Sora2 8秒"],
+                      ["video_12s", "Sora2 12秒"],
+                    ],
+                  },
+                  {
+                    title: "Grok 视频价格",
+                    items: [
+                      ["grok_video_10s", "Grok 10秒"],
+                      ["grok_video_20s", "Grok 20秒"],
+                      ["grok_video_30s", "Grok 30秒"],
+                      ["grok_video_40s", "Grok 40秒"],
+                      ["grok_video_50s", "Grok 50秒"],
+                      ["grok_video_60s", "Grok 60秒"],
+                    ],
+                  },
+                  {
+                    title: "图片价格",
+                    items: [
+                      ["image_1K", "Nano Banana2 1K"],
+                      ["image_2K", "Nano Banana2 2K"],
+                      ["image_4K", "Nano Banana2 4K"],
+                      ["image2_1K", "image2 1K"],
+                      ["image2_2K", "image2 2K"],
+                      ["image2_4K", "image2 4K"],
+                    ],
+                  },
+                ].map((group) => (
+                  <div key={group.title} className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                    <div className="mb-3 text-sm font-semibold text-gray-700">{group.title}</div>
+                    <div className="grid gap-3 md:grid-cols-6">
+                      {group.items.map(([key, label]) => (
+                        <label key={key} className="space-y-1 text-xs text-gray-500">
+                          <span>{label}</span>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.1"
+                            value={pricing[key as keyof PricingConfig] as number}
+                            onChange={(event) => setPricing((prev) => prev ? { ...prev, [key]: Number(event.target.value) } : prev)}
+                            className={fieldClass}
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                <button onClick={() => void savePricing()} className="rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-sky-500 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-200/70 transition hover:-translate-y-0.5 hover:brightness-105">保存价格</button>
               </div>
             </div>
           )}
@@ -377,12 +421,14 @@ export default function AdminClient() {
                   <span className="text-xs text-gray-500">通用视频</span>
                   <select className={fieldClass} value={modelConfig.normalVideo.activeModel} onChange={(e) => setModelConfig((prev) => prev ? { ...prev, normalVideo: { ...prev.normalVideo, activeModel: e.target.value } } : prev)}>
                     <option value="sora2">Sora2</option>
+                    <option value="grok">Grok</option>
                   </select>
                 </label>
                 <label className="space-y-1">
                   <span className="text-xs text-gray-500">智能体批量视频</span>
                   <select className={fieldClass} value={modelConfig.agentVideo.activeModel} onChange={(e) => setModelConfig((prev) => prev ? { ...prev, agentVideo: { ...prev.agentVideo, activeModel: e.target.value } } : prev)}>
                     <option value="sora2">Sora2</option>
+                    <option value="grok">Grok</option>
                   </select>
                 </label>
                 <label className="space-y-1">
@@ -402,6 +448,7 @@ export default function AdminClient() {
                   <span className="text-xs text-gray-500">爆款视频复刻 · 视频生成</span>
                   <select className={fieldClass} value={modelConfig.videoRemixGeneration?.activeModel || "sora2"} onChange={(e) => setModelConfig((prev) => prev ? { ...prev, videoRemixGeneration: { ...(prev.videoRemixGeneration || { availableModels: ["sora2"] }), activeModel: e.target.value } } : prev)}>
                     <option value="sora2">Sora2</option>
+                    <option value="grok">Grok</option>
                   </select>
                 </label>
               </div>

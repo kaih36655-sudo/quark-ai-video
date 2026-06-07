@@ -19,6 +19,7 @@ type CreateTaskBody = {
   count?: number;
   mediumVideoSegments?: number;
   mediumVideoStrategy?: "extend" | "stitch";
+  sourceMode?: "video_remix" | "normal" | "agent";
   agentId?: string;
   referenceImageUrl?: string;
   referenceImageName?: string;
@@ -28,6 +29,12 @@ type CreateTaskBody = {
 const parseMediumVideoDuration = (value: unknown, provider?: string) => {
   const seconds = Number(String(value ?? "").replace(/[^\d]/g, ""));
   const allowedSeconds = provider === "sora2" ? [12, 24, 36, 48, 60] : [10, 20, 30, 40, 50, 60];
+  return allowedSeconds.includes(seconds) ? seconds : null;
+};
+
+const parseVideoDuration = (value: unknown, provider: "sora2" | "grok") => {
+  const seconds = Number(String(value ?? "").replace(/[^\d]/g, ""));
+  const allowedSeconds = provider === "grok" ? [10, 20, 30] : [4, 8, 12];
   return allowedSeconds.includes(seconds) ? seconds : null;
 };
 
@@ -61,11 +68,22 @@ export async function POST(req: NextRequest) {
   const prompt = body.prompt?.trim() ?? "";
   const mode = body.mode === "agent" || body.mode === "image" || body.mode === "medium_video" ? body.mode : "normal";
   const modelConfig = await getModelConfig();
+  const sourceMode = body.sourceMode === "video_remix" ? "video_remix" : mode === "agent" ? "agent" : "normal";
   const mediumVideoProvider = mode === "medium_video" ? modelConfig.mediumVideo.activeModel : undefined;
+  const configuredVideoProvider =
+    mode === "medium_video" || mode === "image"
+      ? undefined
+      : sourceMode === "video_remix"
+        ? modelConfig.videoRemixGeneration.activeModel
+        : mode === "agent"
+          ? modelConfig.agentVideo.activeModel
+          : modelConfig.normalVideo.activeModel;
+  const videoProvider = configuredVideoProvider === "sora2" || configuredVideoProvider === "grok" ? configuredVideoProvider : undefined;
   const mediumVideoTargetSeconds = mode === "medium_video" ? parseMediumVideoDuration(body.duration, mediumVideoProvider) : null;
   const mediumVideoUnitSeconds = mediumVideoProvider === "sora2" ? 12 : 10;
   const mediumVideoSegments = mediumVideoTargetSeconds ? mediumVideoTargetSeconds / mediumVideoUnitSeconds : 1;
-  const duration = mode === "medium_video" ? `${mediumVideoTargetSeconds ?? 10}s` : body.duration ?? "12s";
+  const videoDurationSeconds = mode !== "medium_video" && mode !== "image" && videoProvider ? parseVideoDuration(body.duration, videoProvider) : null;
+  const duration = mode === "medium_video" ? `${mediumVideoTargetSeconds ?? 10}s` : mode !== "image" ? `${videoDurationSeconds ?? (videoProvider === "grok" ? 10 : 12)}s` : body.duration ?? "12s";
   const ratio = body.ratio ?? "16:9";
   const imageSize = body.imageSize === "1K" || body.imageSize === "4K" ? body.imageSize : "2K";
   const requestedImageModel = body.imageModel === "banana2" || body.imageModel === "image2" ? body.imageModel : undefined;
@@ -87,6 +105,13 @@ export async function POST(req: NextRequest) {
   }
   if (mode === "medium_video" && mediumVideoProvider === "sora2") {
     return NextResponse.json<ApiResponse<null>>({ success: false, message: "当前中视频 Sora2 模式暂不可用，请在后台切换为 Grok。" }, { status: 400 });
+  }
+  if (mode !== "medium_video" && mode !== "image" && !videoProvider) {
+    return NextResponse.json<ApiResponse<null>>({ success: false, message: "当前视频模型配置不可用，请联系管理员。" }, { status: 400 });
+  }
+  if (mode !== "medium_video" && mode !== "image" && !videoDurationSeconds) {
+    const allowedText = videoProvider === "grok" ? "10/20/30" : "4/8/12";
+    return NextResponse.json<ApiResponse<null>>({ success: false, message: `当前视频模型仅支持 ${allowedText} 秒` }, { status: 400 });
   }
   if (mode === "image") {
     if (!imageAvailableModels.length) {
@@ -114,7 +139,7 @@ export async function POST(req: NextRequest) {
   if (mode !== "image" && !pricing.video_enabled) {
     return NextResponse.json<ApiResponse<null>>({ success: false, message: "通道维护升级中请稍后再试" }, { status: 503 });
   }
-  const estimateCost = mode === "medium_video" ? await estimateMediumVideoCost(mediumVideoSegments) : await estimateTaskCost({ mode, duration, imageSize, imageModel, count });
+  const estimateCost = mode === "medium_video" ? await estimateMediumVideoCost(mediumVideoSegments) : await estimateTaskCost({ mode, duration, imageSize, imageModel, count, videoProvider });
   if (currentUser.balance < estimateCost) {
     return NextResponse.json<ApiResponse<null>>({ success: false, message: `余额不足，预计需要 ¥${estimateCost.toFixed(2)}` }, { status: 402 });
   }
@@ -159,10 +184,14 @@ export async function POST(req: NextRequest) {
     imageSize: mode === "image" ? imageSize : undefined,
     imageModel: mode === "image" ? imageModel : undefined,
     count,
+    sourceMode: mode === "image" || mode === "medium_video" ? undefined : sourceMode,
+    videoProvider: mode === "image" || mode === "medium_video" ? undefined : videoProvider,
+    durationSeconds: mode === "image" ? undefined : mode === "medium_video" ? mediumVideoTargetSeconds ?? undefined : videoDurationSeconds ?? undefined,
+    targetDurationSeconds: mode === "medium_video" ? mediumVideoTargetSeconds ?? undefined : mode !== "image" ? videoDurationSeconds ?? undefined : undefined,
     mediumVideoSegments: mode === "medium_video" ? mediumVideoSegments : undefined,
     mediumVideoProvider: mode === "medium_video" ? (mediumVideoProvider as "grok" | "sora2") : undefined,
     mediumVideoStrategy: mode === "medium_video" ? mediumVideoStrategy : undefined,
-    videoModelLabel: mode === "medium_video" ? (mediumVideoProvider === "sora2" ? "Sora2" : "Grok") : undefined,
+    videoModelLabel: mode === "medium_video" ? (mediumVideoProvider === "sora2" ? "Sora2" : "Grok") : mode === "image" ? undefined : videoProvider === "grok" ? "Grok" : "Sora2",
     status: isScheduled ? "waiting" : "queued",
     referenceImageUrl: body.referenceImageUrl,
     referenceImageName: body.referenceImageName,
@@ -175,6 +204,8 @@ export async function POST(req: NextRequest) {
     userId: currentUser.id,
     mode,
     provider: mode === "medium_video" ? mediumVideoProvider : undefined,
+    videoProvider,
+    sourceMode,
     successfulUnits: 0,
   }));
 

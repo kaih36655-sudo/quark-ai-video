@@ -32,6 +32,10 @@ export type Task = {
   imageSize?: "1K" | "2K" | "4K";
   imageModel?: "image2" | "banana2";
   count: number;
+  sourceMode?: "normal" | "agent" | "video_remix";
+  videoProvider?: "sora2" | "grok";
+  durationSeconds?: number;
+  targetDurationSeconds?: number;
   mediumVideoSegments?: number;
   mediumVideoProvider?: "grok" | "sora2";
   mediumVideoStrategy?: "extend" | "stitch" | "sora2";
@@ -85,6 +89,8 @@ export type Video = {
   displayModel?: string;
   imageModelLabel?: string;
   apiModel?: string;
+  sourceMode?: "normal" | "agent" | "video_remix";
+  videoProvider?: "sora2" | "grok";
   mediumVideo?: boolean;
   mediumVideoTaskId?: string;
   chainId?: string;

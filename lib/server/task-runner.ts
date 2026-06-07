@@ -50,6 +50,15 @@ const createGrokCreateFailureDiagnostics = (errorMessage: string) =>
     `originalProviderError=${errorMessage || "Grok create failed"}`,
   ].join(" | ");
 
+const formatGrokVisibleFailureMessage = () => "Grok 视频通道繁忙，任务创建失败，请稍后重试或切换其他模型。";
+
+const createGrokGenerationDiagnostics = (errorMessage: string, stage = "create_or_extend") =>
+  [
+    `provider=grok`,
+    `stage=${stage}`,
+    `originalProviderError=${errorMessage || "Grok generation failed"}`,
+  ].join(" | ");
+
 const sora2PipelineLog = (stage: "CREATE_RETRY" | "CREATE_FINAL_FAILED" | "CREATE_FINAL_SUCCESS", payload: Record<string, unknown>) => {
   console.log(`[SORA2][${stage}]`, JSON.stringify(payload));
 };
@@ -77,6 +86,35 @@ async function chargeSuccessfulGenerations(task: Task, successCount: number, uni
       unitPrice: resolvedUnitPrice,
     });
     return resolvedUnitPrice;
+  } catch (error) {
+    runnerLog("BALANCE_CHARGE_FAILED", {
+      taskId: task.id,
+      userId: task.userId,
+      successCount,
+      errorMessage: stringifyUnknownError(error),
+    });
+    return null;
+  }
+}
+
+async function chargeGenerationAmount(task: Task, amount: number, reason: string, successCount: number) {
+  const normalizedAmount = Number(amount.toFixed(2));
+  if (normalizedAmount <= 0) return null;
+  try {
+    await adjustUserBalance({
+      userId: task.userId,
+      amount: -normalizedAmount,
+      reason,
+      operatorUserId: "system",
+    });
+    runnerLog("BALANCE_CHARGED", {
+      taskId: task.id,
+      userId: task.userId,
+      successCount,
+      amount: -normalizedAmount,
+      unitPrice: normalizedAmount,
+    });
+    return normalizedAmount;
   } catch (error) {
     runnerLog("BALANCE_CHARGE_FAILED", {
       taskId: task.id,
@@ -118,6 +156,12 @@ function resolveSoraSeconds(duration: string): number {
   const numeric = Number(String(duration).replace(/[^\d]/g, ""));
   if (numeric === 4 || numeric === 8 || numeric === 12) return numeric;
   return 4;
+}
+
+function resolveVideoSeconds(duration: string, provider?: "sora2" | "grok"): number {
+  const numeric = Number(String(duration).replace(/[^\d]/g, ""));
+  if (provider === "grok") return [10, 20, 30].includes(numeric) ? numeric : 10;
+  return resolveSoraSeconds(duration);
 }
 
 type Sora2WaitResult = Awaited<ReturnType<typeof runSora2AndWait>>;
@@ -585,7 +629,7 @@ async function executeTask(taskId: string) {
 
   const agent = task.agentId ? await getManagedAgentById(task.agentId) : null;
   const effectivePrompt = task.promptSnapshot || task.prompt;
-  const unitPrice = task.mode === "medium_video" ? await getMediumVideoUnitPrice() : await getUnitPrice(task);
+  const unitPrice = task.mode === "medium_video" ? await getMediumVideoUnitPrice(10) : await getUnitPrice(task);
   let successCount = 0;
   let failedCount = 0;
   const successfulRecordIds: string[] = [];
@@ -944,11 +988,12 @@ async function executeTask(taskId: string) {
     const settleSuccessfulMediumCharges = async () => {
       if (chargedHandled) return;
       chargedHandled = true;
-      const chargedUnitPrice = await chargeSuccessfulGenerations(task, successCount, unitPrice);
+      const successSeconds = Math.max(0, successCount * 10);
+      const totalCost = successSeconds > 0 ? await getMediumVideoUnitPrice(successSeconds) : 0;
+      const chargedUnitPrice = await chargeGenerationAmount(task, totalCost, `Grok 中视频生成成功扣费 ${successSeconds}秒`, successCount);
       if (chargedUnitPrice === null) return;
-      const totalCost = Number((chargedUnitPrice * successCount).toFixed(2));
       successfulRecordIds.forEach((videoId) => {
-        videosRepository.update(videoId, { cost: totalCost });
+        videosRepository.update(videoId, { cost: chargedUnitPrice });
       });
     };
 
@@ -1551,6 +1596,181 @@ async function executeTask(taskId: string) {
   for (let index = 0; index < task.count; index += 1) {
     const targetSize = task.ratio === "9:16" ? "720x1280" : "1280x720";
     const targetRatio = task.ratio === "9:16" ? "9:16" : "16:9";
+    const taskVideoProvider = task.videoProvider === "grok" ? "grok" : "sora2";
+    if (taskVideoProvider === "grok") {
+      const targetDurationSeconds = resolveVideoSeconds(task.duration, "grok");
+      try {
+        const plan = await generateGrokMediumVideoPlan({
+          theme: effectivePrompt,
+          targetDurationSeconds,
+          ratio: targetRatio,
+          agentName: task.agentName,
+          agentDescription: agent?.description,
+        });
+        runnerLog("GROK_SCRIPT_READY", {
+          taskId: task.id,
+          index: index + 1,
+          title: plan.title,
+          targetDurationSeconds,
+          extensionPromptCount: plan.extensionPrompts.length,
+        });
+        const latestTask = tasksRepository.getById(taskId);
+        if (!latestTask || latestTask.status === "cancelled") {
+          runnerLog("TASK_ABORTED", { taskId, reason: "task removed or cancelled during Grok execution" });
+          return;
+        }
+        const grokResult = await runGrokVideoWithExtensions({
+          basePrompt: plan.basePrompt,
+          extensionPrompts: plan.extensionPrompts,
+          ratio: targetRatio,
+          targetDurationSeconds,
+          referenceImages: task.referenceImageUrl ? [task.referenceImageUrl] : [],
+        });
+        if (!grokResult.ok || !grokResult.finalVideoUrl) {
+          failedCount += 1;
+          const rawError = grokResult.error || "Grok 视频生成失败";
+          const diagnosticError = createGrokGenerationDiagnostics(rawError, grokResult.providerTaskIds.length ? "extend" : "create");
+          videosRepository.createMany([
+            {
+              taskId: task.id,
+              providerTaskId: grokResult.finalTaskId || grokResult.providerTaskIds.join(","),
+              title: `Grok 视频${index + 1}（失败）`,
+              content: `视频${index + 1}：${formatGrokVisibleFailureMessage()}`,
+              script: plan.outline.map((item) => `${item.start}-${item.end}s：${item.summary}`),
+              prompt: [plan.basePrompt, ...plan.extensionPrompts].join("\n\n--- EXTEND ---\n\n"),
+              sourcePrompt: task.prompt,
+              status: "failed" as const,
+              originalCoverUrl: "",
+              originalVideoUrl: "",
+              upscaledVideoUrl: "",
+              upscaledCoverUrl: "",
+              upscaleStatus: "idle" as const,
+              upscaleTaskId: "",
+              upscaleErrorMessage: "",
+              upscaleConsumeMoney: 0,
+              upscaleTaskCostTime: 0,
+              coverUrl: "",
+              previewImageUrl: "",
+              errorMessage: diagnosticError,
+              referenceImageUrl: task.referenceImageUrl,
+              referenceImageName: task.referenceImageName,
+              cost: 0,
+              seconds: targetDurationSeconds,
+              duration: `${targetDurationSeconds}s`,
+              ratio: targetRatio,
+              size: targetSize,
+              displayModel: "Grok",
+              apiModel: process.env.YUNWU_GROK_VIDEO_MODEL || "grok-video-3-10s",
+              sourceMode: task.sourceMode,
+              videoProvider: "grok",
+              videoModelLabel: "Grok",
+            },
+          ]);
+          runnerLog("GROK_VIDEO_FAILED_WRITE", {
+            taskId: task.id,
+            index: index + 1,
+            providerTaskIds: grokResult.providerTaskIds,
+            finalReason: rawError,
+          });
+          continue;
+        }
+        successCount += 1;
+        const created = videosRepository.createMany([
+          {
+            taskId: task.id,
+            providerTaskId: grokResult.finalTaskId || grokResult.providerTaskIds.join(","),
+            title: `Grok 视频${index + 1}：${plan.title}`,
+            content: `视频${index + 1}：${task.prompt}｜模型：Grok｜时长：${targetDurationSeconds}秒${task.agentName ? `｜智能体：${task.agentName}` : ""}`,
+            script: plan.outline.map((item) => `${item.start}-${item.end}s：${item.summary}`),
+            prompt: [plan.basePrompt, ...plan.extensionPrompts].join("\n\n--- EXTEND ---\n\n"),
+            sourcePrompt: task.prompt,
+            status: "success" as const,
+            originalCoverUrl: grokResult.finalCoverUrl || "",
+            originalVideoUrl: grokResult.finalVideoUrl,
+            upscaledVideoUrl: "",
+            upscaledCoverUrl: "",
+            upscaleStatus: "queued" as const,
+            upscaleTaskId: "",
+            upscaleErrorMessage: "",
+            upscaleConsumeMoney: 0,
+            upscaleTaskCostTime: 0,
+            coverUrl: grokResult.finalCoverUrl || "",
+            videoUrl: grokResult.finalVideoUrl,
+            previewImageUrl: grokResult.finalVideoUrl,
+            referenceImageUrl: task.referenceImageUrl,
+            referenceImageName: task.referenceImageName,
+            cost: 0,
+            seconds: targetDurationSeconds,
+            duration: `${targetDurationSeconds}s`,
+            ratio: targetRatio,
+            size: targetSize,
+            displayModel: "Grok",
+            apiModel: process.env.YUNWU_GROK_VIDEO_MODEL || "grok-video-3-10s",
+            sourceMode: task.sourceMode,
+            videoProvider: "grok",
+            videoModelLabel: "Grok",
+            providerTaskIds: grokResult.providerTaskIds,
+            segmentVideoUrls: grokResult.segmentVideoUrls,
+          },
+        ])[0];
+        successfulRecordIds.push(created.id);
+        runnerLog("GROK_VIDEO_SUCCESS_WRITE", {
+          taskId: task.id,
+          videoId: created.id,
+          index: index + 1,
+          providerTaskIds: grokResult.providerTaskIds,
+          enqueueUpscale: true,
+        });
+        enqueueMediumVideoOriginalCover(created, grokResult.finalCoverUrl);
+        enqueueMediumVideoUpscale(created);
+      } catch (error) {
+        failedCount += 1;
+        const rawError = stringifyUnknownError(error);
+        const diagnosticError = createGrokGenerationDiagnostics(rawError);
+        videosRepository.createMany([
+          {
+            taskId: task.id,
+            providerTaskId: "",
+            title: `Grok 视频${index + 1}（失败）`,
+            content: `视频${index + 1}：${formatGrokVisibleFailureMessage()}`,
+            script: [],
+            prompt: effectivePrompt,
+            status: "failed" as const,
+            originalCoverUrl: "",
+            originalVideoUrl: "",
+            upscaledVideoUrl: "",
+            upscaledCoverUrl: "",
+            upscaleStatus: "idle" as const,
+            upscaleTaskId: "",
+            upscaleErrorMessage: "",
+            upscaleConsumeMoney: 0,
+            upscaleTaskCostTime: 0,
+            coverUrl: "",
+            previewImageUrl: "",
+            errorMessage: diagnosticError,
+            referenceImageUrl: task.referenceImageUrl,
+            referenceImageName: task.referenceImageName,
+            cost: 0,
+            seconds: targetDurationSeconds,
+            duration: `${targetDurationSeconds}s`,
+            ratio: targetRatio,
+            size: targetSize,
+            displayModel: "Grok",
+            apiModel: process.env.YUNWU_GROK_VIDEO_MODEL || "grok-video-3-10s",
+            sourceMode: task.sourceMode,
+            videoProvider: "grok",
+            videoModelLabel: "Grok",
+          },
+        ]);
+        runnerLog("GROK_VIDEO_FAILED_WRITE", {
+          taskId: task.id,
+          index: index + 1,
+          providerTaskIds: [],
+          finalReason: rawError,
+        });
+      }
+      continue;
+    }
     let scriptResult: Awaited<ReturnType<typeof generateVideoScript>> | null = null;
     try {
       scriptResult = await generateVideoScript({
@@ -1605,6 +1825,10 @@ async function executeTask(taskId: string) {
             duration: task.duration,
             ratio: targetRatio,
             size: targetSize,
+            displayModel: "Sora2",
+            sourceMode: task.sourceMode,
+            videoProvider: "sora2",
+            videoModelLabel: "Sora2",
           },
         ]);
         runnerLog("VIDEO_FAILED_WRITE", {
@@ -1644,6 +1868,10 @@ async function executeTask(taskId: string) {
           duration: task.duration,
           ratio: soraResult.ratio || targetRatio,
           size: soraResult.size || targetSize,
+          displayModel: "Sora2",
+          sourceMode: task.sourceMode,
+          videoProvider: "sora2",
+          videoModelLabel: "Sora2",
         },
       ])[0];
       successfulRecordIds.push(created.id);
@@ -1827,6 +2055,10 @@ async function executeTask(taskId: string) {
           duration: task.duration,
           ratio: targetRatio,
           size: targetSize,
+          displayModel: "Sora2",
+          sourceMode: task.sourceMode,
+          videoProvider: "sora2",
+          videoModelLabel: "Sora2",
         },
       ]);
       runnerLog("VIDEO_FAILED_WRITE", {
