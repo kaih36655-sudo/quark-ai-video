@@ -8,7 +8,7 @@ import { isRunningHubOomError, runRunningHubUpscaleWithPolling } from "./running
 import { generateYunwuImage } from "./yunwu-image";
 import { enqueueUpscaleJob } from "./upscale-queue";
 import { extractCoverAt015FromVideoUrl, saveCoverFromImageUrl } from "./video-cover-extractor";
-import { concatMediumVideoSegments, extractMediumVideoReferenceFrame } from "./medium-video-frame";
+import { concatMediumVideoSegments, extractTailReferenceFrameForContinuation } from "./medium-video-frame";
 import { adjustUserBalance } from "./auth-store";
 import { getMediumVideoUnitPrice, getUnitPrice } from "./pricing";
 import { getManagedAgentById } from "./agent-store";
@@ -76,6 +76,11 @@ const isSupportedGrokProviderSource = (source: unknown): source is GrokProviderS
 
 const formatUnsupportedGrokProviderSourceError = (source: unknown) =>
   `当前 Grok 接口来源 ${String(source || "")} 暂未接入，请在后台切换为云雾 API、接口AI 或 xAI 官方。`;
+
+const appendGrokStitchContinuationInstruction = (promptText: string, segmentIndex: number, totalSegments: number, providerLabel = "Grok") =>
+  segmentIndex === 0
+    ? `${promptText}\n\n硬性要求：这是 ${providerLabel} 分段拼接模式第 ${segmentIndex + 1}/${totalSegments} 段；每段约 10 秒；建立开场画面和动作起点；不要字幕、水印、Logo。`
+    : `${promptText}\n\n硬性要求：这是 ${providerLabel} 分段拼接模式第 ${segmentIndex + 1}/${totalSegments} 段；每段约 10 秒；本段输入参考图是上一段视频的最后可用非黑帧，请从该画面状态无缝继续；0.0 秒立即延续上一帧动作；不要重复上一段已经完成的动作；不要重新开始同一动作；不要回到更早的画面状态；不要重新介绍；主体、场景、动作、情绪连续；如果是口播，继续上一段未完成的句意或进入下一句，不要重复上一段开头；不要字幕、水印、Logo。`;
 
 const sora2PipelineLog = (stage: "CREATE_RETRY" | "CREATE_FINAL_FAILED" | "CREATE_FINAL_SUCCESS", payload: Record<string, unknown>) => {
   console.log(`[SORA2][${stage}]`, JSON.stringify(payload));
@@ -1145,7 +1150,7 @@ async function executeTask(taskId: string) {
 
       if (mediumVideoStrategy === "stitch") {
         const stitchPrompts = (plan.stitchPrompts?.length === totalUnits ? plan.stitchPrompts : [plan.basePrompt, ...plan.extensionPrompts]).map((promptText, index) =>
-          `${promptText}\n\n硬性要求：这是 Grok 分段拼接模式第 ${index + 1}/${totalUnits} 段；每段约 10 秒；承接上一段最后动作继续，不要重新开头；主体、场景、动作、情绪连续；不要字幕、水印、Logo。`
+          appendGrokStitchContinuationInstruction(promptText, index, totalUnits)
         );
         const grokResult = await runGrokVideoSegments({
           providerSource: grokProviderSource,
@@ -1156,12 +1161,12 @@ async function executeTask(taskId: string) {
           getReferenceImagesForSegment: async (segmentIndex, previousVideoUrl) => {
             if (segmentIndex === 1) return referenceImages;
             if (!previousVideoUrl) return undefined;
-            const frame = await extractMediumVideoReferenceFrame({
+            const frame = await extractTailReferenceFrameForContinuation({
               taskId: task.id,
               segmentIndex,
               sourceVideoUrl: previousVideoUrl,
             });
-            console.log("[GROK_VIDEO][STITCH_FRAME_EXTRACT_SUCCESS]", JSON.stringify({ taskId: task.id, providerSource: grokProviderSource, segmentIndex, referenceUrl: frame.referenceUrl }));
+            console.log("[GROK_VIDEO][STITCH_FRAME_EXTRACT_SUCCESS]", JSON.stringify({ taskId: task.id, providerSource: grokProviderSource, segmentIndex, referenceUrl: frame.referenceUrl, seekSeconds: frame.seekSeconds, duration: frame.duration }));
             return [frame.referenceUrl];
           },
         });
@@ -1679,7 +1684,7 @@ async function executeTask(taskId: string) {
           const providerLogPrefix = grokProviderSource === "xai" ? "XAI_GROK" : "JIEKOU_GROK";
           const providerPromptLabel = grokProviderSource === "xai" ? "xAI 官方 Grok" : "接口AI Grok";
           const segmentPrompts = rawSegmentPrompts.slice(0, totalSegments).map((promptText, segmentIndex) =>
-            `${promptText}\n\n硬性要求：这是${providerPromptLabel} 分段拼接模式第 ${segmentIndex + 1}/${totalSegments} 段；每段约 10 秒；承接上一段最后动作继续；主体、场景、动作、情绪连续；不要字幕、水印、Logo。`
+            appendGrokStitchContinuationInstruction(promptText, segmentIndex, totalSegments, providerPromptLabel)
           );
           grokResult = await runGrokVideoSegments({
             providerSource: grokProviderSource,
@@ -1690,12 +1695,12 @@ async function executeTask(taskId: string) {
             getReferenceImagesForSegment: async (segmentIndex, previousVideoUrl) => {
               if (segmentIndex === 1) return task.referenceImageUrl ? [task.referenceImageUrl] : undefined;
               if (!previousVideoUrl) return undefined;
-              const frame = await extractMediumVideoReferenceFrame({
+              const frame = await extractTailReferenceFrameForContinuation({
                 taskId: task.id,
                 segmentIndex,
                 sourceVideoUrl: previousVideoUrl,
               });
-              console.log(`[${providerLogPrefix}][STITCH_FRAME_EXTRACT_SUCCESS]`, JSON.stringify({ taskId: task.id, providerSource: grokProviderSource, segmentIndex, referenceUrl: frame.referenceUrl }));
+              console.log(`[${providerLogPrefix}][STITCH_FRAME_EXTRACT_SUCCESS]`, JSON.stringify({ taskId: task.id, providerSource: grokProviderSource, segmentIndex, referenceUrl: frame.referenceUrl, seekSeconds: frame.seekSeconds, duration: frame.duration }));
               return [frame.referenceUrl];
             },
           });

@@ -2311,13 +2311,13 @@ export default function Home() {
             : "sticky top-0 z-20 border-b border-white/70 bg-white/70 shadow-sm shadow-indigo-100/50 backdrop-blur-xl"
         }
       >
-        <div className="flex items-center justify-between px-4 py-4 md:px-6">
+        <div className="flex items-center justify-between px-6 py-4 sm:px-8 lg:px-10">
           {/* 左侧 Logo */}
-          <div className="flex items-center gap-3">
+          <div className="flex min-w-0 items-center gap-4">
             <BrandLogo size="sm" />
-            <div>
-              <div className="text-base font-semibold md:text-lg">夸克AI</div>
-              <div className={isDark ? "text-xs text-gray-400" : "text-xs text-gray-500"}>AI视频与图片生成平台</div>
+            <div className="min-w-0 leading-tight">
+              <div className="text-base font-semibold leading-tight md:text-lg">夸克AI</div>
+              <div className={isDark ? "mt-0.5 text-[11px] leading-snug text-gray-400 md:text-xs" : "mt-0.5 text-[11px] leading-snug text-gray-500 md:text-xs"}>AI视频与图片生成平台</div>
             </div>
           </div>
 
@@ -2360,8 +2360,10 @@ export default function Home() {
                   </button>
                 )}
 
-                <div className="flex items-center gap-2">
-                  <BrandLogo size="sm" />
+                <div className="flex items-center gap-2.5">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 via-violet-500 to-sky-500 text-[11px] font-bold text-white shadow-sm shadow-indigo-200/60">
+                    {String(userId || "AI").slice(0, 2).toUpperCase()}
+                  </div>
                   <span className={isDark ? "text-sm font-medium text-gray-100" : "text-sm font-medium text-gray-700"}>ID: {userId}</span>
                 </div>
 

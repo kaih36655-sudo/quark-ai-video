@@ -33,12 +33,12 @@ export default function LoginPage() {
     <div className="relative min-h-screen overflow-hidden bg-gradient-to-b from-slate-50 via-white to-indigo-50 text-black">
       <div className="pointer-events-none absolute left-[-8rem] top-[-10rem] h-96 w-96 rounded-full bg-indigo-200/70 blur-3xl" />
       <div className="pointer-events-none absolute right-[-8rem] top-24 h-96 w-96 rounded-full bg-sky-200/70 blur-3xl" />
-      <div className="relative z-10 flex items-center justify-between border-b border-white/70 bg-white/70 px-4 py-4 shadow-sm backdrop-blur-xl md:px-6">
-        <Link href="/" className="flex items-center gap-3">
+      <div className="relative z-10 flex items-center justify-between border-b border-white/70 bg-white/70 px-6 py-4 shadow-sm backdrop-blur-xl sm:px-8 lg:px-10">
+        <Link href="/" className="flex min-w-0 items-center gap-4">
           <BrandLogo size="sm" />
-          <div>
-            <div className="text-base font-semibold md:text-lg">夸克AI</div>
-            <div className="text-xs text-gray-500">AI视频与图片生成平台</div>
+          <div className="min-w-0 leading-tight">
+            <div className="text-base font-semibold leading-tight md:text-lg">夸克AI</div>
+            <div className="mt-0.5 text-[11px] leading-snug text-gray-500 md:text-xs">AI视频与图片生成平台</div>
           </div>
         </Link>
 
@@ -52,11 +52,11 @@ export default function LoginPage() {
 
       <div className="relative z-10 flex min-h-[calc(100vh-73px)] items-center justify-center px-4 py-10">
         <div className="w-full max-w-md rounded-3xl border border-white/80 bg-white/82 p-6 shadow-[0_24px_80px_rgba(79,70,229,0.16)] backdrop-blur-2xl md:p-8">
-          <div className="mb-6 flex items-center gap-3">
+          <div className="mb-6 flex items-center gap-4">
             <BrandLogo size="md" />
-            <div>
-              <h2 className="text-2xl font-semibold">登录夸克AI</h2>
-              <p className="text-sm text-gray-500">欢迎使用夸克AI</p>
+            <div className="leading-tight">
+              <h2 className="text-2xl font-semibold leading-tight">登录夸克AI</h2>
+              <p className="mt-1 text-sm leading-snug text-gray-500">欢迎使用夸克AI</p>
             </div>
           </div>
 

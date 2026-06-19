@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { resolveLocalUploadsSource } from "../local-uploads";
-import { extractMediumVideoReferenceFrame } from "../medium-video-frame";
+import { extractTailReferenceFrameForContinuation } from "../medium-video-frame";
 import { GrokVideoResult, GrokVideoSegmentsInput, GrokVideoWithExtensionsInput } from "./types";
 
 type XaiTaskStatus = "processing" | "success" | "failed" | "unknown";
@@ -443,7 +443,7 @@ async function runXaiSegments(params: {
           ? params.initialReferenceImages ?? await params.getReferenceImagesForSegment?.(segmentIndex, previousVideoUrl)
           : await params.getReferenceImagesForSegment?.(segmentIndex, previousVideoUrl);
       if (index > 0 && !referenceImages?.length && previousVideoUrl) {
-        const frame = await extractMediumVideoReferenceFrame({
+        const frame = await extractTailReferenceFrameForContinuation({
           taskId: params.taskId || `xai-grok-${Date.now()}`,
           segmentIndex,
           sourceVideoUrl: previousVideoUrl,

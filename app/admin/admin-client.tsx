@@ -367,11 +367,11 @@ export default function AdminClient() {
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,#ffffff_0,#f6f7f9_42%,#eef0f4_100%)] px-6 py-8 text-black">
       <div className="mx-auto max-w-7xl space-y-6">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
+          <div className="flex min-w-0 items-center gap-4">
             <BrandLogo size="md" />
-            <div>
-              <h1 className="text-2xl font-semibold">夸克AI 管理后台</h1>
-              <p className="text-sm text-gray-500">用户、智能体、价格配置与视频任务历史记录</p>
+            <div className="min-w-0 leading-tight">
+              <h1 className="text-2xl font-semibold leading-tight">夸克AI 管理后台</h1>
+              <p className="mt-1 text-sm leading-snug text-gray-500">用户、智能体、价格配置与视频任务历史记录</p>
             </div>
           </div>
           <a href="/" className="rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-sky-500 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-200/70 transition hover:-translate-y-0.5 hover:brightness-105">返回首页</a>

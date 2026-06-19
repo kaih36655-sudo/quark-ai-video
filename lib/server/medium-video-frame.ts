@@ -207,10 +207,10 @@ async function runFfmpegExtract(inputPath: string, outputPath: string, seekSecon
       "ffmpeg",
       [
         "-y",
-        "-ss",
-        seekSeconds.toFixed(2),
         "-i",
         inputPath,
+        "-ss",
+        seekSeconds.toFixed(2),
         "-frames:v",
         "1",
         "-q:v",
@@ -236,22 +236,66 @@ async function runFfmpegExtract(inputPath: string, outputPath: string, seekSecon
   });
 }
 
-function getSeekAttempts(duration: number | null): number[] {
-  const rawAttempts = duration
-    ? [duration - 0.5, duration * 0.85, duration * 0.7]
-    : [11.5, 10, 8, 5];
+async function detectBlackFrame(inputPath: string, seekSeconds: number): Promise<number | null> {
+  return new Promise((resolve) => {
+    const cp = spawn(
+      "ffmpeg",
+      ["-i", inputPath, "-ss", seekSeconds.toFixed(2), "-frames:v", "1", "-vf", "blackframe=amount=98:threshold=32", "-f", "null", "-"],
+      { stdio: ["ignore", "ignore", "pipe"] }
+    );
+    let stderr = "";
+    cp.stderr.on("data", (chunk) => {
+      stderr += String(chunk || "");
+    });
+    cp.on("error", () => resolve(null));
+    cp.on("close", () => {
+      const match = /pblack:([\d.]+)/.exec(stderr);
+      resolve(match ? Number(match[1]) : null);
+    });
+  });
+}
+
+type TailSeekAttempt = {
+  timestamp: number;
+  reason: "near_tail" | "scan_back_after_black_outro" | "unknown_duration_scan";
+};
+
+function uniqueTailAttempts(attempts: TailSeekAttempt[], duration: number | null): TailSeekAttempt[] {
   const seen = new Set<string>();
-  return rawAttempts
-    .map((value) => Math.max(0.3, Number(value.toFixed(2))))
+  return attempts
+    .map((item) => {
+      const upperBound = duration && duration > 0 ? Math.max(0.1, duration - 0.05) : item.timestamp;
+      const timestamp = Math.min(upperBound, Math.max(0.1, Number(item.timestamp.toFixed(2))));
+      return { ...item, timestamp: Number(timestamp.toFixed(2)) };
+    })
     .filter((value) => {
-      const key = value.toFixed(2);
+      const key = value.timestamp.toFixed(2);
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     });
 }
 
-export async function extractMediumVideoReferenceFrame(params: {
+function getTailReferenceSeekAttempts(duration: number | null): TailSeekAttempt[] {
+  if (duration && duration > 0) {
+    const nearTailOffsets = [0.1, 0.2, 0.3, 0.5, 0.8, 1.0];
+    const blackOutroScanOffsets = [1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0];
+    return uniqueTailAttempts([
+      ...nearTailOffsets.map((offset) => ({ timestamp: duration - offset, reason: "near_tail" as const })),
+      ...blackOutroScanOffsets.map((offset) => ({ timestamp: duration - offset, reason: "scan_back_after_black_outro" as const })),
+      ...[duration * 0.75, duration * 0.6, duration * 0.5].map((timestamp) => ({ timestamp, reason: "scan_back_after_black_outro" as const })),
+    ], duration);
+  }
+  return uniqueTailAttempts(
+    [9.9, 9.8, 9.7, 9.5, 9.2, 9.0, 8.5, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0].map((timestamp) => ({
+      timestamp,
+      reason: "unknown_duration_scan" as const,
+    })),
+    null
+  );
+}
+
+export async function extractTailReferenceFrameForContinuation(params: {
   taskId: string;
   segmentIndex: number;
   sourceVideoUrl: string;
@@ -265,25 +309,64 @@ export async function extractMediumVideoReferenceFrame(params: {
   try {
     tempInputPath = await downloadToTempFile(params.sourceVideoUrl);
     const duration = await probeDurationSeconds(tempInputPath);
-    const seekAttempts = getSeekAttempts(duration);
+    const seekAttempts = getTailReferenceSeekAttempts(duration);
+    console.log(
+      "[MEDIUM_VIDEO][TAIL_FRAME_EXTRACT_START]",
+      JSON.stringify({
+        taskId: params.taskId,
+        segmentIndex: params.segmentIndex,
+        sourceVideoUrlPreview: params.sourceVideoUrl.slice(0, 140),
+        duration,
+      })
+    );
     let lastError: unknown = null;
-    let seekSeconds = seekAttempts[0] ?? 11.5;
+    let lastSkippedBlack: { timestamp: number; pblack: number } | null = null;
+    let seekSeconds = seekAttempts[0]?.timestamp ?? 9.9;
     for (let attemptIndex = 0; attemptIndex < seekAttempts.length; attemptIndex += 1) {
-      seekSeconds = seekAttempts[attemptIndex];
+      const attempt = seekAttempts[attemptIndex];
+      seekSeconds = attempt.timestamp;
       console.log(
-        "[MEDIUM_VIDEO][FRAME_EXTRACT_ATTEMPT]",
+        "[MEDIUM_VIDEO][TAIL_FRAME_EXTRACT_ATTEMPT]",
         JSON.stringify({
           taskId: params.taskId,
           segmentIndex: params.segmentIndex,
           timestamp: seekSeconds,
+          duration,
           attempt: attemptIndex + 1,
+          reason: attempt.reason,
         })
       );
       try {
+        const pblack = await detectBlackFrame(tempInputPath, seekSeconds);
+        if (pblack !== null && pblack >= 98) {
+          lastSkippedBlack = { timestamp: seekSeconds, pblack };
+          console.log(
+            "[MEDIUM_VIDEO][TAIL_FRAME_BLACK_SKIPPED]",
+            JSON.stringify({
+              taskId: params.taskId,
+              segmentIndex: params.segmentIndex,
+              timestamp: seekSeconds,
+              blackScore: pblack,
+              meanBrightness: Math.max(0, 100 - pblack),
+            })
+          );
+          continue;
+        }
         await runFfmpegExtract(tempInputPath, tempOutputPath, seekSeconds);
         await rename(tempOutputPath, finalPath);
+        const outputUrl = `/api/uploads/medium-video-refs/${fileName}`;
+        console.log(
+          "[MEDIUM_VIDEO][TAIL_FRAME_EXTRACT_SUCCESS]",
+          JSON.stringify({
+            taskId: params.taskId,
+            segmentIndex: params.segmentIndex,
+            timestamp: seekSeconds,
+            outputUrl,
+            offsetFromEnd: duration ? Number(Math.max(0, duration - seekSeconds).toFixed(2)) : null,
+          })
+        );
         return {
-          referenceUrl: `/api/uploads/medium-video-refs/${fileName}`,
+          referenceUrl: outputUrl,
           finalPath,
           seekSeconds,
           duration,
@@ -293,10 +376,30 @@ export async function extractMediumVideoReferenceFrame(params: {
         await rm(tempOutputPath, { force: true }).catch(() => {});
       }
     }
-    if (lastError instanceof Error) throw lastError;
-    throw new Error("ffmpeg extract failed");
+    const reason = lastError instanceof Error
+      ? lastError.message
+      : lastSkippedBlack
+        ? `尾部候选帧均为黑帧，最后黑帧 timestamp=${lastSkippedBlack.timestamp}, blackScore=${lastSkippedBlack.pblack}`
+        : "ffmpeg extract failed";
+    console.log(
+      "[MEDIUM_VIDEO][TAIL_FRAME_EXTRACT_FAILED]",
+      JSON.stringify({
+        taskId: params.taskId,
+        segmentIndex: params.segmentIndex,
+        reason,
+      })
+    );
+    throw new Error(`尾帧抽取失败，无法为下一段生成参考图：${reason}`);
   } finally {
     if (tempInputPath) await rm(tempInputPath, { force: true }).catch(() => {});
     await rm(tempOutputPath, { force: true }).catch(() => {});
   }
+}
+
+export async function extractMediumVideoReferenceFrame(params: {
+  taskId: string;
+  segmentIndex: number;
+  sourceVideoUrl: string;
+}) {
+  return extractTailReferenceFrameForContinuation(params);
 }
