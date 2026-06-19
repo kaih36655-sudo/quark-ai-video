@@ -2,8 +2,13 @@ import "./globals.css";
 import { Providers } from "./providers";
 
 export const metadata = {
-  title: "夸克AI视频",
-  description: "批量视频生成 Agent",
+  title: "夸克AI - AI视频与图片生成平台",
+  description: "夸克AI，AI视频与图片生成平台",
+  icons: {
+    icon: [
+      { url: "/icon", type: "image/png", sizes: "64x64" },
+    ],
+  },
 };
 
 export default function RootLayout({

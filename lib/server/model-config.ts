@@ -1,28 +1,39 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import {
+  AVAILABLE_GROK_PROVIDER_SOURCES,
+  DEFAULT_GROK_PROVIDER_SOURCE,
+  EnabledGrokProviderSource,
+  normalizeGrokProviderSource,
+} from "./video-providers/types";
 
 export type ModelKey = "sora2" | "grok" | "image2" | "banana2" | "user_select" | "gemini-3.1-pro-preview";
+type ModelConfigSection = { activeModel: ModelKey; availableModels: ModelKey[] };
+type GrokProviderModelConfigSection = ModelConfigSection & {
+  grokProviderSource: EnabledGrokProviderSource;
+  availableGrokProviderSources: EnabledGrokProviderSource[];
+};
 export type ModelConfig = {
-  normalVideo: { activeModel: ModelKey; availableModels: ModelKey[] };
-  agentVideo: { activeModel: ModelKey; availableModels: ModelKey[] };
-  mediumVideo: { activeModel: ModelKey; availableModels: ModelKey[] };
-  plainImage: { activeModel: ModelKey; availableModels: ModelKey[] };
-  agentImage: { activeModel: ModelKey; availableModels: ModelKey[] };
-  videoRemixAnalysis: { activeModel: ModelKey; availableModels: ModelKey[] };
-  videoRemixGeneration: { activeModel: ModelKey; availableModels: ModelKey[] };
+  normalVideo: GrokProviderModelConfigSection;
+  agentVideo: GrokProviderModelConfigSection;
+  mediumVideo: GrokProviderModelConfigSection;
+  plainImage: ModelConfigSection;
+  agentImage: ModelConfigSection;
+  videoRemixAnalysis: ModelConfigSection;
+  videoRemixGeneration: GrokProviderModelConfigSection;
 };
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const MODEL_CONFIG_FILE = path.join(DATA_DIR, "model-config.json");
 
 export const DEFAULT_MODEL_CONFIG: ModelConfig = {
-  normalVideo: { activeModel: "sora2", availableModels: ["sora2", "grok"] },
-  agentVideo: { activeModel: "sora2", availableModels: ["sora2", "grok"] },
-  mediumVideo: { activeModel: "grok", availableModels: ["grok", "sora2"] },
+  normalVideo: { activeModel: "sora2", availableModels: ["sora2", "grok"], grokProviderSource: "yunwu", availableGrokProviderSources: ["yunwu", "jiekou", "xai"] },
+  agentVideo: { activeModel: "sora2", availableModels: ["sora2", "grok"], grokProviderSource: "yunwu", availableGrokProviderSources: ["yunwu", "jiekou", "xai"] },
+  mediumVideo: { activeModel: "grok", availableModels: ["grok", "sora2"], grokProviderSource: "yunwu", availableGrokProviderSources: ["yunwu", "jiekou", "xai"] },
   plainImage: { activeModel: "user_select", availableModels: ["image2", "banana2"] },
   agentImage: { activeModel: "user_select", availableModels: ["image2", "banana2"] },
   videoRemixAnalysis: { activeModel: "gemini-3.1-pro-preview", availableModels: ["gemini-3.1-pro-preview"] },
-  videoRemixGeneration: { activeModel: "sora2", availableModels: ["sora2", "grok"] },
+  videoRemixGeneration: { activeModel: "sora2", availableModels: ["sora2", "grok"], grokProviderSource: "yunwu", availableGrokProviderSources: ["yunwu", "jiekou", "xai"] },
 };
 
 const allowed: Record<keyof ModelConfig, ModelKey[]> = {
@@ -35,6 +46,9 @@ const allowed: Record<keyof ModelConfig, ModelKey[]> = {
   videoRemixGeneration: ["sora2", "grok"],
 };
 
+const grokProviderConfigKeys: Array<keyof ModelConfig> = ["normalVideo", "agentVideo", "mediumVideo", "videoRemixGeneration"];
+const isGrokProviderConfigKey = (key: keyof ModelConfig) => grokProviderConfigKeys.includes(key);
+
 const normalizeSection = <K extends keyof ModelConfig>(key: K, value: unknown): ModelConfig[K] => {
   const fallback = DEFAULT_MODEL_CONFIG[key];
   const input: Partial<ModelConfig[K]> = value && typeof value === "object" ? (value as Partial<ModelConfig[K]>) : {};
@@ -44,9 +58,24 @@ const normalizeSection = <K extends keyof ModelConfig>(key: K, value: unknown): 
   const available = Array.from(new Set([...configuredAvailable, ...fallback.availableModels]));
   const availableModels = available.length ? available : fallback.availableModels;
   const activeModel = allowed[key].includes(input.activeModel as ModelKey) ? (input.activeModel as ModelKey) : fallback.activeModel;
-  return {
+  const normalized = {
     activeModel: activeModel === "user_select" || availableModels.includes(activeModel) ? activeModel : availableModels[0],
     availableModels,
+  };
+  if (!isGrokProviderConfigKey(key)) {
+    return normalized as ModelConfig[K];
+  }
+  const providerInput = input as Partial<GrokProviderModelConfigSection>;
+  const fallbackProvider = fallback as GrokProviderModelConfigSection;
+  const configuredProviderSources = Array.isArray(providerInput.availableGrokProviderSources)
+    ? providerInput.availableGrokProviderSources.filter((item): item is EnabledGrokProviderSource => AVAILABLE_GROK_PROVIDER_SOURCES.includes(item as EnabledGrokProviderSource))
+    : fallbackProvider.availableGrokProviderSources;
+  const availableGrokProviderSources = Array.from(new Set([...configuredProviderSources, ...fallbackProvider.availableGrokProviderSources]));
+  const grokProviderSource = normalizeGrokProviderSource(providerInput.grokProviderSource);
+  return {
+    ...normalized,
+    grokProviderSource: availableGrokProviderSources.includes(grokProviderSource) ? grokProviderSource : DEFAULT_GROK_PROVIDER_SOURCE,
+    availableGrokProviderSources: availableGrokProviderSources.length ? availableGrokProviderSources : [DEFAULT_GROK_PROVIDER_SOURCE],
   } as ModelConfig[K];
 };
 

@@ -1,3 +1,5 @@
+import type { GrokProviderSource } from "./video-providers/types";
+
 export type User = {
   id: string;
   name: string;
@@ -34,6 +36,8 @@ export type Task = {
   count: number;
   sourceMode?: "normal" | "agent" | "video_remix";
   videoProvider?: "sora2" | "grok";
+  grokProviderSource?: GrokProviderSource | string;
+  providerSourceLabel?: string;
   durationSeconds?: number;
   targetDurationSeconds?: number;
   mediumVideoSegments?: number;
@@ -91,6 +95,8 @@ export type Video = {
   apiModel?: string;
   sourceMode?: "normal" | "agent" | "video_remix";
   videoProvider?: "sora2" | "grok";
+  grokProviderSource?: GrokProviderSource | string;
+  providerSourceLabel?: string;
   mediumVideo?: boolean;
   mediumVideoTaskId?: string;
   chainId?: string;

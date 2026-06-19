@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { BrandLogo } from "../components/brand-logo";
 
 type AdminUser = {
   id: string;
@@ -50,14 +51,23 @@ type PricingConfig = {
   image2_4K: number;
 };
 
+type GrokProviderSource = "yunwu" | "jiekou" | "xai";
+type ModelConfigSection = {
+  activeModel: string;
+  availableModels: string[];
+};
+type GrokProviderModelConfigSection = ModelConfigSection & {
+  grokProviderSource?: GrokProviderSource;
+  availableGrokProviderSources?: GrokProviderSource[];
+};
 type ModelConfig = {
-  normalVideo: { activeModel: string; availableModels: string[] };
-  agentVideo: { activeModel: string; availableModels: string[] };
-  mediumVideo: { activeModel: string; availableModels: string[] };
-  plainImage: { activeModel: string; availableModels: string[] };
-  agentImage: { activeModel: string; availableModels: string[] };
-  videoRemixAnalysis: { activeModel: string; availableModels: string[] };
-  videoRemixGeneration: { activeModel: string; availableModels: string[] };
+  normalVideo: GrokProviderModelConfigSection;
+  agentVideo: GrokProviderModelConfigSection;
+  mediumVideo: GrokProviderModelConfigSection;
+  plainImage: ModelConfigSection;
+  agentImage: ModelConfigSection;
+  videoRemixAnalysis: ModelConfigSection;
+  videoRemixGeneration: GrokProviderModelConfigSection;
 };
 
 type VideoRecord = {
@@ -77,6 +87,11 @@ type VideoRecord = {
 };
 
 const formatMoney = (value: unknown) => Number(value || 0).toFixed(2);
+const grokProviderSourceOptions: Array<{ value: GrokProviderSource; label: string }> = [
+  { value: "yunwu", label: "云雾 API" },
+  { value: "jiekou", label: "接口AI" },
+  { value: "xai", label: "xAI 官方" },
+];
 
 const formatDateTime = (value: string) => {
   const date = new Date(value);
@@ -308,6 +323,33 @@ export default function AdminClient() {
   };
 
   const fieldClass = "rounded-2xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-gray-300 focus:bg-gray-50";
+  const renderGrokProviderSourceControl = (key: "normalVideo" | "agentVideo" | "mediumVideo" | "videoRemixGeneration", label: string) => {
+    const section = modelConfig?.[key];
+    if (!section) return null;
+    if (section.activeModel !== "grok") {
+      return (
+        <div key={key} className="rounded-2xl border border-gray-100 bg-gray-50 p-3 text-xs text-gray-500">
+          <div className="mb-1 font-medium text-gray-600">{label}</div>
+          <div>仅 Grok 模型需要选择接口来源。</div>
+        </div>
+      );
+    }
+    return (
+      <label key={key} className="space-y-1 rounded-2xl border border-emerald-100 bg-emerald-50/70 p-3">
+        <span className="text-xs font-medium text-emerald-800">{label} · Grok 接口来源</span>
+        <select
+          className={`${fieldClass} w-full bg-white text-emerald-800`}
+          value={section.grokProviderSource || "yunwu"}
+          onChange={(e) => setModelConfig((prev) => prev ? { ...prev, [key]: { ...prev[key], grokProviderSource: e.target.value as GrokProviderSource } } : prev)}
+        >
+          {grokProviderSourceOptions.map((item) => (
+            <option key={item.value} value={item.value}>{item.label}</option>
+          ))}
+        </select>
+        <div className="text-xs text-emerald-700">后台选择后将严格按所选接口来源执行，不会自动 fallback。</div>
+      </label>
+    );
+  };
   const agentPromptHints: Record<
     "scenePrompt" | "characterPrompt" | "languagePrompt" | "cameraPrompt" | "stylePrompt" | "negativePrompt" | "extraPrompt",
     string
@@ -325,9 +367,12 @@ export default function AdminClient() {
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,#ffffff_0,#f6f7f9_42%,#eef0f4_100%)] px-6 py-8 text-black">
       <div className="mx-auto max-w-7xl space-y-6">
         <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold">管理员后台</h1>
-            <p className="text-sm text-gray-500">用户、智能体、价格配置与视频任务历史记录</p>
+          <div className="flex items-center gap-3">
+            <BrandLogo size="md" />
+            <div>
+              <h1 className="text-2xl font-semibold">夸克AI 管理后台</h1>
+              <p className="text-sm text-gray-500">用户、智能体、价格配置与视频任务历史记录</p>
+            </div>
           </div>
           <a href="/" className="rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-sky-500 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-200/70 transition hover:-translate-y-0.5 hover:brightness-105">返回首页</a>
         </div>
@@ -451,6 +496,12 @@ export default function AdminClient() {
                     <option value="grok">Grok</option>
                   </select>
                 </label>
+              </div>
+              <div className="grid gap-3 md:grid-cols-4">
+                {renderGrokProviderSourceControl("normalVideo", "通用视频")}
+                {renderGrokProviderSourceControl("agentVideo", "智能体批量视频")}
+                {renderGrokProviderSourceControl("mediumVideo", "中视频")}
+                {renderGrokProviderSourceControl("videoRemixGeneration", "爆款视频复刻 · 视频生成")}
               </div>
               <div className="grid gap-3 md:grid-cols-2">
                 {(["plainImage", "agentImage"] as const).map((key) => (

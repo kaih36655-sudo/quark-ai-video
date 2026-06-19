@@ -2,6 +2,7 @@
 
 import { type ChangeEvent, type MouseEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { BrandLogo } from "./components/brand-logo";
 
 const isClient = typeof window !== "undefined";
 
@@ -30,6 +31,8 @@ type Task = {
   videoModelLabel?: string;
   sourceMode?: "normal" | "agent" | "video_remix";
   videoProvider?: "sora2" | "grok";
+  grokProviderSource?: "yunwu" | "jiekou" | "xai";
+  providerSourceLabel?: string;
   durationSeconds?: number;
   targetDurationSeconds?: number;
   duration?: string;
@@ -85,6 +88,8 @@ type Video = {
   videoModelLabel?: string;
   sourceMode?: "normal" | "agent" | "video_remix";
   videoProvider?: "sora2" | "grok";
+  grokProviderSource?: "yunwu" | "jiekou" | "xai";
+  providerSourceLabel?: string;
   mediumVideoCompleteness?: string;
   segmentIndex?: number;
   totalSegments?: number;
@@ -121,14 +126,20 @@ type PricingConfig = {
   image2_4K: number;
 };
 
+type GrokProviderSource = "yunwu" | "jiekou" | "xai";
+type ModelConfigSection = { activeModel: string; availableModels: string[] };
+type GrokProviderModelConfigSection = ModelConfigSection & {
+  grokProviderSource?: GrokProviderSource;
+  availableGrokProviderSources?: GrokProviderSource[];
+};
 type ModelConfig = {
-  normalVideo: { activeModel: string; availableModels: string[] };
-  agentVideo: { activeModel: string; availableModels: string[] };
-  mediumVideo: { activeModel: string; availableModels: string[] };
-  plainImage: { activeModel: string; availableModels: string[] };
-  agentImage: { activeModel: string; availableModels: string[] };
-  videoRemixAnalysis: { activeModel: string; availableModels: string[] };
-  videoRemixGeneration: { activeModel: string; availableModels: string[] };
+  normalVideo: GrokProviderModelConfigSection;
+  agentVideo: GrokProviderModelConfigSection;
+  mediumVideo: GrokProviderModelConfigSection;
+  plainImage: ModelConfigSection;
+  agentImage: ModelConfigSection;
+  videoRemixAnalysis: ModelConfigSection;
+  videoRemixGeneration: GrokProviderModelConfigSection;
 };
 
 const DEFAULT_PRICING: PricingConfig = {
@@ -151,13 +162,13 @@ const DEFAULT_PRICING: PricingConfig = {
   image2_4K: 1.5,
 };
 const DEFAULT_MODEL_CONFIG: ModelConfig = {
-  normalVideo: { activeModel: "sora2", availableModels: ["sora2", "grok"] },
-  agentVideo: { activeModel: "sora2", availableModels: ["sora2", "grok"] },
-  mediumVideo: { activeModel: "grok", availableModels: ["grok", "sora2"] },
+  normalVideo: { activeModel: "sora2", availableModels: ["sora2", "grok"], grokProviderSource: "yunwu", availableGrokProviderSources: ["yunwu", "jiekou", "xai"] },
+  agentVideo: { activeModel: "sora2", availableModels: ["sora2", "grok"], grokProviderSource: "yunwu", availableGrokProviderSources: ["yunwu", "jiekou", "xai"] },
+  mediumVideo: { activeModel: "grok", availableModels: ["grok", "sora2"], grokProviderSource: "yunwu", availableGrokProviderSources: ["yunwu", "jiekou", "xai"] },
   plainImage: { activeModel: "user_select", availableModels: ["image2", "banana2"] },
   agentImage: { activeModel: "user_select", availableModels: ["image2", "banana2"] },
   videoRemixAnalysis: { activeModel: "gemini-3.1-pro-preview", availableModels: ["gemini-3.1-pro-preview"] },
-  videoRemixGeneration: { activeModel: "sora2", availableModels: ["sora2", "grok"] },
+  videoRemixGeneration: { activeModel: "sora2", availableModels: ["sora2", "grok"], grokProviderSource: "yunwu", availableGrokProviderSources: ["yunwu", "jiekou", "xai"] },
 };
 const IMAGE_MODEL_OPTIONS = [
   { label: "image2", value: "image2" },
@@ -183,6 +194,10 @@ const getSoraPriceByDuration = (pricing: PricingConfig, durationValue: string) =
   if (durationValue === "8s") return pricing.video_8s;
   return pricing.video_12s;
 };
+const normalizeGrokProviderSource = (value: unknown): GrokProviderSource | undefined =>
+  value === "yunwu" || value === "jiekou" || value === "xai" ? value : undefined;
+const getGrokProviderSourceLabel = (value?: GrokProviderSource) =>
+  value === "jiekou" ? "接口AI" : value === "xai" ? "xAI 官方" : value === "yunwu" ? "云雾 API" : "";
 const formatImageModelLabel = (video?: { mediaType?: "video" | "image"; imageModelLabel?: string; imageModel?: "image2" | "banana2"; displayModel?: string; apiModel?: string }) => {
   if (video?.mediaType !== "image") return "";
   if (video.imageModelLabel) return video.imageModelLabel;
@@ -330,6 +345,7 @@ export default function Home() {
   const [referencePreviewTitle, setReferencePreviewTitle] = useState("");
   const [referencePreviewData, setReferencePreviewData] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [showBackToTop, setShowBackToTop] = useState(false);
   const [generateCount, setGenerateCount] = useState(3);
   const [prompt, setPrompt] = useState("");
   const [favorites, setFavorites] = useState<number[]>([]);
@@ -461,6 +477,15 @@ export default function Home() {
     void refreshModelConfig();
   }, []);
 
+  useEffect(() => {
+    if (!mounted) return;
+    const handleScroll = () => {
+      setShowBackToTop(window.scrollY > 300);
+    };
+    handleScroll();
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, [mounted]);
 
   const refreshCurrentUser = async () => {
     const res = await fetch("/api/auth/me", { cache: "no-store" });
@@ -640,6 +665,8 @@ export default function Home() {
     videoModelLabel: typeof task.videoModelLabel === "string" ? task.videoModelLabel : undefined,
     sourceMode: task.sourceMode === "video_remix" ? "video_remix" : task.sourceMode === "agent" ? "agent" : task.sourceMode === "normal" ? "normal" : undefined,
     videoProvider: task.videoProvider === "grok" ? "grok" : task.videoProvider === "sora2" ? "sora2" : undefined,
+    grokProviderSource: normalizeGrokProviderSource(task.grokProviderSource),
+    providerSourceLabel: typeof task.providerSourceLabel === "string" ? task.providerSourceLabel : getGrokProviderSourceLabel(normalizeGrokProviderSource(task.grokProviderSource)),
     durationSeconds: typeof task.durationSeconds === "number" ? task.durationSeconds : undefined,
     targetDurationSeconds: typeof task.targetDurationSeconds === "number" ? task.targetDurationSeconds : undefined,
     duration: typeof task.duration === "string" ? task.duration : undefined,
@@ -781,6 +808,8 @@ export default function Home() {
       videoModelLabel: typeof video.videoModelLabel === "string" ? video.videoModelLabel : undefined,
       sourceMode: video.sourceMode === "video_remix" ? "video_remix" : video.sourceMode === "agent" ? "agent" : video.sourceMode === "normal" ? "normal" : undefined,
       videoProvider: video.videoProvider === "grok" ? "grok" : video.videoProvider === "sora2" ? "sora2" : undefined,
+      grokProviderSource: normalizeGrokProviderSource(video.grokProviderSource),
+      providerSourceLabel: typeof video.providerSourceLabel === "string" ? video.providerSourceLabel : getGrokProviderSourceLabel(normalizeGrokProviderSource(video.grokProviderSource)),
       mediumVideoCompleteness: typeof video.mediumVideoCompleteness === "string" ? video.mediumVideoCompleteness : undefined,
       segmentIndex: typeof video.segmentIndex === "number" ? video.segmentIndex : undefined,
       totalSegments: typeof video.totalSegments === "number" ? video.totalSegments : undefined,
@@ -852,7 +881,7 @@ export default function Home() {
       imageModel: isCurrentImageMode ? imageModel : undefined,
       count: effectiveCount,
       mediumVideoSegments: isCurrentMediumVideoMode ? mediumVideoSegments : undefined,
-      mediumVideoStrategy: isCurrentMediumVideoMode ? mediumVideoStrategy : undefined,
+      mediumVideoStrategy: isCurrentMediumVideoMode ? effectiveMediumVideoStrategy : undefined,
       agentId: activeAgentId,
       referenceImageUrl: shouldSubmitReference ? referenceImageData ?? undefined : undefined,
       referenceImageName: shouldSubmitReference ? useReferenceName || undefined : undefined,
@@ -989,7 +1018,7 @@ export default function Home() {
         imageModel: isCurrentImageMode ? imageModel : undefined,
         count: isCurrentMediumVideoMode ? mediumVideoSegments : generateCount,
         mediumVideoSegments: isCurrentMediumVideoMode ? mediumVideoSegments : undefined,
-        mediumVideoStrategy: isCurrentMediumVideoMode ? mediumVideoStrategy : undefined,
+        mediumVideoStrategy: isCurrentMediumVideoMode ? effectiveMediumVideoStrategy : undefined,
         agentId: mode === "agent" || mode === "agent_image" || mode === "medium_video" ? selectedAgent?.id : undefined,
         referenceImageUrl: shouldSubmitReference ? referenceImageData ?? undefined : undefined,
         referenceImageName: shouldSubmitReference ? referenceImageName || undefined : undefined,
@@ -1612,6 +1641,18 @@ export default function Home() {
         : mode === "agent"
           ? modelConfig.agentVideo.activeModel === "grok" ? "grok" : "sora2"
           : modelConfig.normalVideo.activeModel === "grok" ? "grok" : "sora2";
+  const currentGrokProviderSource: GrokProviderSource | undefined =
+    currentVideoProvider === "grok"
+      ? isMediumVideoMode
+        ? normalizeGrokProviderSource(modelConfig.mediumVideo.grokProviderSource) || "yunwu"
+        : isRemixMode
+          ? normalizeGrokProviderSource(modelConfig.videoRemixGeneration.grokProviderSource) || "yunwu"
+          : mode === "agent"
+            ? normalizeGrokProviderSource(modelConfig.agentVideo.grokProviderSource) || "yunwu"
+            : normalizeGrokProviderSource(modelConfig.normalVideo.grokProviderSource) || "yunwu"
+      : undefined;
+  const isJiekouGrokProvider = currentGrokProviderSource === "jiekou";
+  const effectiveMediumVideoStrategy: "extend" | "stitch" = isGrokMediumVideo && isJiekouGrokProvider ? "stitch" : mediumVideoStrategy;
   const currentVideoDurationOptions = currentVideoProvider === "grok" ? GROK_VIDEO_DURATIONS : SORA_VIDEO_DURATIONS;
   const modeLabel =
     isRemixMode
@@ -1660,6 +1701,13 @@ export default function Home() {
       setDuration(currentVideoProvider === "grok" ? "10s" : "12s");
     }
   }, [currentVideoProvider, currentVideoDurationOptions, duration, isImageMode, isMediumVideoMode, mounted]);
+
+  useEffect(() => {
+    if (!mounted) return;
+    if (isGrokMediumVideo && isJiekouGrokProvider && mediumVideoStrategy !== "stitch") {
+      setMediumVideoStrategy("stitch");
+    }
+  }, [isGrokMediumVideo, isJiekouGrokProvider, mediumVideoStrategy, mounted]);
 
   const makeTaskId = (taskId: number) => `TASK-${String(taskId).padStart(3, "0")}`;
   const agentSearchKeyword = agentSearch.trim().toLowerCase();
@@ -1770,6 +1818,8 @@ export default function Home() {
         videoModelLabel: video.videoModelLabel ?? parentTask?.videoModelLabel,
         sourceMode: video.sourceMode ?? parentTask?.sourceMode,
         videoProvider: video.videoProvider ?? parentTask?.videoProvider,
+        grokProviderSource: video.grokProviderSource ?? parentTask?.grokProviderSource,
+        providerSourceLabel: video.providerSourceLabel ?? parentTask?.providerSourceLabel,
         mediumVideoCompleteness: video.mediumVideoCompleteness,
         isFinalVideoLikelyComplete: video.isFinalVideoLikelyComplete,
         providerTaskIds: video.providerTaskIds,
@@ -1847,6 +1897,8 @@ export default function Home() {
       videoModelLabel: task.videoModelLabel,
       sourceMode: task.sourceMode,
       videoProvider: task.videoProvider,
+      grokProviderSource: task.grokProviderSource,
+      providerSourceLabel: task.providerSourceLabel,
       mediumVideoCompleteness: undefined,
       isFinalVideoLikelyComplete: undefined,
       providerTaskIds: undefined,
@@ -2262,18 +2314,10 @@ export default function Home() {
         <div className="flex items-center justify-between px-4 py-4 md:px-6">
           {/* 左侧 Logo */}
           <div className="flex items-center gap-3">
-            <div
-              className={
-                isDark
-                  ? "flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-300 via-violet-300 to-sky-300 text-sm font-bold text-black shadow-lg shadow-indigo-950/30"
-                  : "flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 via-violet-500 to-sky-500 text-sm font-bold text-white shadow-lg shadow-indigo-200/80"
-              }
-            >
-              QK
-            </div>
+            <BrandLogo size="sm" />
             <div>
-              <div className="text-base font-semibold md:text-lg">夸克AI视频</div>
-              <div className={isDark ? "text-xs text-gray-400" : "text-xs text-gray-500"}>批量视频生成 Agent</div>
+              <div className="text-base font-semibold md:text-lg">夸克AI</div>
+              <div className={isDark ? "text-xs text-gray-400" : "text-xs text-gray-500"}>AI视频与图片生成平台</div>
             </div>
           </div>
 
@@ -2317,9 +2361,7 @@ export default function Home() {
                 )}
 
                 <div className="flex items-center gap-2">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 via-violet-500 to-pink-500 text-sm font-semibold text-white">
-                    QK
-                  </div>
+                  <BrandLogo size="sm" />
                   <span className={isDark ? "text-sm font-medium text-gray-100" : "text-sm font-medium text-gray-700"}>ID: {userId}</span>
                 </div>
 
@@ -2810,10 +2852,10 @@ export default function Home() {
                 )}
                 <div className={isDark ? "rounded-full border border-white/10 bg-white/[0.05] px-4 py-2 text-sm font-medium text-gray-300" : "rounded-full border border-sky-100 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-700 shadow-sm"}>
                   {isMediumVideoMode
-                    ? `${mediumVideoSegments * (isSoraMediumVideo ? 12 : 10)}s / ${isSoraMediumVideo ? "Sora2" : "Grok"} / ${ratio === "9:16" ? "竖屏" : "横屏"}`
+                    ? `${mediumVideoSegments * (isSoraMediumVideo ? 12 : 10)}s / ${isSoraMediumVideo ? "Sora2" : `Grok${currentGrokProviderSource ? ` · ${getGrokProviderSourceLabel(currentGrokProviderSource)}` : ""}`} / ${ratio === "9:16" ? "竖屏" : "横屏"}`
                     : isImageMode
                       ? `${imageModel === "banana2" ? "Nano Banana2" : "image2"} / ${imageSize} / ${generateCount}张`
-                      : `${duration} / ${currentVideoProvider === "grok" ? "Grok" : "Sora2"} / ${ratio === "9:16" ? "竖屏" : "横屏"} / ${generateCount}条`}
+                      : `${duration} / ${currentVideoProvider === "grok" ? `Grok${currentGrokProviderSource ? ` · ${getGrokProviderSourceLabel(currentGrokProviderSource)}` : ""}` : "Sora2"} / ${ratio === "9:16" ? "竖屏" : "横屏"} / ${generateCount}条`}
                 </div>
                 <div className={isDark ? "ml-auto rounded-full border border-amber-300/20 bg-amber-300/10 px-4 py-2 text-sm font-semibold text-amber-100" : "ml-auto rounded-full border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-700 shadow-sm"}>
                   预计消耗 ¥{formatMoney(estimatedCost)}
@@ -2861,10 +2903,10 @@ export default function Home() {
                             <div className={isDark ? "mb-2 text-xs font-medium text-gray-400" : "mb-2 text-xs font-medium text-gray-500"}>Grok 生成方式</div>
                             <div className="flex flex-wrap gap-2">
                               {[
-                                { label: "分段拼接（推荐）", value: "stitch" },
-                                { label: "扩展视频（实验，不稳定）", value: "extend" },
+                                { label: isJiekouGrokProvider ? "分段拼接（接口AI）" : currentGrokProviderSource === "xai" ? "分段拼接（xAI）" : "分段拼接（推荐）", value: "stitch" },
+                                ...(isJiekouGrokProvider ? [] : [{ label: "扩展视频（实验，不稳定）", value: "extend" }]),
                               ].map((item) => (
-                                <button key={item.value} onClick={() => setMediumVideoStrategy(item.value as "extend" | "stitch")} className={`rounded-full px-4 py-2 text-sm transition ${pillClass(mediumVideoStrategy === item.value)}`}>
+                                <button key={item.value} onClick={() => setMediumVideoStrategy(item.value as "extend" | "stitch")} className={`rounded-full px-4 py-2 text-sm transition ${pillClass(effectiveMediumVideoStrategy === item.value)}`}>
                                   {item.label}
                                 </button>
                               ))}
@@ -2874,7 +2916,11 @@ export default function Home() {
                         <div className={isDark ? "mt-2 text-xs text-gray-400" : "mt-2 text-xs text-slate-500"}>
                           {isSoraMediumVideo
                             ? "当前中视频模型：Sora2。Sora2 每段 12 秒，将按片段顺序生成；当前后端暂标记为实验/待恢复。"
-                            : "当前中视频模型：Grok。默认使用分段拼接；扩展视频为实验能力，上游负载大时可能失败。"}
+                            : isJiekouGrokProvider
+                              ? "当前中视频模型：Grok · 接口AI。接口AI 暂不支持扩展视频，自动使用分段拼接。"
+                              : currentGrokProviderSource === "xai"
+                                ? "当前中视频模型：Grok · xAI 官方。分段拼接可用；扩展视频为实验能力。"
+                                : "当前中视频模型：Grok。默认使用分段拼接；扩展视频为实验能力，上游负载大时可能失败。"}
                         </div>
                       </div>
                     ) : !isImageMode && (
@@ -2896,7 +2942,7 @@ export default function Home() {
                         </div>
                         {isRemixMode && (
                           <div className={isDark ? "mt-2 text-xs text-gray-400" : "mt-2 text-xs text-slate-500"}>
-                            当前生成模型：{currentVideoProvider === "grok" ? "Grok" : "Sora2"}
+                            当前生成模型：{currentVideoProvider === "grok" ? `Grok${currentGrokProviderSource ? ` · ${getGrokProviderSourceLabel(currentGrokProviderSource)}` : ""}` : "Sora2"}
                           </div>
                         )}
                       </div>
@@ -3129,7 +3175,7 @@ export default function Home() {
               </div>
             ) : (
               <div className="space-y-4">
-                {pagedVisibleResults.map(({ item, id, taskId, mediaType, title, prompt: fromTaskPrompt, sourcePrompt, isFavorite, status, isLatestDone, cost, seconds, duration: videoDuration, upscaleStatus, upscaleErrorMessage, hasReferenceImage: taskHasRef, referenceImageName, referenceImageThumbData: taskRefThumbData, coverData, videoUrl, ratio: videoRatio, size: videoSize, imageSize: resultImageSize, imageModel, displayModel, imageModelLabel, apiModel, kind, scheduledAt, createdAt, taskStatus, agentName, isPlaceholder, mediumVideo, mediumVideoTargetSeconds, mediumVideoSuccessUnits, mediumVideoFailedUnits, mediumVideoFailedStage, mediumVideoErrorMessage, mediumVideoProvider, mediumVideoStrategy: resultMediumVideoStrategy, videoModelLabel, mediumVideoCompleteness, isFinalVideoLikelyComplete, providerTaskIds, segmentVideoUrls, segmentIndex, totalSegments, segmentTitle, videoProvider }) => (
+                {pagedVisibleResults.map(({ item, id, taskId, mediaType, title, prompt: fromTaskPrompt, sourcePrompt, isFavorite, status, isLatestDone, cost, seconds, duration: videoDuration, upscaleStatus, upscaleErrorMessage, hasReferenceImage: taskHasRef, referenceImageName, referenceImageThumbData: taskRefThumbData, coverData, videoUrl, ratio: videoRatio, size: videoSize, imageSize: resultImageSize, imageModel, displayModel, imageModelLabel, apiModel, kind, scheduledAt, createdAt, taskStatus, agentName, isPlaceholder, mediumVideo, mediumVideoTargetSeconds, mediumVideoSuccessUnits, mediumVideoFailedUnits, mediumVideoFailedStage, mediumVideoErrorMessage, mediumVideoProvider, mediumVideoStrategy: resultMediumVideoStrategy, videoModelLabel, mediumVideoCompleteness, isFinalVideoLikelyComplete, providerTaskIds, segmentVideoUrls, segmentIndex, totalSegments, segmentTitle, videoProvider, grokProviderSource, providerSourceLabel }) => (
               <div
                 key={id}
                 className={`relative p-3 text-sm ${surfaceCardClass}`}
@@ -3187,6 +3233,8 @@ export default function Home() {
                             segmentIndex,
                             totalSegments,
                             segmentTitle,
+                            grokProviderSource,
+                            providerSourceLabel,
                           });
                         }}
                         className="absolute inset-0 z-30 flex items-center justify-center play-preview-btn"
@@ -3227,6 +3275,9 @@ export default function Home() {
                         {mediumVideo && <span className="rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-[11px] font-semibold text-violet-700 shadow-sm">中视频</span>}
                         {mediumVideo && <span className={softChipClass}>模型：{videoModelLabel || (mediumVideoProvider === "sora2" ? "Sora2" : "Grok")}</span>}
                         {!mediumVideo && mediaType === "video" && <span className={softChipClass}>模型：{videoModelLabel || (videoProvider === "grok" ? "Grok" : "Sora2")}</span>}
+                        {mediaType === "video" && (mediumVideoProvider === "grok" || videoProvider === "grok") && (providerSourceLabel || grokProviderSource) && (
+                          <span className={softChipClass}>接口来源：{providerSourceLabel || getGrokProviderSourceLabel(grokProviderSource)}</span>
+                        )}
                         {mediumVideo && (
                           <span className={softChipClass}>
                             策略：{resultMediumVideoStrategy === "stitch" ? "分段拼接" : resultMediumVideoStrategy === "sora2" ? "Sora2分段" : "扩展视频"}
@@ -4020,6 +4071,11 @@ export default function Home() {
                         模型：{previewVideo.videoModelLabel || (previewVideo.videoProvider === "grok" ? "Grok" : "Sora2")}
                       </span>
                     )}
+                    {previewVideo.mediaType !== "image" && (previewVideo.mediumVideoProvider === "grok" || previewVideo.videoProvider === "grok") && (previewVideo.providerSourceLabel || previewVideo.grokProviderSource) && (
+                      <span className={softChipClass}>
+                        接口来源：{previewVideo.providerSourceLabel || getGrokProviderSourceLabel(previewVideo.grokProviderSource)}
+                      </span>
+                    )}
                     {previewVideo.mediumVideo && (
                       <span className={softChipClass}>
                         策略：{previewVideo.mediumVideoStrategy === "stitch" ? "分段拼接" : previewVideo.mediumVideoStrategy === "sora2" ? "Sora2分段" : "扩展视频"}
@@ -4389,6 +4445,21 @@ export default function Home() {
             </div>
           </div>
         )}
+
+        <button
+          type="button"
+          aria-label="回到顶部"
+          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          className={
+            showBackToTop
+              ? "fixed bottom-6 right-6 z-40 flex h-12 w-12 items-center justify-center rounded-full border border-white/70 bg-white/80 text-slate-800 shadow-[0_18px_45px_rgba(79,70,229,0.25)] backdrop-blur-xl transition duration-300 hover:-translate-y-1 hover:scale-105 hover:bg-white hover:shadow-[0_20px_55px_rgba(99,102,241,0.35)] md:bottom-8 md:right-8"
+              : "pointer-events-none fixed bottom-6 right-6 z-40 flex h-12 w-12 translate-y-3 items-center justify-center rounded-full border border-white/70 bg-white/70 text-slate-800 opacity-0 shadow-lg backdrop-blur-xl transition duration-300 md:bottom-8 md:right-8"
+          }
+        >
+          <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M6 15l6-6 6 6" />
+          </svg>
+        </button>
 
         <div className="mt-12 w-full max-w-6xl">
           <div className={isDark ? "mb-4 text-sm font-medium text-gray-400" : "mb-4 text-sm font-medium text-gray-500"}>常用功能</div>

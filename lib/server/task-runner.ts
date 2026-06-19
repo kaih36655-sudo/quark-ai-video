@@ -12,6 +12,7 @@ import { concatMediumVideoSegments, extractMediumVideoReferenceFrame } from "./m
 import { adjustUserBalance } from "./auth-store";
 import { getMediumVideoUnitPrice, getUnitPrice } from "./pricing";
 import { getManagedAgentById } from "./agent-store";
+import { DEFAULT_GROK_PROVIDER_SOURCE, getGrokProviderSourceLabel, GrokProviderSource } from "./video-providers/types";
 import {
   PIPELINE_RETRY_BACKOFF_MS,
   PIPELINE_RETRY_MAX_ATTEMPTS,
@@ -58,6 +59,23 @@ const createGrokGenerationDiagnostics = (errorMessage: string, stage = "create_o
     `stage=${stage}`,
     `originalProviderError=${errorMessage || "Grok generation failed"}`,
   ].join(" | ");
+
+const createGrokProviderMetadata = (source: GrokProviderSource) => ({
+  grokProviderSource: source,
+  providerSourceLabel: getGrokProviderSourceLabel(source),
+});
+
+const getGrokApiModelForRecord = (source?: GrokProviderSource, hasReferenceImage = false) =>
+  source === "xai"
+    ? hasReferenceImage
+      ? process.env.XAI_GROK_IMAGE_TO_VIDEO_MODEL || "grok-imagine-video-1.5"
+      : process.env.XAI_GROK_VIDEO_MODEL || "grok-imagine-video"
+    : process.env.YUNWU_GROK_VIDEO_MODEL || "grok-video-3-10s";
+
+const isSupportedGrokProviderSource = (source: unknown): source is GrokProviderSource => source === "yunwu" || source === "jiekou" || source === "xai";
+
+const formatUnsupportedGrokProviderSourceError = (source: unknown) =>
+  `当前 Grok 接口来源 ${String(source || "")} 暂未接入，请在后台切换为云雾 API、接口AI 或 xAI 官方。`;
 
 const sora2PipelineLog = (stage: "CREATE_RETRY" | "CREATE_FINAL_FAILED" | "CREATE_FINAL_SUCCESS", payload: Record<string, unknown>) => {
   console.log(`[SORA2][${stage}]`, JSON.stringify(payload));
@@ -983,6 +1001,9 @@ async function executeTask(taskId: string) {
     const targetSize = task.ratio === "9:16" ? "720x1280" : "1280x720";
     const targetRatio = task.ratio === "9:16" ? "9:16" : "16:9";
     const chainId = `medium-video-${task.id}`;
+    const rawGrokProviderSource = task.mediumVideoProvider === "sora2" ? undefined : task.grokProviderSource || DEFAULT_GROK_PROVIDER_SOURCE;
+    const grokProviderSource = isSupportedGrokProviderSource(rawGrokProviderSource) ? rawGrokProviderSource : undefined;
+    const grokProviderMetadata = grokProviderSource ? createGrokProviderMetadata(grokProviderSource) : {};
     let chargedHandled = false;
 
     const settleSuccessfulMediumCharges = async () => {
@@ -1005,6 +1026,7 @@ async function executeTask(taskId: string) {
       extendCount,
       ratio: targetRatio,
       provider: task.mediumVideoProvider || "grok",
+      providerSource: grokProviderSource,
       strategy: task.mediumVideoStrategy || "extend",
       referenceImageSupport: task.referenceImageUrl ? "images" : "none",
     });
@@ -1042,7 +1064,7 @@ async function executeTask(taskId: string) {
           ratio: targetRatio,
           size: targetSize,
           displayModel: "Grok",
-          apiModel: process.env.YUNWU_GROK_VIDEO_MODEL || "grok-video-3-10s",
+          apiModel: getGrokApiModelForRecord(grokProviderSource, Boolean(task.referenceImageUrl)),
           mediumVideo: true,
           mediumVideoTaskId: task.id,
           chainId,
@@ -1052,6 +1074,7 @@ async function executeTask(taskId: string) {
           mediumVideoProvider: "grok",
           mediumVideoStrategy: task.mediumVideoStrategy === "stitch" ? "stitch" : "extend",
           videoModelLabel: "Grok",
+          ...grokProviderMetadata,
           mediumVideoCompleteness: "创建失败",
           segmentIndex: 1,
           totalSegments: totalUnits,
@@ -1070,6 +1093,7 @@ async function executeTask(taskId: string) {
         userId: task.userId,
         stage: "create",
         provider: "grok",
+        providerSource: grokProviderSource,
         finalReason: rawErrorMessage,
         successfulUnits: 0,
       }));
@@ -1079,6 +1103,7 @@ async function executeTask(taskId: string) {
         videoId: created.id,
         stage: "create",
         provider: "grok",
+        providerSource: grokProviderSource,
         finalReason: rawErrorMessage,
         successfulUnits: 0,
       }));
@@ -1090,6 +1115,9 @@ async function executeTask(taskId: string) {
       if (!latestTask || latestTask.status === "cancelled") {
         runnerLog("TASK_ABORTED", { taskId, reason: "medium video task removed or cancelled before Grok execution" });
         return;
+      }
+      if (task.mediumVideoProvider !== "sora2" && !grokProviderSource) {
+        throw new Error(formatUnsupportedGrokProviderSourceError(rawGrokProviderSource));
       }
 
       const plan = await generateGrokMediumVideoPlan({
@@ -1112,7 +1140,7 @@ async function executeTask(taskId: string) {
         throw new Error("当前中视频 Sora2 模式暂不可用，请在后台切换为 Grok。");
       }
 
-      const mediumVideoStrategy = task.mediumVideoStrategy === "stitch" ? "stitch" : "extend";
+      const mediumVideoStrategy = grokProviderSource === "jiekou" ? "stitch" : task.mediumVideoStrategy === "stitch" ? "stitch" : "extend";
       const referenceImages = task.referenceImageUrl ? [task.referenceImageUrl] : [];
 
       if (mediumVideoStrategy === "stitch") {
@@ -1120,6 +1148,8 @@ async function executeTask(taskId: string) {
           `${promptText}\n\n硬性要求：这是 Grok 分段拼接模式第 ${index + 1}/${totalUnits} 段；每段约 10 秒；承接上一段最后动作继续，不要重新开头；主体、场景、动作、情绪连续；不要字幕、水印、Logo。`
         );
         const grokResult = await runGrokVideoSegments({
+          providerSource: grokProviderSource,
+          taskId: task.id,
           prompts: stitchPrompts,
           ratio: targetRatio,
           targetDurationSeconds,
@@ -1131,7 +1161,7 @@ async function executeTask(taskId: string) {
               segmentIndex,
               sourceVideoUrl: previousVideoUrl,
             });
-            console.log("[GROK_VIDEO][STITCH_FRAME_EXTRACT_SUCCESS]", JSON.stringify({ taskId: task.id, segmentIndex, referenceUrl: frame.referenceUrl }));
+            console.log("[GROK_VIDEO][STITCH_FRAME_EXTRACT_SUCCESS]", JSON.stringify({ taskId: task.id, providerSource: grokProviderSource, segmentIndex, referenceUrl: frame.referenceUrl }));
             return [frame.referenceUrl];
           },
         });
@@ -1141,16 +1171,16 @@ async function executeTask(taskId: string) {
         let completeness = "分段展示";
         let concatError = "";
         if (grokResult.segmentVideoUrls && grokResult.segmentVideoUrls.length > 1 && successCount === totalUnits) {
-          console.log("[GROK_VIDEO][STITCH_CONCAT_START]", JSON.stringify({ taskId: task.id, segments: grokResult.segmentVideoUrls.length }));
+          console.log("[GROK_VIDEO][STITCH_CONCAT_START]", JSON.stringify({ taskId: task.id, providerSource: grokProviderSource, segments: grokResult.segmentVideoUrls.length }));
           try {
             const merged = await concatMediumVideoSegments({ taskId: task.id, segmentUrls: grokResult.segmentVideoUrls, targetDurationSeconds });
             finalVideoUrl = merged.mergedVideoUrl;
             completeness = merged.normalized ? "已拼接" : "已拼接但未规整";
-            console.log("[GROK_VIDEO][STITCH_CONCAT_SUCCESS]", JSON.stringify({ taskId: task.id, mergedVideoUrl: merged.mergedVideoUrl }));
+            console.log("[GROK_VIDEO][STITCH_CONCAT_SUCCESS]", JSON.stringify({ taskId: task.id, providerSource: grokProviderSource, mergedVideoUrl: merged.mergedVideoUrl }));
           } catch (error) {
             concatError = stringifyUnknownError(error);
             completeness = "拼接失败";
-            console.log("[GROK_VIDEO][STITCH_CONCAT_FAILED]", JSON.stringify({ taskId: task.id, reason: concatError }));
+            console.log("[GROK_VIDEO][STITCH_CONCAT_FAILED]", JSON.stringify({ taskId: task.id, providerSource: grokProviderSource, reason: concatError }));
           }
         } else if (grokResult.finalVideoUrl && successCount === 1) {
           finalVideoUrl = grokResult.finalVideoUrl;
@@ -1162,6 +1192,7 @@ async function executeTask(taskId: string) {
           writeVisibleGrokCreateFailure(plan, rawErrorMessage);
           mediumVideoLog("TASK_FAILED", {
             taskId: task.id,
+            providerSource: grokProviderSource,
             targetDurationSeconds,
             successUnits: 0,
             failedUnits: totalUnits,
@@ -1202,7 +1233,7 @@ async function executeTask(taskId: string) {
                 ratio: targetRatio,
                 size: targetSize,
                 displayModel: "Grok",
-                apiModel: process.env.YUNWU_GROK_VIDEO_MODEL || "grok-video-3-10s",
+                apiModel: getGrokApiModelForRecord(grokProviderSource, Boolean(task.referenceImageUrl)),
                 mediumVideo: true,
                 mediumVideoTaskId: task.id,
                 chainId,
@@ -1212,6 +1243,7 @@ async function executeTask(taskId: string) {
                 mediumVideoProvider: "grok",
                 mediumVideoStrategy: "stitch",
                 videoModelLabel: "Grok",
+                ...grokProviderMetadata,
                 mediumVideoCompleteness: completeness,
                 totalSegments: totalUnits,
                 segmentTitle: `完整视频 · ${totalUnits}段拼接`,
@@ -1248,7 +1280,7 @@ async function executeTask(taskId: string) {
                   ratio: targetRatio,
                   size: targetSize,
                   displayModel: "Grok",
-                  apiModel: process.env.YUNWU_GROK_VIDEO_MODEL || "grok-video-3-10s",
+                  apiModel: getGrokApiModelForRecord(grokProviderSource),
                   mediumVideo: true,
                   mediumVideoTaskId: task.id,
                   chainId,
@@ -1258,6 +1290,7 @@ async function executeTask(taskId: string) {
                   mediumVideoProvider: "grok",
                   mediumVideoStrategy: "stitch",
                   videoModelLabel: "Grok",
+                  ...grokProviderMetadata,
                   mediumVideoCompleteness: completeness,
                   segmentIndex: index + 1,
                   totalSegments: totalUnits,
@@ -1289,6 +1322,8 @@ async function executeTask(taskId: string) {
       }
 
       const grokResult = await runGrokVideoWithExtensions({
+        providerSource: grokProviderSource,
+        taskId: task.id,
         basePrompt: plan.basePrompt,
         extensionPrompts: plan.extensionPrompts,
         ratio: targetRatio,
@@ -1305,6 +1340,7 @@ async function executeTask(taskId: string) {
           writeVisibleGrokCreateFailure(plan, rawErrorMessage);
           mediumVideoLog("TASK_FAILED", {
             taskId: task.id,
+            providerSource: grokProviderSource,
             targetDurationSeconds,
             successUnits: 0,
             failedUnits: totalUnits,
@@ -1319,7 +1355,7 @@ async function executeTask(taskId: string) {
               taskId: task.id,
               providerTaskId: grokResult.finalTaskId || grokResult.providerTaskIds.join(","),
               title: `中视频部分完成：${successCount * 10}秒 - ${plan.title}`,
-              content: `中视频部分完成：目标 ${targetDurationSeconds} 秒，已成功 ${successCount * 10} 秒｜模型：${process.env.YUNWU_GROK_VIDEO_MODEL || "grok-video-3-10s"}｜providerTaskIds：${grokResult.providerTaskIds.join(", ")}｜是否疑似完整视频：未知｜${task.agentName ? `智能体：${task.agentName}｜` : ""}${errorMessage}`,
+              content: `中视频部分完成：目标 ${targetDurationSeconds} 秒，已成功 ${successCount * 10} 秒｜模型：${getGrokApiModelForRecord(grokProviderSource, Boolean(referenceImages.length))}｜providerTaskIds：${grokResult.providerTaskIds.join(", ")}｜是否疑似完整视频：未知｜${task.agentName ? `智能体：${task.agentName}｜` : ""}${errorMessage}`,
               script: plan.outline.map((item) => `${item.start}-${item.end}s：${item.summary}`),
               prompt: [plan.basePrompt, ...plan.extensionPrompts].join("\n\n--- EXTEND ---\n\n"),
               sourcePrompt: task.prompt,
@@ -1344,7 +1380,7 @@ async function executeTask(taskId: string) {
               ratio: targetRatio,
               size: targetSize,
               displayModel: "Grok",
-              apiModel: process.env.YUNWU_GROK_VIDEO_MODEL || "grok-video-3-10s",
+              apiModel: getGrokApiModelForRecord(grokProviderSource, Boolean(referenceImages.length)),
               mediumVideo: true,
               mediumVideoTaskId: task.id,
               chainId,
@@ -1354,6 +1390,7 @@ async function executeTask(taskId: string) {
               mediumVideoProvider: "grok",
               mediumVideoStrategy: "extend",
               videoModelLabel: "Grok",
+              ...grokProviderMetadata,
               mediumVideoCompleteness: "待验证",
               segmentIndex: 1,
               totalSegments: 1,
@@ -1373,6 +1410,7 @@ async function executeTask(taskId: string) {
         });
         mediumVideoLog("TASK_FAILED", {
           taskId: task.id,
+          providerSource: grokProviderSource,
           targetDurationSeconds,
           successUnits: successCount,
           failedUnits: failedCount,
@@ -1388,7 +1426,7 @@ async function executeTask(taskId: string) {
           taskId: task.id,
           providerTaskId: grokResult.finalTaskId || grokResult.providerTaskIds.join(","),
           title: `中视频：${targetDurationSeconds}秒 - ${plan.title}`,
-          content: `中视频：${targetDurationSeconds}秒｜模型：${process.env.YUNWU_GROK_VIDEO_MODEL || "grok-video-3-10s"}｜目标时长：${targetDurationSeconds}秒｜扩展次数：${extendCount}｜providerTaskIds：${grokResult.providerTaskIds.join(", ")}｜是否疑似完整视频：${grokResult.isFinalVideoLikelyComplete === true ? "是" : "未知"}｜片段/阶段URL数：${grokResult.segmentVideoUrls?.length ?? 0}${task.agentName ? `｜智能体：${task.agentName}` : ""}`,
+          content: `中视频：${targetDurationSeconds}秒｜模型：${getGrokApiModelForRecord(grokProviderSource, Boolean(referenceImages.length))}｜目标时长：${targetDurationSeconds}秒｜扩展次数：${extendCount}｜providerTaskIds：${grokResult.providerTaskIds.join(", ")}｜是否疑似完整视频：${grokResult.isFinalVideoLikelyComplete === true ? "是" : "未知"}｜片段/阶段URL数：${grokResult.segmentVideoUrls?.length ?? 0}${task.agentName ? `｜智能体：${task.agentName}` : ""}`,
           script: plan.outline.map((item) => `${item.start}-${item.end}s：${item.summary}`),
           prompt: [plan.basePrompt, ...plan.extensionPrompts].join("\n\n--- EXTEND ---\n\n"),
           sourcePrompt: task.prompt,
@@ -1413,16 +1451,17 @@ async function executeTask(taskId: string) {
           ratio: targetRatio,
           size: targetSize,
           displayModel: "Grok",
-          apiModel: process.env.YUNWU_GROK_VIDEO_MODEL || "grok-video-3-10s",
+          apiModel: getGrokApiModelForRecord(grokProviderSource, Boolean(referenceImages.length)),
           mediumVideo: true,
           mediumVideoTaskId: task.id,
           chainId,
           providerTaskIds: grokResult.providerTaskIds,
           segmentVideoUrls: grokResult.segmentVideoUrls,
-          isFinalVideoLikelyComplete: grokResult.isFinalVideoLikelyComplete,
+          isFinalVideoLikelyComplete: grokResult.isFinalVideoLikelyComplete === "unknown" ? undefined : grokResult.isFinalVideoLikelyComplete,
           mediumVideoProvider: "grok",
           mediumVideoStrategy: "extend",
           videoModelLabel: "Grok",
+          ...grokProviderMetadata,
           mediumVideoCompleteness: grokResult.isFinalVideoLikelyComplete === true ? "已确认" : "待验证",
           segmentIndex: 1,
           totalSegments: 1,
@@ -1434,6 +1473,7 @@ async function executeTask(taskId: string) {
       mediumVideoLog("GROK_SUCCESS_WRITE", {
         taskId: task.id,
         videoId: created.id,
+        providerSource: grokProviderSource,
         providerTaskIds: grokResult.providerTaskIds,
         finalTaskId: grokResult.finalTaskId,
         targetDurationSeconds,
@@ -1568,6 +1608,7 @@ async function executeTask(taskId: string) {
       });
       mediumVideoLog("TASK_SUCCESS", {
         taskId: task.id,
+        providerSource: grokProviderSource,
         targetDurationSeconds,
         successUnits: successCount,
         finalVideoId: created.id,
@@ -1585,6 +1626,7 @@ async function executeTask(taskId: string) {
       });
       mediumVideoLog("TASK_FAILED", {
         taskId: task.id,
+        providerSource: grokProviderSource || rawGrokProviderSource,
         targetDurationSeconds,
         successUnits: successCount,
         reason,
@@ -1599,7 +1641,13 @@ async function executeTask(taskId: string) {
     const taskVideoProvider = task.videoProvider === "grok" ? "grok" : "sora2";
     if (taskVideoProvider === "grok") {
       const targetDurationSeconds = resolveVideoSeconds(task.duration, "grok");
+      const rawGrokProviderSource = task.grokProviderSource || DEFAULT_GROK_PROVIDER_SOURCE;
+      const grokProviderSource = isSupportedGrokProviderSource(rawGrokProviderSource) ? rawGrokProviderSource : undefined;
+      const grokProviderMetadata = grokProviderSource ? createGrokProviderMetadata(grokProviderSource) : {};
       try {
+        if (!grokProviderSource) {
+          throw new Error(formatUnsupportedGrokProviderSourceError(rawGrokProviderSource));
+        }
         const plan = await generateGrokMediumVideoPlan({
           theme: effectivePrompt,
           targetDurationSeconds,
@@ -1610,6 +1658,7 @@ async function executeTask(taskId: string) {
         runnerLog("GROK_SCRIPT_READY", {
           taskId: task.id,
           index: index + 1,
+          providerSource: grokProviderSource,
           title: plan.title,
           targetDurationSeconds,
           extensionPromptCount: plan.extensionPrompts.length,
@@ -1619,13 +1668,70 @@ async function executeTask(taskId: string) {
           runnerLog("TASK_ABORTED", { taskId, reason: "task removed or cancelled during Grok execution" });
           return;
         }
-        const grokResult = await runGrokVideoWithExtensions({
-          basePrompt: plan.basePrompt,
-          extensionPrompts: plan.extensionPrompts,
-          ratio: targetRatio,
-          targetDurationSeconds,
-          referenceImages: task.referenceImageUrl ? [task.referenceImageUrl] : [],
-        });
+        let grokResult;
+        let providerStitchConcatError = "";
+        if ((grokProviderSource === "jiekou" || grokProviderSource === "xai") && targetDurationSeconds > 10) {
+          const totalSegments = Math.max(1, Math.ceil(targetDurationSeconds / 10));
+          const rawSegmentPrompts = [plan.basePrompt, ...plan.extensionPrompts];
+          while (rawSegmentPrompts.length < totalSegments) {
+            rawSegmentPrompts.push(rawSegmentPrompts[rawSegmentPrompts.length - 1] || plan.basePrompt);
+          }
+          const providerLogPrefix = grokProviderSource === "xai" ? "XAI_GROK" : "JIEKOU_GROK";
+          const providerPromptLabel = grokProviderSource === "xai" ? "xAI 官方 Grok" : "接口AI Grok";
+          const segmentPrompts = rawSegmentPrompts.slice(0, totalSegments).map((promptText, segmentIndex) =>
+            `${promptText}\n\n硬性要求：这是${providerPromptLabel} 分段拼接模式第 ${segmentIndex + 1}/${totalSegments} 段；每段约 10 秒；承接上一段最后动作继续；主体、场景、动作、情绪连续；不要字幕、水印、Logo。`
+          );
+          grokResult = await runGrokVideoSegments({
+            providerSource: grokProviderSource,
+            taskId: task.id,
+            prompts: segmentPrompts,
+            ratio: targetRatio,
+            targetDurationSeconds,
+            getReferenceImagesForSegment: async (segmentIndex, previousVideoUrl) => {
+              if (segmentIndex === 1) return task.referenceImageUrl ? [task.referenceImageUrl] : undefined;
+              if (!previousVideoUrl) return undefined;
+              const frame = await extractMediumVideoReferenceFrame({
+                taskId: task.id,
+                segmentIndex,
+                sourceVideoUrl: previousVideoUrl,
+              });
+              console.log(`[${providerLogPrefix}][STITCH_FRAME_EXTRACT_SUCCESS]`, JSON.stringify({ taskId: task.id, providerSource: grokProviderSource, segmentIndex, referenceUrl: frame.referenceUrl }));
+              return [frame.referenceUrl];
+            },
+          });
+          if (grokResult.ok && (grokResult.segmentVideoUrls?.length ?? 0) > 1 && grokResult.successfulUnits === totalSegments) {
+            console.log(`[${providerLogPrefix}][STITCH_CONCAT_START]`, JSON.stringify({ taskId: task.id, providerSource: grokProviderSource, segments: grokResult.segmentVideoUrls?.length ?? 0 }));
+            try {
+              const merged = await concatMediumVideoSegments({ taskId: task.id, segmentUrls: grokResult.segmentVideoUrls || [], targetDurationSeconds });
+              grokResult = {
+                ...grokResult,
+                ok: true,
+                finalVideoUrl: merged.mergedVideoUrl,
+                isFinalVideoLikelyComplete: true,
+              };
+              console.log(`[${providerLogPrefix}][STITCH_CONCAT_SUCCESS]`, JSON.stringify({ taskId: task.id, providerSource: grokProviderSource, mergedVideoUrl: merged.mergedVideoUrl }));
+            } catch (error) {
+              providerStitchConcatError = stringifyUnknownError(error);
+              grokResult = {
+                ...grokResult,
+                ok: false,
+                finalVideoUrl: "",
+                error: `${providerPromptLabel} 分段拼接失败：${providerStitchConcatError}`,
+              };
+              console.log(`[${providerLogPrefix}][STITCH_CONCAT_FAILED]`, JSON.stringify({ taskId: task.id, providerSource: grokProviderSource, reason: providerStitchConcatError }));
+            }
+          }
+        } else {
+          grokResult = await runGrokVideoWithExtensions({
+            providerSource: grokProviderSource,
+            taskId: task.id,
+            basePrompt: plan.basePrompt,
+            extensionPrompts: plan.extensionPrompts,
+            ratio: targetRatio,
+            targetDurationSeconds,
+            referenceImages: task.referenceImageUrl ? [task.referenceImageUrl] : [],
+          });
+        }
         if (!grokResult.ok || !grokResult.finalVideoUrl) {
           failedCount += 1;
           const rawError = grokResult.error || "Grok 视频生成失败";
@@ -1660,15 +1766,17 @@ async function executeTask(taskId: string) {
               ratio: targetRatio,
               size: targetSize,
               displayModel: "Grok",
-              apiModel: process.env.YUNWU_GROK_VIDEO_MODEL || "grok-video-3-10s",
+              apiModel: getGrokApiModelForRecord(grokProviderSource, Boolean(task.referenceImageUrl)),
               sourceMode: task.sourceMode,
               videoProvider: "grok",
               videoModelLabel: "Grok",
+              ...grokProviderMetadata,
             },
           ]);
           runnerLog("GROK_VIDEO_FAILED_WRITE", {
             taskId: task.id,
             index: index + 1,
+            providerSource: grokProviderSource,
             providerTaskIds: grokResult.providerTaskIds,
             finalReason: rawError,
           });
@@ -1705,10 +1813,11 @@ async function executeTask(taskId: string) {
             ratio: targetRatio,
             size: targetSize,
             displayModel: "Grok",
-            apiModel: process.env.YUNWU_GROK_VIDEO_MODEL || "grok-video-3-10s",
+            apiModel: getGrokApiModelForRecord(grokProviderSource, Boolean(task.referenceImageUrl)),
             sourceMode: task.sourceMode,
             videoProvider: "grok",
             videoModelLabel: "Grok",
+            ...grokProviderMetadata,
             providerTaskIds: grokResult.providerTaskIds,
             segmentVideoUrls: grokResult.segmentVideoUrls,
           },
@@ -1718,6 +1827,7 @@ async function executeTask(taskId: string) {
           taskId: task.id,
           videoId: created.id,
           index: index + 1,
+          providerSource: grokProviderSource,
           providerTaskIds: grokResult.providerTaskIds,
           enqueueUpscale: true,
         });
@@ -1756,15 +1866,17 @@ async function executeTask(taskId: string) {
             ratio: targetRatio,
             size: targetSize,
             displayModel: "Grok",
-            apiModel: process.env.YUNWU_GROK_VIDEO_MODEL || "grok-video-3-10s",
+            apiModel: getGrokApiModelForRecord(grokProviderSource, Boolean(task.referenceImageUrl)),
             sourceMode: task.sourceMode,
             videoProvider: "grok",
             videoModelLabel: "Grok",
+            ...grokProviderMetadata,
           },
         ]);
         runnerLog("GROK_VIDEO_FAILED_WRITE", {
           taskId: task.id,
           index: index + 1,
+          providerSource: grokProviderSource || rawGrokProviderSource,
           providerTaskIds: [],
           finalReason: rawError,
         });

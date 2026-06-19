@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { BrandLogo } from "../components/brand-logo";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -34,12 +35,10 @@ export default function LoginPage() {
       <div className="pointer-events-none absolute right-[-8rem] top-24 h-96 w-96 rounded-full bg-sky-200/70 blur-3xl" />
       <div className="relative z-10 flex items-center justify-between border-b border-white/70 bg-white/70 px-4 py-4 shadow-sm backdrop-blur-xl md:px-6">
         <Link href="/" className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 via-violet-500 to-sky-500 text-sm font-bold text-white shadow-lg shadow-indigo-200">
-            QK
-          </div>
+          <BrandLogo size="sm" />
           <div>
-            <div className="text-base font-semibold md:text-lg">夸克AI视频</div>
-            <div className="text-xs text-gray-500">批量视频生成 Agent</div>
+            <div className="text-base font-semibold md:text-lg">夸克AI</div>
+            <div className="text-xs text-gray-500">AI视频与图片生成平台</div>
           </div>
         </Link>
 
@@ -54,12 +53,10 @@ export default function LoginPage() {
       <div className="relative z-10 flex min-h-[calc(100vh-73px)] items-center justify-center px-4 py-10">
         <div className="w-full max-w-md rounded-3xl border border-white/80 bg-white/82 p-6 shadow-[0_24px_80px_rgba(79,70,229,0.16)] backdrop-blur-2xl md:p-8">
           <div className="mb-6 flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 via-violet-500 to-sky-500 text-sm font-bold text-white shadow-lg shadow-indigo-200">
-              QK
-            </div>
+            <BrandLogo size="md" />
             <div>
-              <h2 className="text-2xl font-semibold">登录</h2>
-              <p className="text-sm text-gray-500">登录后继续使用夸克AI视频</p>
+              <h2 className="text-2xl font-semibold">登录夸克AI</h2>
+              <p className="text-sm text-gray-500">欢迎使用夸克AI</p>
             </div>
           </div>
 

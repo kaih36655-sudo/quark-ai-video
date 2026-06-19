@@ -6,6 +6,7 @@ import { getCurrentUser, requireCurrentUser } from "@/lib/server/auth";
 import { estimateMediumVideoCost, estimateTaskCost, getPricingConfig } from "@/lib/server/pricing";
 import { canUserUseAgent, composeAgentPrompt, getManagedAgentById } from "@/lib/server/agent-store";
 import { getModelConfig } from "@/lib/server/model-config";
+import { getGrokProviderSourceLabel } from "@/lib/server/video-providers/types";
 
 export const runtime = "nodejs";
 
@@ -79,6 +80,17 @@ export async function POST(req: NextRequest) {
           ? modelConfig.agentVideo.activeModel
           : modelConfig.normalVideo.activeModel;
   const videoProvider = configuredVideoProvider === "sora2" || configuredVideoProvider === "grok" ? configuredVideoProvider : undefined;
+  const configuredGrokProviderSource: string | undefined =
+    mode === "medium_video" && mediumVideoProvider === "grok"
+      ? modelConfig.mediumVideo.grokProviderSource
+      : mode !== "medium_video" && mode !== "image" && videoProvider === "grok"
+        ? sourceMode === "video_remix"
+          ? modelConfig.videoRemixGeneration.grokProviderSource
+          : mode === "agent"
+            ? modelConfig.agentVideo.grokProviderSource
+            : modelConfig.normalVideo.grokProviderSource
+        : undefined;
+  const providerSourceLabel = configuredGrokProviderSource ? getGrokProviderSourceLabel(configuredGrokProviderSource) : undefined;
   const mediumVideoTargetSeconds = mode === "medium_video" ? parseMediumVideoDuration(body.duration, mediumVideoProvider) : null;
   const mediumVideoUnitSeconds = mediumVideoProvider === "sora2" ? 12 : 10;
   const mediumVideoSegments = mediumVideoTargetSeconds ? mediumVideoTargetSeconds / mediumVideoUnitSeconds : 1;
@@ -91,7 +103,7 @@ export async function POST(req: NextRequest) {
     .filter((item): item is "image2" | "banana2" => item === "image2" || item === "banana2");
   const imageModel = mode === "image" ? requestedImageModel || imageAvailableModels[0] : requestedImageModel || "image2";
   const count = mode === "medium_video" ? mediumVideoSegments : Number(body.count ?? 1);
-  const mediumVideoStrategy = body.mediumVideoStrategy === "stitch" ? "stitch" : "extend";
+  const mediumVideoStrategy = configuredGrokProviderSource === "jiekou" ? "stitch" : body.mediumVideoStrategy === "stitch" ? "stitch" : "extend";
 
   if (!prompt) {
     return NextResponse.json<ApiResponse<null>>({ success: false, message: "prompt 不能为空" }, { status: 400 });
@@ -105,6 +117,9 @@ export async function POST(req: NextRequest) {
   }
   if (mode === "medium_video" && mediumVideoProvider === "sora2") {
     return NextResponse.json<ApiResponse<null>>({ success: false, message: "当前中视频 Sora2 模式暂不可用，请在后台切换为 Grok。" }, { status: 400 });
+  }
+  if (configuredGrokProviderSource && configuredGrokProviderSource !== "yunwu" && configuredGrokProviderSource !== "jiekou" && configuredGrokProviderSource !== "xai") {
+    return NextResponse.json<ApiResponse<null>>({ success: false, message: "当前 Grok 接口来源暂未接入，请在后台切换为云雾 API、接口AI 或 xAI 官方。" }, { status: 400 });
   }
   if (mode !== "medium_video" && mode !== "image" && !videoProvider) {
     return NextResponse.json<ApiResponse<null>>({ success: false, message: "当前视频模型配置不可用，请联系管理员。" }, { status: 400 });
@@ -192,6 +207,8 @@ export async function POST(req: NextRequest) {
     mediumVideoProvider: mode === "medium_video" ? (mediumVideoProvider as "grok" | "sora2") : undefined,
     mediumVideoStrategy: mode === "medium_video" ? mediumVideoStrategy : undefined,
     videoModelLabel: mode === "medium_video" ? (mediumVideoProvider === "sora2" ? "Sora2" : "Grok") : mode === "image" ? undefined : videoProvider === "grok" ? "Grok" : "Sora2",
+    grokProviderSource: configuredGrokProviderSource,
+    providerSourceLabel,
     status: isScheduled ? "waiting" : "queued",
     referenceImageUrl: body.referenceImageUrl,
     referenceImageName: body.referenceImageName,
@@ -205,6 +222,8 @@ export async function POST(req: NextRequest) {
     mode,
     provider: mode === "medium_video" ? mediumVideoProvider : undefined,
     videoProvider,
+    grokProviderSource: configuredGrokProviderSource,
+    providerSourceLabel,
     sourceMode,
     successfulUnits: 0,
   }));
