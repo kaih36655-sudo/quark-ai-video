@@ -19,8 +19,11 @@ const MAX_ATTEMPTS = 5;
 const RETRY_BACKOFF_MS = [5000, 15000, 30000, 60000];
 const QUERY_FETCH_MAX_ATTEMPTS = 3;
 const QUERY_FETCH_BACKOFF_MS = [3000, 5000];
-const XAI_PROMPT_MAX_LENGTH = 3500;
+const XAI_TEXT_PROMPT_MAX_BYTES = 3000;
+const XAI_IMAGE_PROMPT_MAX_BYTES = 2400;
 const XAI_PROMPT_LENGTH_ERROR_MESSAGE = "xAI Grok 提示词过长，已超过官方限制，请缩短智能体提示词或用户主题。";
+
+type XaiPromptMode = "text-to-video" | "image-to-video" | "extension";
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -87,11 +90,30 @@ const extractErrorMessage = (json: Record<string, unknown> | null, fallback = ""
   return typeof found === "string" ? found : fallback;
 };
 
+const getPromptBytes = (value: string) => Buffer.byteLength(value, "utf8");
 const normalizePromptText = (value: string) => value.replace(/\r/g, "\n").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+const getXaiPromptMaxBytes = (mode: XaiPromptMode) => {
+  const configured = Number(process.env.XAI_GROK_PROMPT_MAX_BYTES || "");
+  if (Number.isFinite(configured) && configured >= 800) return Math.floor(configured);
+  return mode === "image-to-video" ? XAI_IMAGE_PROMPT_MAX_BYTES : XAI_TEXT_PROMPT_MAX_BYTES;
+};
+
+const truncateUtf8 = (value: string, maxBytes: number) => {
+  let usedBytes = 0;
+  let output = "";
+  for (const char of Array.from(value)) {
+    const charBytes = getPromptBytes(char);
+    if (usedBytes + charBytes > maxBytes) break;
+    output += char;
+    usedBytes += charBytes;
+  }
+  return output.trim();
+};
 
 const uniquePromptLines = (value: string) => {
   const seen = new Set<string>();
   return value
+    .replace(/([。！？；!?;])\s*/g, "$1\n")
     .split(/\n+/)
     .map((line) => line.trim())
     .filter((line) => {
@@ -116,17 +138,26 @@ const pickPromptLines = (lines: string[], patterns: RegExp[], maxChars: number) 
   return picked;
 };
 
-export function compactPromptForXai(prompt: string, maxLength = XAI_PROMPT_MAX_LENGTH): string {
+export function compactPromptForXai(prompt: string, mode: XaiPromptMode, maxBytes = getXaiPromptMaxBytes(mode)): string {
   const normalized = normalizePromptText(prompt);
-  const originalLength = normalized.length;
+  const originalChars = normalized.length;
+  const originalBytes = getPromptBytes(normalized);
   const criticalTail = [
-    "Hard constraints: no subtitles, no watermark, no logo.",
-    "If a reference image is provided, it is the previous segment's last usable non-black frame.",
-    "Continue from previous frame with immediate motion at 0.0s; do not repeat completed action; do not restart; do not return to an earlier state.",
+    "No subtitles, no watermark, no logo.",
+    "If image is provided, it is the previous segment's last usable non-black frame.",
+    "Continue from previous frame at 0.0s with immediate motion. Do not repeat, restart, or return to an earlier state.",
   ].join(" ");
 
-  if (originalLength <= maxLength) {
-    log("PROMPT_COMPACTED", { originalLength, finalLength: originalLength, maxLength, wasCompacted: false });
+  if (originalBytes <= maxBytes) {
+    log("PROMPT_COMPACTED", {
+      mode,
+      originalChars,
+      originalBytes,
+      finalChars: originalChars,
+      finalBytes: originalBytes,
+      maxBytes,
+      wasCompacted: false,
+    });
     return normalized;
   }
 
@@ -135,22 +166,33 @@ export function compactPromptForXai(prompt: string, maxLength = XAI_PROMPT_MAX_L
     lines,
     [
       /第\s*\d+\s*\/\s*\d+\s*段|segment\s*\d+|segmentPlan\[\d+\]|完整脚本\s*\d+\s*-\s*\d+s|当前段|本段|0-10|10-20|20-30|30-40|40-50|50-60/i,
-      /主题|主体|场景|画面|动作|镜头|口播|对白|voiceover|visual|camera|scene|subject|action/i,
       /承接|上一段|尾帧|最后可用非黑帧|继续|连续|无缝|不要重复|不要重新|immediate motion|previous frame|continue/i,
+      /主题|主体|场景|画面|动作|镜头|口播|对白|voiceover|visual|camera|scene|subject|action/i,
       /不要字幕|水印|logo|subtitle|watermark/i,
     ],
-    Math.max(900, maxLength - criticalTail.length - 400)
+    Math.max(500, Math.floor(maxBytes / 2))
   );
-  const fallbackHead = normalized.slice(0, Math.max(400, maxLength - criticalTail.length - 700));
+  const fallbackHead = truncateUtf8(normalized, Math.max(300, Math.floor(maxBytes / 2)));
   const compactedBody = normalizePromptText(priorityLines.length ? priorityLines.join("\n") : fallbackHead);
-  const budgetForBody = Math.max(200, maxLength - criticalTail.length - 4);
-  const finalBody = compactedBody.length > budgetForBody ? compactedBody.slice(0, budgetForBody).trim() : compactedBody;
-  const finalPrompt = normalizePromptText(`${finalBody}\n\n${criticalTail}`).slice(0, maxLength).trim();
+  const tailBytes = getPromptBytes(criticalTail) + 4;
+  const bodyByteBudget = Math.max(200, maxBytes - tailBytes);
+  const finalBody = getPromptBytes(compactedBody) > bodyByteBudget ? truncateUtf8(compactedBody, bodyByteBudget) : compactedBody;
+  let finalPrompt = normalizePromptText(`${finalBody}\n\n${criticalTail}`);
+  if (getPromptBytes(finalPrompt) > maxBytes) {
+    const hardBodyBudget = Math.max(100, maxBytes - tailBytes);
+    finalPrompt = normalizePromptText(`${truncateUtf8(finalBody, hardBodyBudget)}\n\n${criticalTail}`);
+  }
+  if (getPromptBytes(finalPrompt) > maxBytes) {
+    finalPrompt = truncateUtf8(finalPrompt, maxBytes);
+  }
 
   log("PROMPT_COMPACTED", {
-    originalLength,
-    finalLength: finalPrompt.length,
-    maxLength,
+    mode,
+    originalChars,
+    originalBytes,
+    finalChars: finalPrompt.length,
+    finalBytes: getPromptBytes(finalPrompt),
+    maxBytes,
     wasCompacted: true,
   });
   return finalPrompt;
@@ -253,11 +295,85 @@ const mimeFromPathOrUrl = (value: string, fallback: "image" | "video" = "image")
   return "image/jpeg";
 };
 
+const isLocalDevHost = (hostname: string) => {
+  const normalized = hostname.toLowerCase();
+  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "0.0.0.0" || normalized === "::1" || normalized === "[::1]";
+};
+
+const isProductionUploadHost = (hostname: string) => {
+  const normalized = hostname.toLowerCase();
+  return normalized === "kuake888.com" || normalized === "www.kuake888.com";
+};
+
+const getConfiguredPublicSiteUrl = () => (process.env.PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_SITE_URL || "").replace(/\/$/, "");
+
+const isPublicSiteUrlUsableForXai = (siteUrl = getConfiguredPublicSiteUrl()) => {
+  if (!siteUrl) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(siteUrl);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+  if (isLocalDevHost(parsed.hostname)) return false;
+  if (process.env.NODE_ENV === "production") return true;
+
+  const explicitPublicSiteUrl = process.env.PUBLIC_SITE_URL?.trim();
+  if (!explicitPublicSiteUrl) return false;
+  try {
+    return isProductionUploadHost(new URL(explicitPublicSiteUrl).hostname);
+  } catch {
+    return false;
+  }
+};
+
+async function readLocalUploadImageAsDataUrl(source: string, reason?: string): Promise<PreparedXaiImage> {
+  const localSource = await resolveLocalUploadsSource(source);
+  if (!localSource || !localSource.exists) {
+    throw new Error("xAI Grok 图片读取失败：本地参考图文件不存在");
+  }
+  const bytes = await readFile(localSource.resolvedPath);
+  const mimeType = mimeFromPathOrUrl(localSource.resolvedPath);
+  if (reason) {
+    log("LOCAL_UPLOAD_IMAGE_RESOLVED", {
+      originalUrlPreview: source.slice(0, 140),
+      imageMode: "data_url",
+      reason,
+    });
+  }
+  return { url: `data:${mimeType};base64,${bytes.toString("base64")}`, mode: "data_url" };
+}
+
 async function prepareXaiReferenceImage(source?: string): Promise<PreparedXaiImage | undefined> {
   const trimmed = source?.trim();
   if (!trimmed) return undefined;
+  if (trimmed.startsWith("/api/uploads/")) {
+    const publicSiteUrl = getConfiguredPublicSiteUrl();
+    if (isPublicSiteUrlUsableForXai(publicSiteUrl)) {
+      return { url: `${publicSiteUrl}${trimmed}`, mode: "public_url" };
+    }
+    return readLocalUploadImageAsDataUrl(trimmed, "relative_upload_local_fallback");
+  }
   if (/^data:image\/[^;,]+;base64,[\s\S]+$/i.test(trimmed)) {
     return { url: trimmed, mode: "data_url" };
+  }
+  if (/^https?:\/\//i.test(trimmed)) {
+    let parsedUrl: URL | null = null;
+    try {
+      parsedUrl = new URL(trimmed);
+    } catch {
+      parsedUrl = null;
+    }
+    if (parsedUrl?.pathname.startsWith("/api/uploads/")) {
+      if (isLocalDevHost(parsedUrl.hostname)) {
+        return readLocalUploadImageAsDataUrl(trimmed, "localhost_upload_url");
+      }
+      if (isProductionUploadHost(parsedUrl.hostname)) {
+        return { url: trimmed, mode: "public_url" };
+      }
+    }
+    return { url: trimmed, mode: "public_url" };
   }
   const localSource = await resolveLocalUploadsSource(trimmed);
   if (localSource) {
@@ -267,9 +383,6 @@ async function prepareXaiReferenceImage(source?: string): Promise<PreparedXaiIma
     const bytes = await readFile(localSource.resolvedPath);
     const mimeType = mimeFromPathOrUrl(localSource.resolvedPath);
     return { url: `data:${mimeType};base64,${bytes.toString("base64")}`, mode: "data_url" };
-  }
-  if (/^https?:\/\//i.test(trimmed)) {
-    return { url: trimmed, mode: "public_url" };
   }
   throw new Error("xAI Grok 图片读取失败：参考图必须是公网 URL、data URL 或本地上传文件");
 }
@@ -308,7 +421,7 @@ export async function createXaiGrokVideoTask(params: { prompt: string; ratio: st
   const aspectRatio = params.ratio === "9:16" ? "9:16" : "16:9";
   const model = preparedImage ? getImageToVideoModel() : getTextToVideoModel();
   const resolution = getResolution();
-  const prompt = compactPromptForXai(params.prompt);
+  const prompt = compactPromptForXai(params.prompt, mode);
   const payload = preparedImage
     ? {
         model,
@@ -335,8 +448,10 @@ export async function createXaiGrokVideoTask(params: { prompt: string; ratio: st
     aspectRatio,
     hasReferenceImage: Boolean(preparedImage),
     imageMode: preparedImage?.mode || "none",
+    imageUrlPreview: preparedImage?.mode === "public_url" ? preparedImage.url.slice(0, 140) : "",
     promptPreview: prompt.slice(0, 120),
-    promptLength: prompt.length,
+    promptChars: prompt.length,
+    promptBytes: getPromptBytes(prompt),
   });
   const response = await fetch(`${getBaseUrl()}${GENERATIONS_PATH}`, {
     method: "POST",
@@ -360,7 +475,7 @@ export async function createXaiGrokVideoTask(params: { prompt: string; ratio: st
 export async function extendXaiGrokVideoTask(params: { prompt: string; videoUrl: string; attempt?: number }) {
   const model = getTextToVideoModel();
   const videoUrl = await prepareXaiExtensionVideoUrl(params.videoUrl);
-  const prompt = compactPromptForXai(params.prompt);
+  const prompt = compactPromptForXai(params.prompt, "extension");
   const payload = {
     model,
     prompt,
@@ -374,7 +489,8 @@ export async function extendXaiGrokVideoTask(params: { prompt: string; videoUrl:
     duration: XAI_UNIT_SECONDS,
     videoMode: videoUrl.startsWith("data:") ? "data_url" : "public_url",
     promptPreview: prompt.slice(0, 120),
-    promptLength: prompt.length,
+    promptChars: prompt.length,
+    promptBytes: getPromptBytes(prompt),
   });
   const response = await fetch(`${getBaseUrl()}${EXTENSIONS_PATH}`, {
     method: "POST",
