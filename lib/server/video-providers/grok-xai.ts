@@ -19,6 +19,8 @@ const MAX_ATTEMPTS = 5;
 const RETRY_BACKOFF_MS = [5000, 15000, 30000, 60000];
 const QUERY_FETCH_MAX_ATTEMPTS = 3;
 const QUERY_FETCH_BACKOFF_MS = [3000, 5000];
+const XAI_PROMPT_MAX_LENGTH = 3500;
+const XAI_PROMPT_LENGTH_ERROR_MESSAGE = "xAI Grok 提示词过长，已超过官方限制，请缩短智能体提示词或用户主题。";
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -85,6 +87,88 @@ const extractErrorMessage = (json: Record<string, unknown> | null, fallback = ""
   return typeof found === "string" ? found : fallback;
 };
 
+const normalizePromptText = (value: string) => value.replace(/\r/g, "\n").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+
+const uniquePromptLines = (value: string) => {
+  const seen = new Set<string>();
+  return value
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter((line) => {
+      if (!line) return false;
+      const key = line.replace(/\s+/g, " ").slice(0, 180);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+};
+
+const pickPromptLines = (lines: string[], patterns: RegExp[], maxChars: number) => {
+  const picked: string[] = [];
+  let total = 0;
+  for (const line of lines) {
+    if (!patterns.some((pattern) => pattern.test(line))) continue;
+    const nextTotal = total + line.length + 1;
+    if (nextTotal > maxChars) continue;
+    picked.push(line);
+    total = nextTotal;
+  }
+  return picked;
+};
+
+export function compactPromptForXai(prompt: string, maxLength = XAI_PROMPT_MAX_LENGTH): string {
+  const normalized = normalizePromptText(prompt);
+  const originalLength = normalized.length;
+  const criticalTail = [
+    "Hard constraints: no subtitles, no watermark, no logo.",
+    "If a reference image is provided, it is the previous segment's last usable non-black frame.",
+    "Continue from previous frame with immediate motion at 0.0s; do not repeat completed action; do not restart; do not return to an earlier state.",
+  ].join(" ");
+
+  if (originalLength <= maxLength) {
+    log("PROMPT_COMPACTED", { originalLength, finalLength: originalLength, maxLength, wasCompacted: false });
+    return normalized;
+  }
+
+  const lines = uniquePromptLines(normalized);
+  const priorityLines = pickPromptLines(
+    lines,
+    [
+      /第\s*\d+\s*\/\s*\d+\s*段|segment\s*\d+|segmentPlan\[\d+\]|完整脚本\s*\d+\s*-\s*\d+s|当前段|本段|0-10|10-20|20-30|30-40|40-50|50-60/i,
+      /主题|主体|场景|画面|动作|镜头|口播|对白|voiceover|visual|camera|scene|subject|action/i,
+      /承接|上一段|尾帧|最后可用非黑帧|继续|连续|无缝|不要重复|不要重新|immediate motion|previous frame|continue/i,
+      /不要字幕|水印|logo|subtitle|watermark/i,
+    ],
+    Math.max(900, maxLength - criticalTail.length - 400)
+  );
+  const fallbackHead = normalized.slice(0, Math.max(400, maxLength - criticalTail.length - 700));
+  const compactedBody = normalizePromptText(priorityLines.length ? priorityLines.join("\n") : fallbackHead);
+  const budgetForBody = Math.max(200, maxLength - criticalTail.length - 4);
+  const finalBody = compactedBody.length > budgetForBody ? compactedBody.slice(0, budgetForBody).trim() : compactedBody;
+  const finalPrompt = normalizePromptText(`${finalBody}\n\n${criticalTail}`).slice(0, maxLength).trim();
+
+  log("PROMPT_COMPACTED", {
+    originalLength,
+    finalLength: finalPrompt.length,
+    maxLength,
+    wasCompacted: true,
+  });
+  return finalPrompt;
+}
+
+const isPromptLengthError = (message: string) => {
+  const text = message.toLowerCase();
+  return (
+    text.includes("prompt length exceeds") ||
+    text.includes("maximum allowed length") ||
+    text.includes("prompt too long") ||
+    text.includes("input too long") ||
+    text.includes("context length") ||
+    text.includes("提示词过长") ||
+    text.includes("超过官方限制")
+  );
+};
+
 const normalizeStatus = (value: unknown): XaiTaskStatus => {
   const status = String(value || "").toLowerCase();
   if (status === "pending") return "processing";
@@ -108,6 +192,7 @@ const extractVideoDuration = (json: Record<string, unknown> | null) => {
 const isNonRetryableError = (message: string) => {
   const text = message.toLowerCase();
   return (
+    isPromptLengthError(message) ||
     text.includes("xai_api_key") ||
     text.includes("api key") ||
     text.includes("401") ||
@@ -223,10 +308,11 @@ export async function createXaiGrokVideoTask(params: { prompt: string; ratio: st
   const aspectRatio = params.ratio === "9:16" ? "9:16" : "16:9";
   const model = preparedImage ? getImageToVideoModel() : getTextToVideoModel();
   const resolution = getResolution();
+  const prompt = compactPromptForXai(params.prompt);
   const payload = preparedImage
     ? {
         model,
-        prompt: params.prompt.trim(),
+        prompt,
         image: { url: preparedImage.url },
         duration: XAI_UNIT_SECONDS,
         aspect_ratio: aspectRatio,
@@ -234,7 +320,7 @@ export async function createXaiGrokVideoTask(params: { prompt: string; ratio: st
       }
     : {
         model,
-        prompt: params.prompt.trim(),
+        prompt,
         duration: XAI_UNIT_SECONDS,
         aspect_ratio: aspectRatio,
         resolution,
@@ -249,7 +335,8 @@ export async function createXaiGrokVideoTask(params: { prompt: string; ratio: st
     aspectRatio,
     hasReferenceImage: Boolean(preparedImage),
     imageMode: preparedImage?.mode || "none",
-    promptPreview: params.prompt.slice(0, 120),
+    promptPreview: prompt.slice(0, 120),
+    promptLength: prompt.length,
   });
   const response = await fetch(`${getBaseUrl()}${GENERATIONS_PATH}`, {
     method: "POST",
@@ -260,7 +347,11 @@ export async function createXaiGrokVideoTask(params: { prompt: string; ratio: st
   const requestId = extractRequestId(parsed.json);
   log("CREATE_RESPONSE", { ok: parsed.ok, status: parsed.status, requestId, rawPreview: safeRawPreview(parsed.json) });
   if (!parsed.ok) {
-    throw new Error(`xAI Grok 创建视频失败 status=${parsed.status} ${extractErrorMessage(parsed.json, parsed.rawText.slice(0, 120))}`);
+    const errorMessage = extractErrorMessage(parsed.json, parsed.rawText.slice(0, 120));
+    if (parsed.status === 400 && isPromptLengthError(errorMessage)) {
+      throw new Error(XAI_PROMPT_LENGTH_ERROR_MESSAGE);
+    }
+    throw new Error(`xAI Grok 创建视频失败 status=${parsed.status} ${errorMessage}`);
   }
   if (!requestId) throw new Error("xAI Grok 创建视频失败：未返回 request_id");
   return { requestId, model, raw: parsed.json };
@@ -269,9 +360,10 @@ export async function createXaiGrokVideoTask(params: { prompt: string; ratio: st
 export async function extendXaiGrokVideoTask(params: { prompt: string; videoUrl: string; attempt?: number }) {
   const model = getTextToVideoModel();
   const videoUrl = await prepareXaiExtensionVideoUrl(params.videoUrl);
+  const prompt = compactPromptForXai(params.prompt);
   const payload = {
     model,
-    prompt: params.prompt.trim(),
+    prompt,
     video: { url: videoUrl },
     duration: XAI_UNIT_SECONDS,
   };
@@ -281,7 +373,8 @@ export async function extendXaiGrokVideoTask(params: { prompt: string; videoUrl:
     model,
     duration: XAI_UNIT_SECONDS,
     videoMode: videoUrl.startsWith("data:") ? "data_url" : "public_url",
-    promptPreview: params.prompt.slice(0, 120),
+    promptPreview: prompt.slice(0, 120),
+    promptLength: prompt.length,
   });
   const response = await fetch(`${getBaseUrl()}${EXTENSIONS_PATH}`, {
     method: "POST",
@@ -292,7 +385,11 @@ export async function extendXaiGrokVideoTask(params: { prompt: string; videoUrl:
   const requestId = extractRequestId(parsed.json);
   log("EXTEND_RESPONSE", { ok: parsed.ok, status: parsed.status, requestId, rawPreview: safeRawPreview(parsed.json) });
   if (!parsed.ok) {
-    throw new Error(`xAI Grok 扩展视频失败 status=${parsed.status} ${extractErrorMessage(parsed.json, parsed.rawText.slice(0, 120))}`);
+    const errorMessage = extractErrorMessage(parsed.json, parsed.rawText.slice(0, 120));
+    if (parsed.status === 400 && isPromptLengthError(errorMessage)) {
+      throw new Error(XAI_PROMPT_LENGTH_ERROR_MESSAGE);
+    }
+    throw new Error(`xAI Grok 扩展视频失败 status=${parsed.status} ${errorMessage}`);
   }
   if (!requestId) throw new Error("xAI Grok 扩展视频失败：未返回 request_id");
   return { requestId, model, raw: parsed.json };
