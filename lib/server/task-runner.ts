@@ -1155,6 +1155,7 @@ async function executeTask(taskId: string) {
         const grokResult = await runGrokVideoSegments({
           providerSource: grokProviderSource,
           taskId: task.id,
+          sourcePrompt: task.prompt,
           prompts: stitchPrompts,
           ratio: targetRatio,
           targetDurationSeconds,
@@ -1329,6 +1330,7 @@ async function executeTask(taskId: string) {
       const grokResult = await runGrokVideoWithExtensions({
         providerSource: grokProviderSource,
         taskId: task.id,
+        sourcePrompt: task.prompt,
         basePrompt: plan.basePrompt,
         extensionPrompts: plan.extensionPrompts,
         ratio: targetRatio,
@@ -1689,6 +1691,7 @@ async function executeTask(taskId: string) {
           grokResult = await runGrokVideoSegments({
             providerSource: grokProviderSource,
             taskId: task.id,
+            sourcePrompt: task.prompt,
             prompts: segmentPrompts,
             ratio: targetRatio,
             targetDurationSeconds,
@@ -1730,6 +1733,7 @@ async function executeTask(taskId: string) {
           grokResult = await runGrokVideoWithExtensions({
             providerSource: grokProviderSource,
             taskId: task.id,
+            sourcePrompt: task.prompt,
             basePrompt: plan.basePrompt,
             extensionPrompts: plan.extensionPrompts,
             ratio: targetRatio,

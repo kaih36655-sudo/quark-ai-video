@@ -43,6 +43,7 @@ export type GrokVideoResult = {
 export type GrokVideoWithExtensionsInput = {
   providerSource?: GrokProviderSource;
   taskId?: string;
+  sourcePrompt?: string;
   basePrompt: string;
   extensionPrompts: string[];
   ratio: string;
@@ -53,6 +54,7 @@ export type GrokVideoWithExtensionsInput = {
 export type GrokVideoSegmentsInput = {
   providerSource?: GrokProviderSource;
   taskId?: string;
+  sourcePrompt?: string;
   prompts: string[];
   ratio: string;
   targetDurationSeconds: number;
