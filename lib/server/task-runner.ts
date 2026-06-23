@@ -82,6 +82,47 @@ const appendGrokStitchContinuationInstruction = (promptText: string, segmentInde
     ? `${promptText}\n\n硬性要求：这是 ${providerLabel} 分段拼接模式第 ${segmentIndex + 1}/${totalSegments} 段；每段约 10 秒；建立开场画面和动作起点；不要字幕、水印、Logo。`
     : `${promptText}\n\n硬性要求：这是 ${providerLabel} 分段拼接模式第 ${segmentIndex + 1}/${totalSegments} 段；每段约 10 秒；本段输入参考图是上一段视频的最后可用非黑帧，请从该画面状态无缝继续；0.0 秒立即延续上一帧动作；不要重复上一段已经完成的动作；不要重新开始同一动作；不要回到更早的画面状态；不要重新介绍；主体、场景、动作、情绪连续；如果是口播，继续上一段未完成的句意或进入下一句，不要重复上一段开头；不要字幕、水印、Logo。`;
 
+const previewLogText = (value?: string, max = 120) => String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
+
+const logGrokSegmentPlanCreated = (params: {
+  taskId: string;
+  providerSource?: string;
+  totalSegments: number;
+  segmentPlan?: Array<{ segmentIndex: number; storyBeat?: string; voiceoverPart?: string; visualAction?: string }>;
+}) => {
+  console.log("[GROK_VIDEO][SEGMENT_PLAN_CREATED]", JSON.stringify({
+    taskId: params.taskId,
+    providerSource: params.providerSource || "",
+    totalSegments: params.totalSegments,
+    segmentSummaries: (params.segmentPlan || []).map((segment) => ({
+      segmentIndex: segment.segmentIndex,
+      storyBeatPreview: previewLogText(segment.storyBeat),
+      voiceoverPreview: previewLogText(segment.voiceoverPart),
+      visualActionPreview: previewLogText(segment.visualAction),
+    })),
+  }));
+};
+
+const logGrokSegmentPromptsReady = (params: {
+  providerSource?: string;
+  prompts: string[];
+  segmentPlan?: Array<{ segmentIndex: number; storyBeat?: string; voiceoverPart?: string; visualAction?: string }>;
+}) => {
+  params.prompts.forEach((prompt, index) => {
+    const segment = params.segmentPlan?.[index];
+    console.log("[GROK_VIDEO][SEGMENT_PROMPT_READY]", JSON.stringify({
+      providerSource: params.providerSource || "",
+      segmentIndex: index + 1,
+      totalSegments: params.prompts.length,
+      promptBytes: Buffer.byteLength(prompt, "utf8"),
+      storyBeatPreview: previewLogText(segment?.storyBeat),
+      voiceoverPreview: previewLogText(segment?.voiceoverPart),
+      visualActionPreview: previewLogText(segment?.visualAction),
+      promptPreview: previewLogText(prompt, 220),
+    }));
+  });
+};
+
 const sora2PipelineLog = (stage: "CREATE_RETRY" | "CREATE_FINAL_FAILED" | "CREATE_FINAL_SUCCESS", payload: Record<string, unknown>) => {
   console.log(`[SORA2][${stage}]`, JSON.stringify(payload));
 };
@@ -1126,6 +1167,7 @@ async function executeTask(taskId: string) {
       }
 
       const plan = await generateGrokMediumVideoPlan({
+        taskId: task.id,
         theme: effectivePrompt,
         targetDurationSeconds,
         ratio: targetRatio,
@@ -1140,6 +1182,12 @@ async function executeTask(taskId: string) {
         basePromptPreview: plan.basePrompt.slice(0, 160),
         extensionPromptCount: plan.extensionPrompts.length,
       });
+      logGrokSegmentPlanCreated({
+        taskId: task.id,
+        providerSource: grokProviderSource,
+        totalSegments: totalUnits,
+        segmentPlan: plan.segmentPlan,
+      });
 
       if (task.mediumVideoProvider === "sora2") {
         throw new Error("当前中视频 Sora2 模式暂不可用，请在后台切换为 Grok。");
@@ -1152,6 +1200,11 @@ async function executeTask(taskId: string) {
         const stitchPrompts = (plan.stitchPrompts?.length === totalUnits ? plan.stitchPrompts : [plan.basePrompt, ...plan.extensionPrompts]).map((promptText, index) =>
           appendGrokStitchContinuationInstruction(promptText, index, totalUnits)
         );
+        logGrokSegmentPromptsReady({
+          providerSource: grokProviderSource,
+          prompts: stitchPrompts,
+          segmentPlan: plan.segmentPlan,
+        });
         const grokResult = await runGrokVideoSegments({
           providerSource: grokProviderSource,
           taskId: task.id,
@@ -1327,6 +1380,11 @@ async function executeTask(taskId: string) {
         return;
       }
 
+      logGrokSegmentPromptsReady({
+        providerSource: grokProviderSource,
+        prompts: [plan.basePrompt, ...plan.extensionPrompts],
+        segmentPlan: plan.segmentPlan,
+      });
       const grokResult = await runGrokVideoWithExtensions({
         providerSource: grokProviderSource,
         taskId: task.id,
@@ -1656,6 +1714,7 @@ async function executeTask(taskId: string) {
           throw new Error(formatUnsupportedGrokProviderSourceError(rawGrokProviderSource));
         }
         const plan = await generateGrokMediumVideoPlan({
+          taskId: task.id,
           theme: effectivePrompt,
           targetDurationSeconds,
           ratio: targetRatio,
@@ -1669,6 +1728,12 @@ async function executeTask(taskId: string) {
           title: plan.title,
           targetDurationSeconds,
           extensionPromptCount: plan.extensionPrompts.length,
+        });
+        logGrokSegmentPlanCreated({
+          taskId: task.id,
+          providerSource: grokProviderSource,
+          totalSegments: Math.max(1, Math.ceil(targetDurationSeconds / 10)),
+          segmentPlan: plan.segmentPlan,
         });
         const latestTask = tasksRepository.getById(taskId);
         if (!latestTask || latestTask.status === "cancelled") {
@@ -1688,6 +1753,11 @@ async function executeTask(taskId: string) {
           const segmentPrompts = rawSegmentPrompts.slice(0, totalSegments).map((promptText, segmentIndex) =>
             appendGrokStitchContinuationInstruction(promptText, segmentIndex, totalSegments, providerPromptLabel)
           );
+          logGrokSegmentPromptsReady({
+            providerSource: grokProviderSource,
+            prompts: segmentPrompts,
+            segmentPlan: plan.segmentPlan,
+          });
           grokResult = await runGrokVideoSegments({
             providerSource: grokProviderSource,
             taskId: task.id,
@@ -1730,6 +1800,11 @@ async function executeTask(taskId: string) {
             }
           }
         } else {
+          logGrokSegmentPromptsReady({
+            providerSource: grokProviderSource,
+            prompts: [plan.basePrompt, ...plan.extensionPrompts],
+            segmentPlan: plan.segmentPlan,
+          });
           grokResult = await runGrokVideoWithExtensions({
             providerSource: grokProviderSource,
             taskId: task.id,

@@ -118,6 +118,12 @@ const truncateUtf8 = (value: string, maxBytes: number) => {
 
 const promptPreview = (value: string, maxChars = 300) => value.replace(/\s+/g, " ").slice(0, maxChars);
 
+const extractPromptFieldPreview = (prompt: string, field: string, maxChars = 120) => {
+  const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = prompt.match(new RegExp(`${escaped}[:：]([^\\n]+)`, "i"));
+  return promptPreview(match?.[1] || "", maxChars);
+};
+
 const resolveUserTheme = (prompt: string, sourcePrompt?: string) => {
   const source = normalizePromptText(sourcePrompt || "");
   if (source) return source;
@@ -226,6 +232,7 @@ export function compactPromptForXai(prompt: string, mode: XaiPromptMode, context
     lines,
     [
       /第\s*\d+\s*\/\s*\d+\s*段|segment\s*\d+|segmentPlan\[\d+\]|完整脚本\s*\d+\s*-\s*\d+s|当前段|本段|0-10|10-20|20-30|30-40|40-50|50-60/i,
+      /storyBeat|visualAction|voiceoverPart|continuityIn|continuityOut|mustNotRepeat/i,
       /主题|主体|场景|画面|动作|镜头|口播|对白|voiceover|visual|camera|scene|subject|action/i,
       /承接|上一段|尾帧|最后可用非黑帧|继续|连续|无缝|不要重复|不要重新|immediate motion|previous frame|continue/i,
       /不要字幕|水印|logo|subtitle|watermark/i,
@@ -288,6 +295,9 @@ const logPromptReady = (params: {
     promptChars: params.prompt.length,
     hasUserTheme,
     userThemePreview: promptPreview(userTheme, 160),
+    storyBeatPreview: extractPromptFieldPreview(params.prompt, "storyBeat"),
+    voiceoverPartPreview: extractPromptFieldPreview(params.prompt, "voiceoverPart"),
+    visualActionPreview: extractPromptFieldPreview(params.prompt, "visualAction"),
     promptPreview: promptPreview(params.prompt, 300),
     segmentIndex: params.segmentIndex,
     totalSegments: params.totalSegments,

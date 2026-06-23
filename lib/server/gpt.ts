@@ -24,9 +24,11 @@ export type MediumVideoSegmentPrompt = {
 export type GrokMediumVideoPlan = {
   title: string;
   overallTitle: string;
+  userTheme?: string;
   overallStory: string;
   completeScript: string;
   fullVoiceoverScript: string;
+  totalSegments?: number;
   targetDurationSeconds: number;
   basePrompt: string;
   extensionPrompts: string[];
@@ -35,8 +37,12 @@ export type GrokMediumVideoPlan = {
     segmentIndex: number;
     startSecond: number;
     endSecond: number;
+    storyBeat: string;
     visualAction: string;
     voiceoverPart: string;
+    continuityIn: string;
+    continuityOut: string;
+    mustNotRepeat: string;
     transitionToNext: string;
   }>;
   outline: Array<{
@@ -363,6 +369,115 @@ export async function generateMediumVideoSegments(params: {
   }
 }
 
+const previewText = (value: string, max = 120) => value.replace(/\s+/g, " ").trim().slice(0, max);
+
+const textSimilarity = (a: string, b: string) => {
+  const normalize = (value: string) => value.replace(/\s+/g, "").toLowerCase();
+  const makeGrams = (value: string) => {
+    const source = normalize(value);
+    const grams = new Set<string>();
+    if (source.length <= 3) {
+      if (source) grams.add(source);
+      return grams;
+    }
+    for (let index = 0; index <= source.length - 3; index += 1) {
+      grams.add(source.slice(index, index + 3));
+    }
+    return grams;
+  };
+  const left = makeGrams(a);
+  const right = makeGrams(b);
+  if (!left.size || !right.size) return 0;
+  let intersection = 0;
+  left.forEach((gram) => {
+    if (right.has(gram)) intersection += 1;
+  });
+  return intersection / Math.max(left.size, right.size);
+};
+
+const validateGrokSegmentPlan = (plan: Pick<GrokMediumVideoPlan, "segmentPlan">, totalSegments: number) => {
+  if (plan.segmentPlan.length !== totalSegments) {
+    return { ok: false, reason: "segmentPlan length mismatch", segmentIndex: 0 };
+  }
+  const restartPattern = /(开场|首先|今天给大家介绍|这个视频展示|本视频开始|重新介绍|再次展示|从头开始)/;
+  const continuityPattern = /(承接|继续|推进|上一段|接着|随后|延续|尾帧|上一句|下一步)/;
+  for (let index = 0; index < plan.segmentPlan.length; index += 1) {
+    const segment = plan.segmentPlan[index];
+    const segmentIndex = index + 1;
+    if (!segment.voiceoverPart?.trim()) return { ok: false, reason: "voiceoverPart empty", segmentIndex };
+    if (!segment.visualAction?.trim()) return { ok: false, reason: "visualAction empty", segmentIndex };
+    if (!segment.storyBeat?.trim()) return { ok: false, reason: "storyBeat empty", segmentIndex };
+    if (index > 0) {
+      const generatedContent = `${segment.storyBeat} ${segment.visualAction} ${segment.voiceoverPart} ${segment.continuityIn || ""} ${segment.continuityOut || ""}`;
+      if (restartPattern.test(generatedContent)) return { ok: false, reason: "segment restarts story", segmentIndex };
+      if (!continuityPattern.test(generatedContent)) return { ok: false, reason: "segment lacks continuity", segmentIndex };
+      const previous = plan.segmentPlan[index - 1];
+      if (textSimilarity(previous.voiceoverPart, segment.voiceoverPart) > 0.72) return { ok: false, reason: "voiceoverPart too similar", segmentIndex };
+      if (textSimilarity(previous.visualAction, segment.visualAction) > 0.72) return { ok: false, reason: "visualAction too similar", segmentIndex };
+    }
+  }
+  return { ok: true, reason: "", segmentIndex: 0 };
+};
+
+const logGrokPlanValidation = (stage: "PLAN_VALIDATION_FAILED" | "PLAN_VALIDATION_SUCCESS", payload: Record<string, unknown>) => {
+  console.log(`[GROK_VIDEO][${stage}]`, JSON.stringify(payload));
+};
+
+const buildGrokSegmentPrompt = (params: {
+  theme: string;
+  targetDurationSeconds: number;
+  ratioLabel: string;
+  totalSegments: number;
+  segment: GrokMediumVideoPlan["segmentPlan"][number];
+  agentName?: string;
+  agentDescription?: string;
+  mode: "base" | "extend" | "stitch";
+}) => {
+  const isFirst = params.segment.segmentIndex === 1;
+  const isLast = params.segment.segmentIndex === params.totalSegments;
+  const agentLine = params.agentName ? `智能体：${params.agentName}。` : "";
+  const styleLine = params.agentDescription ? `风格/结构参考：${previewText(params.agentDescription, 180)}。` : "";
+  const referenceLine =
+    params.mode === "stitch" && !isFirst
+      ? "输入参考图是上一段视频的最后可用非黑帧，请从该状态继续，0.0秒立即延续上一帧动作。"
+      : params.mode === "extend" && !isFirst
+        ? "这是扩展生成，请承接上一段最后画面、动作和上一句口播继续推进。"
+        : "从第0秒立即建立动作起点，不要静态展示首帧。";
+  return `全片主题：${params.theme || "用户主题"}
+当前段：第 ${params.segment.segmentIndex}/${params.totalSegments} 段，${params.segment.startSecond}-${params.segment.endSecond}s，目标总时长 ${params.targetDurationSeconds} 秒，画面比例 ${params.ratioLabel}。
+当前段任务：只推进完整故事的当前部分，不能把本段写成完整独立短视频。
+storyBeat：${params.segment.storyBeat}
+visualAction：${params.segment.visualAction}
+voiceoverPart：${params.segment.voiceoverPart}
+continuityIn：${params.segment.continuityIn}
+continuityOut：${params.segment.continuityOut}
+mustNotRepeat：${params.segment.mustNotRepeat}
+连续性要求：${referenceLine} ${isFirst ? "只做开场/起因/铺垫，不要提前讲完结果。" : "不要重新开头，不要重新介绍主题，不要重复上一段画面或口播。"} ${isLast ? "这是最后一段，才允许总结、收束或行动引导。" : "本段结尾必须留下可承接的动作、情绪或信息。"}
+${agentLine}${styleLine}
+基础约束：真实连续视频镜头，主体、场景、动作、情绪和口播必须连续；无字幕、水印、Logo。`;
+};
+
+const buildGrokPromptsFromSegmentPlan = (params: {
+  theme: string;
+  targetDurationSeconds: number;
+  ratioLabel: string;
+  totalSegments: number;
+  segmentPlan: GrokMediumVideoPlan["segmentPlan"];
+  agentName?: string;
+  agentDescription?: string;
+}) => {
+  const prompts = params.segmentPlan.map((segment) =>
+    buildGrokSegmentPrompt({ ...params, segment, mode: "stitch" })
+  );
+  return {
+    basePrompt: buildGrokSegmentPrompt({ ...params, segment: params.segmentPlan[0], mode: "base" }),
+    extensionPrompts: params.segmentPlan.slice(1).map((segment) =>
+      buildGrokSegmentPrompt({ ...params, segment, mode: "extend" })
+    ),
+    stitchPrompts: prompts,
+  };
+};
+
 const grokMediumVideoFallback = (params: {
   theme: string;
   targetDurationSeconds: number;
@@ -373,23 +488,36 @@ const grokMediumVideoFallback = (params: {
   const units = Math.max(1, Math.min(6, Math.ceil(params.targetDurationSeconds / 10)));
   const ratioLabel = params.ratio === "9:16" ? "9:16竖屏" : "16:9横屏";
   const title = params.theme ? params.theme.slice(0, 36) : "Grok 中视频";
-  const phaseLabels = units === 1
-    ? ["用一个完整 10 秒脚本完成场景、解决和收束"]
-    : units === 2
-      ? ["提出场景/痛点并留下未完成动作", "承接上一段，展示解决过程和结果收束"]
-      : ["提出场景/痛点并留下未完成动作", ...Array.from({ length: units - 2 }, (_, index) => `承接第 ${index + 1} 段，展示解决过程/核心功能的下一步`), "承接上一段，展示结果、总结和行动引导"];
-  const fullVoiceoverScript = `完整口播：先点明「${params.theme || "主题"}」里的真实场景和痛点，不急着总结；中段顺着同一个动作展示解决过程、关键功能或核心卖点，只推进下一部分信息；最后才展示结果、总结价值，并给出自然行动引导。`;
-  const segmentPlan = phaseLabels.map((summary, index) => ({
+  const theme = params.theme || "用户主题";
+  const storyBeats = Array.from({ length: units }, (_, index) => {
+    if (units === 1) return "完整呈现主题的起因、关键动作和结果收束";
+    if (index === 0) return "场景建立，提出起因/痛点/冲突，只完成铺垫";
+    if (index === units - 1) return "承接上一段，展示结果/反转/收束和自然行动引导";
+    if (index === units - 2 && units >= 4) return "承接上一段，进入高潮或关键结果出现前的决定性动作";
+    return `承接第 ${index} 段，推进解决过程/行动变化/核心信息的第 ${index + 1} 步`;
+  });
+  const fullVoiceoverParts = storyBeats.map((beat, index) => {
+    if (units === 1) return `围绕「${theme}」快速建立场景，展示关键动作，并自然落到结果。`;
+    if (index === 0) return `先把「${theme}」放进真实场景，只提出问题和起因，留出后续推进空间。`;
+    if (index === units - 1) return `接着上一段的变化，展示最终结果或反转，再给出简短总结和行动引导。`;
+    return `继续上一段未完成的信息，展示第 ${index + 1} 步推进，让变化更具体，但不重复开头介绍。`;
+  });
+  const fullVoiceoverScript = fullVoiceoverParts.map((part, index) => `第${index + 1}段：${part}`).join(" ");
+  const segmentPlan = storyBeats.map((storyBeat, index) => ({
     segmentIndex: index + 1,
     startSecond: index * 10,
     endSecond: (index + 1) * 10,
+    storyBeat,
     visualAction:
       index === 0
-        ? "画面从第 0 秒立即运动，建立主体、场景和核心冲突"
+        ? "画面从第 0 秒立即运动，建立主体、场景和核心冲突，只铺垫不收束"
         : index === units - 1
           ? "承接上一段尾帧动作，完成结果展示和情绪收束"
-          : "承接上一段尾帧动作，推进同一个解决过程的下一步",
-    voiceoverPart: summary,
+          : `承接上一段尾帧动作，推进同一个解决过程的第 ${index + 1} 步`,
+    voiceoverPart: fullVoiceoverParts[index],
+    continuityIn: index === 0 ? "无，完整故事开头" : `承接第 ${index} 段最后画面、动作和上一句口播`,
+    continuityOut: index === units - 1 ? "最后一段自然收束，不再留下新问题" : `留给第 ${index + 2} 段的未完成动作、情绪或信息`,
+    mustNotRepeat: index === 0 ? "不要提前讲后续解决和最终结果" : `不要重复第 ${index} 段的开头介绍、画面动作和口播`,
     transitionToNext: index === units - 1 ? "最后一段自然收束，不再留下新问题" : "结尾保留未完成动作、未说完的信息或视觉钩子，直接进入下一段",
   }));
   const outline = segmentPlan.map((item) => ({
@@ -398,27 +526,34 @@ const grokMediumVideoFallback = (params: {
     end: item.endSecond,
     summary: `${item.visualAction}；口播：${item.voiceoverPart}`,
   }));
-  const common = `主题：「${params.theme}」。智能体：${params.agentName || "未指定"}。智能体框架：${params.agentDescription || "无"}。画面比例 ${ratioLabel}。不要字幕、水印、Logo。`;
-  const basePrompt = `这是 ${params.targetDurationSeconds} 秒 Grok 中视频的第 1/${units} 段，先生成完整脚本的 0-10 秒片段。${common} 一个任务是一条完整视频故事，多段只是技术切分，不要把本段写成独立短视频。完整口播先统一规划：${fullVoiceoverScript} 本段只负责：${segmentPlan[0]?.voiceoverPart || ""}。画面：${segmentPlan[0]?.visualAction || ""}。从第 0 秒立即开始动作，结尾必须留下连续动作/未完成信息，方便下一段承接。参考图只作为首帧参考，立即运动。`;
-  const extensionPrompts = outline.slice(1).map((item) =>
-    `继续上一段，不要重新介绍，不要重复上一段文案，只推进完整脚本的下一部分。这是同一条 Grok 中视频的第 ${item.segmentIndex}/${units} 段，目标总时长 ${params.targetDurationSeconds} 秒，当前扩展约 10 秒。${common} 必须承接上一段最后画面、动作和上一句口播继续推进，保持主体、服装、场景、光线、镜头语言、色彩风格一致。本段只负责完整脚本的 ${item.start}-${item.end}s：${item.summary}。${item.segmentIndex === units ? "这是最后一段，才允许总结和行动引导。" : "本段结尾继续留下连续动作/叙事钩子给下一段。"}`
-  );
+  const prompts = buildGrokPromptsFromSegmentPlan({
+    theme,
+    targetDurationSeconds: params.targetDurationSeconds,
+    ratioLabel,
+    totalSegments: units,
+    segmentPlan,
+    agentName: params.agentName,
+    agentDescription: params.agentDescription,
+  });
   return {
     title,
+    userTheme: theme,
     overallTitle: title,
-    overallStory: `围绕「${params.theme || "主题"}」创作一条完整 ${params.targetDurationSeconds} 秒连续视频，而不是 ${units} 条独立短视频。`,
+    overallStory: `围绕「${theme}」创作一条完整 ${params.targetDurationSeconds} 秒连续视频：先建立起因，再逐步推进，最后收束，而不是 ${units} 条独立短视频。`,
     completeScript: fullVoiceoverScript,
     fullVoiceoverScript,
+    totalSegments: units,
     targetDurationSeconds: params.targetDurationSeconds,
-    basePrompt,
-    extensionPrompts,
-    stitchPrompts: [basePrompt, ...extensionPrompts],
+    basePrompt: prompts.basePrompt,
+    extensionPrompts: prompts.extensionPrompts,
+    stitchPrompts: prompts.stitchPrompts,
     segmentPlan,
     outline,
   };
 };
 
 export async function generateGrokMediumVideoPlan(params: {
+  taskId?: string;
   theme: string;
   targetDurationSeconds: number;
   ratio: string;
@@ -431,9 +566,10 @@ export async function generateGrokMediumVideoPlan(params: {
   if (!apiKey) return grokMediumVideoFallback({ ...params, targetDurationSeconds });
 
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 20000);
     const ratioLabel = params.ratio === "9:16" ? "9:16竖屏" : "16:9横屏";
+    for (let planAttempt = 1; planAttempt <= 2; planAttempt += 1) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 20000);
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -448,7 +584,7 @@ export async function generateGrokMediumVideoPlan(params: {
           {
             role: "system",
             content:
-              "你是 Grok 中视频完整叙事脚本策划专家。必须仅返回 JSON。先写一条完整视频故事和完整口播，再切分为每 10 秒一个片段。输出 title, overallTitle, overallStory, completeScript, fullVoiceoverScript, targetDurationSeconds, segmentPlan, basePrompt, extensionPrompts, stitchPrompts, outline。basePrompt 用于第 1 段 create；extensionPrompts 用于第 2 段到第 N 段 extend。禁止把每段写成独立短视频。",
+              "你是 Grok 中视频完整叙事脚本策划专家。必须仅返回 JSON。先写一条完整视频故事和完整口播，再切分为每 10 秒一个片段。segmentPlan 是唯一权威：每段必须是完整故事的不同切片，不能把每段写成独立短视频。第2段及以后必须承接上一段，不得重新介绍主题。",
           },
           {
             role: "user",
@@ -463,13 +599,14 @@ export async function generateGrokMediumVideoPlan(params: {
 要求：
 1. 第一层先写完整总脚本：overallStory/completeScript/fullVoiceoverScript 必须是一条完整视频故事和完整口播，不是分段独立文案集合。
 2. 第二层再切为 ${units} 个 10 秒 segmentPlan。每段只负责完整脚本的一部分，不允许重复介绍同一个卖点，不允许重新开头，不允许每段都像独立短视频。
-3. segmentPlan 每项必须包含 segmentIndex, startSecond, endSecond, visualAction, voiceoverPart, transitionToNext。voiceoverPart 必须来自 fullVoiceoverScript 的连续切片，不要为每段单独创作一套完整口播。
-4. 第 2 段必须承接第 1 段未完成的信息/动作/口播，第 3 段必须承接第 2 段，最后一段才收束/总结/行动引导。
-5. basePrompt 必须写明“第 1/${units} 段”、10秒、目标总时长、${ratioLabel}、不要字幕/水印/Logo，并只生成完整脚本的 0-10 秒部分。
-6. extensionPrompts 长度必须是 ${units - 1}，每条都必须包含：“继续上一段，不要重新介绍，不要重复上一段文案，只推进完整脚本的下一部分。”
-7. extension prompt 必须承接上一段最后画面、尾帧、动作和上一句口播；保持主体一致、场景连续、动作连续、情绪递进。
-8. stitchPrompts 长度必须是 ${units}，每段对应 segmentPlan 的一个区间；每段开头承接上一段尾帧和上一句口播，每段结尾为下一段留下连续动作/叙事钩子，最后一段除外。
-9. 所有 prompt 都必须保留：不要字幕，不要水印，不要 Logo；参考图只作为首帧参考，立即运动。`,
+3. segmentPlan 每项必须包含 segmentIndex, startSecond, endSecond, storyBeat, visualAction, voiceoverPart, continuityIn, continuityOut, mustNotRepeat, transitionToNext。
+4. voiceoverPart 必须来自 fullVoiceoverScript 的连续切片，不要为每段单独创作一套完整口播；相邻段 voiceoverPart 和 visualAction 必须明显不同。
+5. 第 1 段只负责场景建立、起因、痛点或冲突，不要提前讲结果。
+6. 第 2 段及以后必须承接上一段最后画面/动作/上一句口播，不能出现“今天给大家介绍/这个视频展示/本视频开始/重新介绍/再次展示/从头开始”。
+7. 只有最后一段可以总结、收束或行动引导。
+8. basePrompt/extensionPrompts/stitchPrompts 可以简短，但不要塞完整故事全文；最终 provider prompt 会由 segmentPlan 生成。
+9. 所有 prompt 都必须保留：不要字幕，不要水印，不要 Logo；参考图只作为首帧参考，立即运动。
+${planAttempt > 1 ? "注意：上一版 segmentPlan 被判定相邻片段重复或缺少连续性，这次必须让每段 storyBeat/visualAction/voiceoverPart 明显不同。" : ""}`,
           },
         ],
         response_format: {
@@ -483,9 +620,11 @@ export async function generateGrokMediumVideoPlan(params: {
               properties: {
                 title: { type: "string" },
                 overallTitle: { type: "string" },
+                userTheme: { type: "string" },
                 overallStory: { type: "string" },
                 completeScript: { type: "string" },
                 fullVoiceoverScript: { type: "string" },
+                totalSegments: { type: "number" },
                 targetDurationSeconds: { type: "number" },
                 segmentPlan: {
                   type: "array",
@@ -498,11 +637,15 @@ export async function generateGrokMediumVideoPlan(params: {
                       segmentIndex: { type: "number" },
                       startSecond: { type: "number" },
                       endSecond: { type: "number" },
+                      storyBeat: { type: "string" },
                       visualAction: { type: "string" },
                       voiceoverPart: { type: "string" },
+                      continuityIn: { type: "string" },
+                      continuityOut: { type: "string" },
+                      mustNotRepeat: { type: "string" },
                       transitionToNext: { type: "string" },
                     },
-                    required: ["segmentIndex", "startSecond", "endSecond", "visualAction", "voiceoverPart", "transitionToNext"],
+                    required: ["segmentIndex", "startSecond", "endSecond", "storyBeat", "visualAction", "voiceoverPart", "continuityIn", "continuityOut", "mustNotRepeat", "transitionToNext"],
                   },
                 },
                 basePrompt: { type: "string" },
@@ -535,51 +678,80 @@ export async function generateGrokMediumVideoPlan(params: {
                   },
                 },
               },
-              required: ["title", "overallTitle", "overallStory", "completeScript", "fullVoiceoverScript", "targetDurationSeconds", "segmentPlan", "basePrompt", "extensionPrompts", "stitchPrompts", "outline"],
+              required: ["title", "overallTitle", "userTheme", "overallStory", "completeScript", "fullVoiceoverScript", "totalSegments", "targetDurationSeconds", "segmentPlan", "basePrompt", "extensionPrompts", "stitchPrompts", "outline"],
             },
           },
         },
       }),
     });
-    clearTimeout(timer);
-    if (!response.ok) return grokMediumVideoFallback({ ...params, targetDurationSeconds });
-    const data = await response.json();
-    const content = data?.choices?.[0]?.message?.content;
-    if (!content || typeof content !== "string") return grokMediumVideoFallback({ ...params, targetDurationSeconds });
-    const parsed = JSON.parse(content) as Partial<GrokMediumVideoPlan>;
-    if (!parsed.title || !parsed.basePrompt || !Array.isArray(parsed.extensionPrompts) || parsed.extensionPrompts.length !== units - 1 || !Array.isArray(parsed.outline) || parsed.outline.length !== units || !Array.isArray(parsed.segmentPlan) || parsed.segmentPlan.length !== units) {
-      return grokMediumVideoFallback({ ...params, targetDurationSeconds });
-    }
-    const segmentPlan = parsed.segmentPlan.map((item, index) => ({
-      segmentIndex: index + 1,
-      startSecond: index * 10,
-      endSecond: (index + 1) * 10,
-      visualAction: typeof item.visualAction === "string" && item.visualAction.trim() ? item.visualAction.trim() : `第 ${index + 1} 段连续画面`,
-      voiceoverPart: typeof item.voiceoverPart === "string" && item.voiceoverPart.trim() ? item.voiceoverPart.trim() : `第 ${index + 1} 段口播切片`,
-      transitionToNext: typeof item.transitionToNext === "string" && item.transitionToNext.trim() ? item.transitionToNext.trim() : (index === units - 1 ? "自然收束" : "留下连续动作承接下一段"),
-    }));
-    return {
-      title: parsed.title.trim(),
-      overallTitle: (parsed.overallTitle || parsed.title).trim(),
-      overallStory: (parsed.overallStory || "").trim(),
-      completeScript: (parsed.completeScript || "").trim(),
-      fullVoiceoverScript: (parsed.fullVoiceoverScript || parsed.completeScript || "").trim(),
-      targetDurationSeconds,
-      segmentPlan,
-      basePrompt: `${parsed.basePrompt.trim()}\n\n硬性要求：这是完整脚本的第 1/${units} 段，只生成 0-10 秒部分；先有完整口播再切片，本段口播只能使用 segmentPlan[1] 的 voiceoverPart；不要把本段写成独立短视频；结尾为下一段留下连续动作/叙事钩子；参考图只作为首帧参考，立即运动；不要字幕、水印、Logo。`,
-      extensionPrompts: parsed.extensionPrompts.map((item, index) =>
-        `${String(item || "").trim()}\n\n硬性要求：继续上一段，不要重新介绍，不要重复上一段文案，只推进完整脚本的下一部分；这是第 ${index + 2}/${units} 段扩展；目标总时长 ${targetDurationSeconds} 秒；画面比例 ${ratioLabel}；承接上一段最后画面、尾帧、动作和上一句口播继续推进；本段口播只能使用 segmentPlan[${index + 2}] 的 voiceoverPart；不要生成独立短视频；${index + 2 === units ? "这是最后一段，才允许总结/行动引导。" : "结尾为下一段留下连续动作/叙事钩子。"} 不要字幕、水印、Logo。`
-      ),
-      stitchPrompts: Array.isArray(parsed.stitchPrompts) ? parsed.stitchPrompts.map((item, index) =>
-        `${String(item || "").trim()}\n\n硬性要求：这是 Grok 分段拼接模式第 ${index + 1}/${units} 段，对应完整脚本 ${index * 10}-${(index + 1) * 10}s；${index === 0 ? "从第 0 秒立即运动。" : "开头承接上一段尾帧和上一句口播，不要重新介绍。"} 本段只使用对应 voiceoverPart，不要生成一套独立口播；${index === units - 1 ? "最后一段自然收束。" : "结尾为下一段留下连续动作/叙事钩子。"} 不要字幕、水印、Logo。`
-      ) : undefined,
-      outline: parsed.outline.map((item, index) => ({
+      clearTimeout(timer);
+      if (!response.ok) return grokMediumVideoFallback({ ...params, targetDurationSeconds });
+      const data = await response.json();
+      const content = data?.choices?.[0]?.message?.content;
+      if (!content || typeof content !== "string") return grokMediumVideoFallback({ ...params, targetDurationSeconds });
+      const parsed = JSON.parse(content) as Partial<GrokMediumVideoPlan>;
+      if (!parsed.title || !Array.isArray(parsed.outline) || parsed.outline.length !== units || !Array.isArray(parsed.segmentPlan) || parsed.segmentPlan.length !== units) {
+        return grokMediumVideoFallback({ ...params, targetDurationSeconds });
+      }
+      const segmentPlan = parsed.segmentPlan.map((item, index) => ({
         segmentIndex: index + 1,
-        start: index * 10,
-        end: (index + 1) * 10,
-        summary: typeof item.summary === "string" && item.summary.trim() ? item.summary.trim() : `${segmentPlan[index]?.visualAction || ""}；口播：${segmentPlan[index]?.voiceoverPart || ""}`,
-      })),
-    };
+        startSecond: index * 10,
+        endSecond: (index + 1) * 10,
+        storyBeat: typeof item.storyBeat === "string" && item.storyBeat.trim() ? item.storyBeat.trim() : `完整故事第 ${index + 1} 部分`,
+        visualAction: typeof item.visualAction === "string" && item.visualAction.trim() ? item.visualAction.trim() : `第 ${index + 1} 段连续画面`,
+        voiceoverPart: typeof item.voiceoverPart === "string" && item.voiceoverPart.trim() ? item.voiceoverPart.trim() : `第 ${index + 1} 段口播切片`,
+        continuityIn: typeof item.continuityIn === "string" && item.continuityIn.trim() ? item.continuityIn.trim() : (index === 0 ? "无，完整故事开头" : `承接第 ${index} 段最后画面和上一句口播`),
+        continuityOut: typeof item.continuityOut === "string" && item.continuityOut.trim() ? item.continuityOut.trim() : (index === units - 1 ? "最后一段自然收束" : `留给第 ${index + 2} 段继续推进`),
+        mustNotRepeat: typeof item.mustNotRepeat === "string" && item.mustNotRepeat.trim() ? item.mustNotRepeat.trim() : (index === 0 ? "不要提前讲后续解决和最终结果" : `不要重复第 ${index} 段开头介绍`),
+        transitionToNext: typeof item.transitionToNext === "string" && item.transitionToNext.trim() ? item.transitionToNext.trim() : (index === units - 1 ? "自然收束" : "留下连续动作承接下一段"),
+      }));
+      const validation = validateGrokSegmentPlan({ segmentPlan }, units);
+      if (!validation.ok) {
+        logGrokPlanValidation("PLAN_VALIDATION_FAILED", {
+          taskId: params.taskId || "",
+          reason: validation.reason,
+          segmentIndex: validation.segmentIndex,
+          attempt: planAttempt,
+        });
+        if (planAttempt < 2) continue;
+        return grokMediumVideoFallback({ ...params, targetDurationSeconds });
+      }
+      logGrokPlanValidation("PLAN_VALIDATION_SUCCESS", {
+        taskId: params.taskId || "",
+        totalSegments: units,
+        attempt: planAttempt,
+      });
+      const prompts = buildGrokPromptsFromSegmentPlan({
+        theme: params.theme || parsed.userTheme || "用户主题",
+        targetDurationSeconds,
+        ratioLabel,
+        totalSegments: units,
+        segmentPlan,
+        agentName: params.agentName,
+        agentDescription: params.agentDescription,
+      });
+      return {
+        title: parsed.title.trim(),
+        userTheme: params.theme || parsed.userTheme || "",
+        overallTitle: (parsed.overallTitle || parsed.title).trim(),
+        overallStory: (parsed.overallStory || "").trim(),
+        completeScript: (parsed.completeScript || "").trim(),
+        fullVoiceoverScript: (parsed.fullVoiceoverScript || parsed.completeScript || segmentPlan.map((item) => item.voiceoverPart).join(" ")).trim(),
+        totalSegments: units,
+        targetDurationSeconds,
+        segmentPlan,
+        basePrompt: prompts.basePrompt,
+        extensionPrompts: prompts.extensionPrompts,
+        stitchPrompts: prompts.stitchPrompts,
+        outline: parsed.outline.map((item, index) => ({
+          segmentIndex: index + 1,
+          start: index * 10,
+          end: (index + 1) * 10,
+          summary: typeof item.summary === "string" && item.summary.trim() ? item.summary.trim() : `${segmentPlan[index]?.storyBeat || ""}；${segmentPlan[index]?.visualAction || ""}；口播：${segmentPlan[index]?.voiceoverPart || ""}`,
+        })),
+      };
+    }
+    return grokMediumVideoFallback({ ...params, targetDurationSeconds });
   } catch {
     return grokMediumVideoFallback({ ...params, targetDurationSeconds });
   }
