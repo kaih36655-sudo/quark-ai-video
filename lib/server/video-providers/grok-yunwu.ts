@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { resolveLocalUploadsSource } from "../local-uploads";
+import { extractTailReferenceFrameForContinuation } from "../medium-video-frame";
 import {
   DEFAULT_GROK_PROVIDER_SOURCE,
   GrokVideoResult,
@@ -510,8 +511,22 @@ export async function runYunwuGrokVideoSegments(params: GrokVideoSegmentsInput):
   try {
     let previousVideoUrl = "";
     for (let index = 0; index < params.prompts.length; index += 1) {
-      log("STITCH_SEGMENT_START", { segmentIndex: index + 1, totalSegments: params.prompts.length, hasPreviousVideo: Boolean(previousVideoUrl) });
-      const imageSources = await params.getReferenceImagesForSegment?.(index + 1, previousVideoUrl);
+      const segmentIndex = index + 1;
+      log("STITCH_SEGMENT_START", { segmentIndex, totalSegments: params.prompts.length, hasPreviousVideo: Boolean(previousVideoUrl) });
+      let imageSources = await params.getReferenceImagesForSegment?.(segmentIndex, previousVideoUrl);
+      if (index > 0 && !imageSources?.length && previousVideoUrl) {
+        const frame = await extractTailReferenceFrameForContinuation({
+          taskId: params.taskId || `yunwu-grok-${Date.now()}`,
+          segmentIndex,
+          sourceVideoUrl: previousVideoUrl,
+        });
+        imageSources = [frame.referenceUrl];
+        log("STITCH_INTERNAL_TAIL_FRAME_FALLBACK", {
+          segmentIndex,
+          previousVideoUrlPreview: previousVideoUrl.slice(0, 140),
+          referenceImageUrl: frame.referenceUrl,
+        });
+      }
       const images = await prepareGrokReferenceImages(imageSources);
       const result = await runStepWithRetry({
         stage: "create",
@@ -525,7 +540,7 @@ export async function runYunwuGrokVideoSegments(params: GrokVideoSegmentsInput):
       if (result.videoUrl) segmentCoverUrls.push(result.coverUrl || "");
       previousVideoUrl = result.videoUrl || "";
       successfulUnits += 1;
-      log("STITCH_SEGMENT_SUCCESS", { segmentIndex: index + 1, taskId: result.taskId, hasVideoUrl: Boolean(result.videoUrl), imagesCount: images.length });
+      log("STITCH_SEGMENT_SUCCESS", { segmentIndex, taskId: result.taskId, hasVideoUrl: Boolean(result.videoUrl), imagesCount: images.length });
     }
     const finalVideoUrl = segmentVideoUrls[segmentVideoUrls.length - 1] || "";
     const finalCoverUrl = segmentCoverUrls[segmentCoverUrls.length - 1] || "";
