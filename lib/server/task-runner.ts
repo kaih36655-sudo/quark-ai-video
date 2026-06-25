@@ -70,7 +70,11 @@ const getGrokApiModelForRecord = (source?: GrokProviderSource, hasReferenceImage
     ? hasReferenceImage
       ? process.env.XAI_GROK_IMAGE_TO_VIDEO_MODEL || "grok-imagine-video-1.5"
       : process.env.XAI_GROK_VIDEO_MODEL || "grok-imagine-video"
-    : process.env.YUNWU_GROK_VIDEO_MODEL || "grok-video-3-10s";
+    : source === "jiekou"
+      ? "grok-imagine-video"
+      : hasReferenceImage
+        ? process.env.YUNWU_GROK_IMAGE_TO_VIDEO_MODEL || "grok-imagine-video-1.5-preview"
+        : process.env.YUNWU_GROK_VIDEO_MODEL || "grok-imagine-video";
 
 const isSupportedGrokProviderSource = (source: unknown): source is GrokProviderSource => source === "yunwu" || source === "jiekou" || source === "xai";
 
@@ -81,6 +85,16 @@ const appendGrokStitchContinuationInstruction = (promptText: string, segmentInde
   segmentIndex === 0
     ? `${promptText}\n\n硬性要求：这是 ${providerLabel} 分段拼接模式第 ${segmentIndex + 1}/${totalSegments} 段；每段约 10 秒；建立开场画面和动作起点；不要字幕、水印、Logo。`
     : `${promptText}\n\n硬性要求：这是 ${providerLabel} 分段拼接模式第 ${segmentIndex + 1}/${totalSegments} 段；每段约 10 秒；本段输入参考图是上一段视频的最后可用非黑帧，请从该画面状态无缝继续；0.0 秒立即延续上一帧动作；不要重复上一段已经完成的动作；不要重新开始同一动作；不要回到更早的画面状态；不要重新介绍；主体、场景、动作、情绪连续；如果是口播，继续上一段未完成的句意或进入下一句，不要重复上一段开头；不要字幕、水印、Logo。`;
+
+const logYunwuOfficialStrategyNormalized = (params: { requestedStrategy: "extend" | "stitch"; targetDurationSeconds: number }) => {
+  console.log("[YUNWU_GROK][STRATEGY_NORMALIZED]", JSON.stringify({
+    providerSource: "yunwu",
+    requestedStrategy: params.requestedStrategy,
+    effectiveStrategy: "stitch",
+    targetDurationSeconds: params.targetDurationSeconds,
+    reason: "official_yunwu_extend_not_supported",
+  }));
+};
 
 const previewLogText = (value?: string, max = 120) => String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
 
@@ -1193,7 +1207,14 @@ async function executeTask(taskId: string) {
         throw new Error("当前中视频 Sora2 模式暂不可用，请在后台切换为 Grok。");
       }
 
-      const mediumVideoStrategy = grokProviderSource === "jiekou" ? "stitch" : task.mediumVideoStrategy === "stitch" ? "stitch" : "extend";
+      const requestedMediumVideoStrategy = task.mediumVideoStrategy === "stitch" ? "stitch" : "extend";
+      const mediumVideoStrategy =
+        grokProviderSource === "jiekou" || (grokProviderSource === "yunwu" && targetDurationSeconds > 10)
+          ? "stitch"
+          : requestedMediumVideoStrategy;
+      if (grokProviderSource === "yunwu" && targetDurationSeconds > 10 && requestedMediumVideoStrategy !== "stitch") {
+        logYunwuOfficialStrategyNormalized({ requestedStrategy: requestedMediumVideoStrategy, targetDurationSeconds });
+      }
       const referenceImages = task.referenceImageUrl ? [task.referenceImageUrl] : [];
 
       if (mediumVideoStrategy === "stitch") {
@@ -1742,14 +1763,19 @@ async function executeTask(taskId: string) {
         }
         let grokResult;
         let providerStitchConcatError = "";
-        if ((grokProviderSource === "jiekou" || grokProviderSource === "xai") && targetDurationSeconds > 10) {
+        const shouldUseProviderStitchForLongVideo =
+          targetDurationSeconds > 10 && (grokProviderSource === "yunwu" || grokProviderSource === "jiekou" || grokProviderSource === "xai");
+        if (grokProviderSource === "yunwu" && targetDurationSeconds > 10) {
+          logYunwuOfficialStrategyNormalized({ requestedStrategy: "extend", targetDurationSeconds });
+        }
+        if (shouldUseProviderStitchForLongVideo) {
           const totalSegments = Math.max(1, Math.ceil(targetDurationSeconds / 10));
           const rawSegmentPrompts = [plan.basePrompt, ...plan.extensionPrompts];
           while (rawSegmentPrompts.length < totalSegments) {
             rawSegmentPrompts.push(rawSegmentPrompts[rawSegmentPrompts.length - 1] || plan.basePrompt);
           }
-          const providerLogPrefix = grokProviderSource === "xai" ? "XAI_GROK" : "JIEKOU_GROK";
-          const providerPromptLabel = grokProviderSource === "xai" ? "xAI 官方 Grok" : "接口AI Grok";
+          const providerLogPrefix = grokProviderSource === "xai" ? "XAI_GROK" : grokProviderSource === "yunwu" ? "YUNWU_GROK" : "JIEKOU_GROK";
+          const providerPromptLabel = grokProviderSource === "xai" ? "xAI 官方 Grok" : grokProviderSource === "yunwu" ? "云雾 Grok" : "接口AI Grok";
           const segmentPrompts = rawSegmentPrompts.slice(0, totalSegments).map((promptText, segmentIndex) =>
             appendGrokStitchContinuationInstruction(promptText, segmentIndex, totalSegments, providerPromptLabel)
           );

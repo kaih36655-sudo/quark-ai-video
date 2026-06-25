@@ -17,33 +17,39 @@ type GrokTaskQueryResult = {
   rawStatus: string;
   videoUrl?: string;
   coverUrl?: string;
+  duration?: number;
   errorMessage?: string;
   raw?: Record<string, unknown>;
 };
 
-const CREATE_PATH = "/v1/video/create";
+type YunwuQueryMode = "official_videos" | "legacy_video_query";
+type YunwuResponseShape = "top_level" | "data" | "result" | "unknown";
+
+const CREATE_PATH = "/v1/videos/generations";
 const QUERY_PATH = "/v1/video/query";
-const EXTEND_PATH = "/v1/video/extend";
 const GROK_UNIT_SECONDS = 10;
 const MAX_ATTEMPTS = 5;
 const RETRY_BACKOFF_MS = [5000, 15000, 30000, 60000];
 const QUERY_FETCH_MAX_ATTEMPTS = 3;
 const QUERY_FETCH_BACKOFF_MS = [3000, 5000];
+const YUNWU_OFFICIAL_EXTEND_UNSUPPORTED_MESSAGE = "云雾 Grok 官方接口暂未接入扩展视频，请切换为分段拼接。";
 
 type PreparedGrokImage = {
-  payload: string;
+  url: string;
   mimeType: string;
-  mode: "images.base64";
+  mode: "image.url.public_url" | "image.url.data_url";
 };
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 const log = (stage: string, payload: Record<string, unknown>) => {
-  console.log(`[GROK_VIDEO][${stage}]`, JSON.stringify({ providerSource: DEFAULT_GROK_PROVIDER_SOURCE, ...payload }));
+  console.log(`[YUNWU_GROK][${stage}]`, JSON.stringify({ providerSource: DEFAULT_GROK_PROVIDER_SOURCE, ...payload }));
 };
 
 const getBaseUrl = () => (process.env.YUNWU_GROK_VIDEO_BASE_URL || "https://yunwu.ai").replace(/\/$/, "");
-const getModel = () => process.env.YUNWU_GROK_VIDEO_MODEL || "grok-video-3-10s";
+const getTextToVideoModel = () => process.env.YUNWU_GROK_VIDEO_MODEL || "grok-imagine-video";
+const getImageToVideoModel = () => process.env.YUNWU_GROK_IMAGE_TO_VIDEO_MODEL || "grok-imagine-video-1.5-preview";
+const getModel = (hasReferenceImage = false) => (hasReferenceImage ? getImageToVideoModel() : getTextToVideoModel());
 
 const getApiKey = () => {
   const key = process.env.YUNWU_GROK_VIDEO_API_KEY;
@@ -56,13 +62,16 @@ const getApiKey = () => {
 const safeResponsePreview = (value: unknown) => {
   if (!value || typeof value !== "object") return value;
   const source = value as Record<string, unknown>;
+  const video = source.video && typeof source.video === "object" ? (source.video as Record<string, unknown>) : undefined;
   return {
     id: source.id,
+    request_id: source.request_id,
+    task_id: source.task_id,
     status: source.status,
     type: source.type,
     model: source.model,
     progress: source.progress,
-    hasVideoUrl: typeof source.video_url === "string" && source.video_url.length > 0,
+    hasVideoUrl: (typeof source.video_url === "string" && source.video_url.length > 0) || (typeof video?.url === "string" && video.url.length > 0),
     hasThumbnailUrl: typeof source.thumbnail_url === "string" && source.thumbnail_url.length > 0,
     error: source.error,
     status_update_time: source.status_update_time,
@@ -91,47 +100,84 @@ const normalizeStatus = (value: unknown): GrokTaskStatus => {
   if (["succeeded", "success", "completed", "complete", "done"].includes(status)) return "succeeded";
   if (["pending", "queued", "queue", "created"].includes(status)) return "pending";
   if (["running", "processing", "generating", "in_progress"].includes(status)) return "processing";
-  if (["failed", "failure", "error"].includes(status)) return "failed";
+  if (["failed", "failure", "error", "expired"].includes(status)) return "failed";
   if (["cancelled", "canceled"].includes(status)) return "cancelled";
   if (status === "timeout") return "timeout";
   return "unknown";
 };
 
+const asRecord = (value: unknown): Record<string, unknown> | undefined => (value && typeof value === "object" ? (value as Record<string, unknown>) : undefined);
+
+const responseRecords = (json: Record<string, unknown> | null) => {
+  const top = json ?? undefined;
+  const data = asRecord(json?.data);
+  const result = asRecord(json?.result);
+  return [top, data, result].filter(Boolean) as Record<string, unknown>[];
+};
+
+const responseShape = (json: Record<string, unknown> | null): YunwuResponseShape => {
+  const data = asRecord(json?.data);
+  const result = asRecord(json?.result);
+  if (data && (data.status || data.video || data.video_url || data.url || data.output)) return "data";
+  if (result && (result.status || result.video || result.video_url || result.url || result.output)) return "result";
+  if (json) return "top_level";
+  return "unknown";
+};
+
+const extractRawStatus = (json: Record<string, unknown> | null) => {
+  const found = responseRecords(json).map((record) => record.status).find((value) => typeof value === "string" && value.trim().length > 0);
+  return typeof found === "string" ? found : "";
+};
+
 const extractTaskId = (json: Record<string, unknown> | null) => {
-  const candidates = [json?.id, json?.task_id, json?.taskId, (json?.data as Record<string, unknown> | undefined)?.id, (json?.data as Record<string, unknown> | undefined)?.task_id];
+  const data = json?.data as Record<string, unknown> | undefined;
+  const result = json?.result as Record<string, unknown> | undefined;
+  const candidates = [json?.request_id, json?.task_id, json?.taskId, json?.id, data?.request_id, data?.task_id, data?.taskId, data?.id, result?.request_id, result?.task_id, result?.taskId, result?.id];
   const found = candidates.find((value) => typeof value === "string" && value.trim().length > 0);
   return typeof found === "string" ? found : "";
 };
 
 const extractVideoUrl = (json: Record<string, unknown> | null) => {
-  const data = json?.data && typeof json.data === "object" ? (json.data as Record<string, unknown>) : undefined;
-  const output = json?.output && typeof json.output === "object" ? (json.output as Record<string, unknown>) : undefined;
-  const candidates = [
-    json?.video_url,
-    json?.url,
-    json?.content_url,
-    json?.videoUrl,
-    data?.video_url,
-    data?.url,
-    data?.content_url,
-    output?.video_url,
-    output?.url,
-    Array.isArray(json?.videos) ? json?.videos[0] : undefined,
-  ];
+  const candidates = responseRecords(json).flatMap((record) => {
+    const output = asRecord(record.output);
+    const video = asRecord(record.video);
+    const firstVideo = Array.isArray(record.videos) && record.videos[0] && typeof record.videos[0] === "object" ? (record.videos[0] as Record<string, unknown>) : undefined;
+    return [
+      video?.url,
+      video?.video_url,
+      firstVideo?.video_url,
+      firstVideo?.url,
+      record.video_url,
+      record.url,
+      record.content_url,
+      record.videoUrl,
+      output?.video_url,
+      output?.url,
+      typeof record.output === "string" ? record.output : undefined,
+      Array.isArray(record.videos) ? record.videos[0] : undefined,
+    ];
+  });
   const found = candidates.find((value) => typeof value === "string" && /^https?:\/\//i.test(value));
   return typeof found === "string" ? found : "";
 };
 
 const extractCoverUrl = (json: Record<string, unknown> | null) => {
-  const data = json?.data && typeof json.data === "object" ? (json.data as Record<string, unknown>) : undefined;
-  const candidates = [json?.thumbnail_url, json?.cover_url, json?.coverUrl, data?.thumbnail_url, data?.cover_url];
+  const candidates = responseRecords(json).flatMap((record) => [record.thumbnail_url, record.cover_url, record.coverUrl]);
   const found = candidates.find((value) => typeof value === "string" && /^https?:\/\//i.test(value));
   return typeof found === "string" ? found : "";
 };
 
+const extractVideoDuration = (json: Record<string, unknown> | null) => {
+  const candidates = responseRecords(json).flatMap((record) => {
+    const video = asRecord(record.video);
+    return [video?.duration, record.duration];
+  });
+  const found = candidates.find((value) => (typeof value === "number" && Number.isFinite(value)) || (typeof value === "string" && Number.isFinite(Number(value))));
+  return typeof found === "number" ? found : typeof found === "string" ? Number(found) : undefined;
+};
+
 const extractErrorMessage = (json: Record<string, unknown> | null, fallback = "") => {
-  const data = json?.data && typeof json.data === "object" ? (json.data as Record<string, unknown>) : undefined;
-  const value = json?.error || json?.message || data?.error || data?.message || fallback;
+  const value = responseRecords(json).flatMap((record) => [record.error, record.message, record.reason]).find((item) => typeof item === "string" && item.length > 0) || fallback;
   return typeof value === "string" ? value : fallback;
 };
 
@@ -142,11 +188,13 @@ const isNonRetryableError = (message: string) => {
     text.includes("api key") ||
     text.includes("401") ||
     text.includes("403") ||
+    text.includes("status=400") ||
     text.includes("unauthorized") ||
     text.includes("forbidden") ||
     text.includes("invalid parameter") ||
     text.includes("参数错误") ||
     text.includes("参数无效") ||
+    text.includes("参考图读取失败") ||
     text.includes("failed to decode base64 image") ||
     text.includes("illegal base64 data") ||
     text.includes("invalid image base64") ||
@@ -182,6 +230,69 @@ const mimeFromPathOrUrl = (value: string) => {
   return "image/jpeg";
 };
 
+const getConfiguredPublicSiteUrl = () => (process.env.PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_SITE_URL || "").replace(/\/$/, "");
+
+const isLocalDevHost = (hostname: string) => {
+  const normalized = hostname.toLowerCase();
+  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "0.0.0.0" || normalized === "::1" || normalized === "[::1]";
+};
+
+const isPrivateIpv4Host = (hostname: string) => {
+  const parts = hostname.split(".").map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+  const [first, second] = parts;
+  return (
+    first === 10 ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168) ||
+    (first === 169 && second === 254) ||
+    (first === 100 && second >= 64 && second <= 127)
+  );
+};
+
+const isPrivateOrInternalHost = (hostname: string) => {
+  const normalized = hostname.toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
+  return (
+    isLocalDevHost(normalized) ||
+    isPrivateIpv4Host(normalized) ||
+    (normalized.includes(":") && (normalized.startsWith("fc") || normalized.startsWith("fd"))) ||
+    normalized.endsWith(".local") ||
+    normalized.endsWith(".internal") ||
+    normalized.endsWith(".lan") ||
+    !normalized.includes(".")
+  );
+};
+
+const isPublicSiteUrlUsableForYunwu = (siteUrl = getConfiguredPublicSiteUrl()) => {
+  if (!siteUrl) return false;
+  try {
+    const parsed = new URL(siteUrl);
+    return (parsed.protocol === "http:" || parsed.protocol === "https:") && !isPrivateOrInternalHost(parsed.hostname);
+  } catch {
+    return false;
+  }
+};
+
+async function readLocalUploadImageAsDataUrl(source: string): Promise<PreparedGrokImage> {
+  const localSource = await resolveLocalUploadsSource(source);
+  if (!localSource || !localSource.exists) {
+    throw new Error("本地参考图文件不存在");
+  }
+  const bytes = await readFile(localSource.resolvedPath);
+  const mimeType = mimeFromPathOrUrl(localSource.resolvedPath);
+  return { url: `data:${mimeType};base64,${bytes.toString("base64")}`, mimeType, mode: "image.url.data_url" };
+}
+
+async function fetchImageAsDataUrl(source: string): Promise<PreparedGrokImage> {
+  const response = await fetch(source);
+  if (!response.ok) {
+    throw new Error(`参考图服务端读取失败 status=${response.status}`);
+  }
+  const bytes = Buffer.from(await response.arrayBuffer());
+  const mimeType = response.headers.get("content-type")?.split(";")[0]?.trim() || mimeFromPathOrUrl(source);
+  return { url: `data:${mimeType};base64,${bytes.toString("base64")}`, mimeType, mode: "image.url.data_url" };
+}
+
 const stripDataUrl = (value: string) => {
   const match = /^data:([^;,]+);base64,([\s\S]+)$/i.exec(value.trim());
   if (!match) return null;
@@ -206,66 +317,88 @@ async function prepareGrokReferenceImages(images?: string[]): Promise<PreparedGr
       const dataUrl = stripDataUrl(trimmed);
       if (dataUrl) {
         assertBase64Image(dataUrl.base64);
-        prepared.push({ payload: dataUrl.base64, mimeType: dataUrl.mimeType, mode: "images.base64" });
+        prepared.push({ url: `data:${dataUrl.mimeType};base64,${dataUrl.base64}`, mimeType: dataUrl.mimeType, mode: "image.url.data_url" });
+        continue;
+      }
+
+      if (trimmed.startsWith("/api/uploads/")) {
+        const publicSiteUrl = getConfiguredPublicSiteUrl();
+        if (isPublicSiteUrlUsableForYunwu(publicSiteUrl)) {
+          prepared.push({ url: `${publicSiteUrl}${trimmed}`, mimeType: mimeFromPathOrUrl(trimmed), mode: "image.url.public_url" });
+        } else {
+          prepared.push(await readLocalUploadImageAsDataUrl(trimmed));
+        }
+        continue;
+      }
+
+      if (/^https?:\/\//i.test(trimmed)) {
+        let parsedUrl: URL | null = null;
+        try {
+          parsedUrl = new URL(trimmed);
+        } catch {
+          parsedUrl = null;
+        }
+        if (parsedUrl && isPrivateOrInternalHost(parsedUrl.hostname)) {
+          const localUploadSource = await resolveLocalUploadsSource(trimmed);
+          prepared.push(localUploadSource?.exists ? await readLocalUploadImageAsDataUrl(trimmed) : await fetchImageAsDataUrl(trimmed));
+          continue;
+        }
+        prepared.push({ url: trimmed, mimeType: mimeFromPathOrUrl(trimmed), mode: "image.url.public_url" });
         continue;
       }
 
       const localSource = await resolveLocalUploadsSource(trimmed);
       if (localSource) {
-        if (!localSource.exists) {
-          throw new Error("本地参考图文件不存在");
-        }
-        const bytes = await readFile(localSource.resolvedPath);
-        prepared.push({ payload: bytes.toString("base64"), mimeType: mimeFromPathOrUrl(localSource.resolvedPath), mode: "images.base64" });
-        continue;
-      }
-
-      if (/^https?:\/\//i.test(trimmed)) {
-        const response = await fetch(trimmed);
-        if (!response.ok) {
-          throw new Error(`公网参考图下载失败 status=${response.status}`);
-        }
-        const bytes = Buffer.from(await response.arrayBuffer());
-        prepared.push({
-          payload: bytes.toString("base64"),
-          mimeType: response.headers.get("content-type")?.split(";")[0]?.trim() || mimeFromPathOrUrl(trimmed),
-          mode: "images.base64",
-        });
+        prepared.push(await readLocalUploadImageAsDataUrl(trimmed));
         continue;
       }
 
       const rawBase64 = trimmed.replace(/\s+/g, "");
       assertBase64Image(rawBase64);
-      prepared.push({ payload: rawBase64, mimeType: "image/jpeg", mode: "images.base64" });
+      prepared.push({ url: `data:image/jpeg;base64,${rawBase64}`, mimeType: "image/jpeg", mode: "image.url.data_url" });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      throw new Error(`Grok 参考图读取失败：${reason}`);
+      throw new Error(`云雾 Grok 参考图读取失败：${reason}`);
     }
   }
   return prepared;
 }
 
 export async function createGrokVideoTask(params: { prompt: string; ratio: string; images?: PreparedGrokImage[]; attempt?: number }) {
-  const model = getModel();
-  const images = params.images?.map((item) => item.payload) ?? [];
-  const payload = {
+  const image = params.images?.[0];
+  const mode = image ? "image-to-video" : "text-to-video";
+  const model = getModel(Boolean(image));
+  const aspectRatio = params.ratio === "9:16" ? "9:16" : "16:9";
+  const payload: {
+    model: string;
+    prompt: string;
+    resolution: string;
+    aspect_ratio: string;
+    duration: number;
+    image?: { url: string };
+  } = {
     model,
-    prompt: `${params.prompt.trim()} --mode=custom`,
-    aspect_ratio: params.ratio === "9:16" ? "9:16" : "16:9",
-    size: "720P",
-    images,
+    prompt: params.prompt.trim(),
+    resolution: "720p",
+    aspect_ratio: aspectRatio,
+    duration: GROK_UNIT_SECONDS,
   };
+  if (image) {
+    payload.image = { url: image.url };
+  }
   log("CREATE_REQUEST", {
     attempt: params.attempt ?? 1,
-    endpoint: CREATE_PATH,
+    endpoint: `${getBaseUrl()}${CREATE_PATH}`,
     model,
-    ratio: payload.aspect_ratio,
-    size: payload.size,
-    hasReferenceImage: payload.images.length > 0,
-    referenceImageMode: payload.images.length > 0 ? "images.base64" : "none",
-    imagesCount: payload.images.length,
-    imagePayloadPreviewLength: payload.images[0]?.length ?? 0,
-    mimeType: params.images?.[0]?.mimeType || "",
+    mode,
+    duration: payload.duration,
+    resolution: payload.resolution,
+    aspectRatio: payload.aspect_ratio,
+    hasReferenceImage: Boolean(image),
+    referenceImageMode: image?.mode || "none",
+    imageUrlPreview: image?.mode === "image.url.public_url" ? image.url.slice(0, 140) : "",
+    imagePayloadPreviewLength: image?.mode === "image.url.data_url" ? image.url.length : 0,
+    mimeType: image?.mimeType || "",
   });
   const response = await fetch(`${getBaseUrl()}${CREATE_PATH}`, {
     method: "POST",
@@ -273,87 +406,113 @@ export async function createGrokVideoTask(params: { prompt: string; ratio: strin
     body: JSON.stringify(payload),
   });
   const parsed = await parseJsonResponse(response);
-  log("CREATE_RESPONSE", { attempt: params.attempt ?? 1, status: parsed.status, ok: parsed.ok, response: safeResponsePreview(parsed.json) });
+  const taskId = extractTaskId(parsed.json);
+  log("CREATE_RESPONSE", {
+    attempt: params.attempt ?? 1,
+    status: parsed.status,
+    ok: parsed.ok,
+    taskId,
+    requestId: typeof parsed.json?.request_id === "string" ? parsed.json.request_id : "",
+    id: typeof parsed.json?.id === "string" ? parsed.json.id : "",
+    apiModel: model,
+    actualModel: model,
+    rawPreview: safeResponsePreview(parsed.json),
+  });
   if (!parsed.ok) {
     throw new Error(`Grok 创建视频失败 status=${parsed.status} ${extractErrorMessage(parsed.json, parsed.rawText.slice(0, 120))}`);
   }
-  const taskId = extractTaskId(parsed.json);
   if (!taskId) throw new Error("Grok 创建视频失败：未返回 task id");
-  return { taskId, raw: parsed.json };
+  return { taskId, queryMode: "official_videos" as const, raw: parsed.json };
 }
 
-export async function queryGrokVideoTask(taskId: string): Promise<GrokTaskQueryResult> {
-  log("QUERY_REQUEST", { endpoint: QUERY_PATH, taskId });
-  const response = await fetch(`${getBaseUrl()}${QUERY_PATH}?id=${encodeURIComponent(taskId)}`, {
+export async function queryGrokVideoTask(taskId: string, queryMode: YunwuQueryMode = "official_videos"): Promise<GrokTaskQueryResult> {
+  const endpoint = queryMode === "official_videos" ? `/v1/videos/${encodeURIComponent(taskId)}` : `${QUERY_PATH}?id=${encodeURIComponent(taskId)}`;
+  log("QUERY_REQUEST", {
+    endpoint: `${getBaseUrl()}${endpoint}`,
+    requestId: taskId,
+    taskId,
+    queryMode,
+  });
+  const response = await fetch(`${getBaseUrl()}${endpoint}`, {
     method: "GET",
     headers: buildHeaders(),
   });
   const parsed = await parseJsonResponse(response);
-  log("QUERY_RESPONSE", { status: parsed.status, ok: parsed.ok, taskId, response: safeResponsePreview(parsed.json) });
+  const rawStatus = extractRawStatus(parsed.json);
+  const normalizedStatus = normalizeStatus(rawStatus);
+  const videoUrl = extractVideoUrl(parsed.json);
+  const mappedStatus: GrokTaskStatus =
+    normalizedStatus === "unknown" && videoUrl
+      ? "succeeded"
+      : normalizedStatus === "cancelled"
+        ? "failed"
+        : queryMode === "official_videos" && normalizedStatus === "pending"
+          ? "processing"
+          : normalizedStatus;
+  const duration = extractVideoDuration(parsed.json);
+  const mappedStatusLabel = mappedStatus === "succeeded" ? "success" : mappedStatus;
+  log("QUERY_RESPONSE", {
+    requestId: taskId,
+    taskId,
+    rawStatus,
+    status: rawStatus,
+    mappedStatus: mappedStatusLabel,
+    responseShape: responseShape(parsed.json),
+    ok: parsed.ok,
+    httpStatus: parsed.status,
+    hasVideoUrl: Boolean(videoUrl),
+    videoUrlPreview: videoUrl ? videoUrl.slice(0, 140) : "",
+    duration,
+    queryMode,
+    rawPreview: safeResponsePreview(parsed.json),
+  });
   if (!parsed.ok) {
     throw new Error(`Grok 查询任务失败 status=${parsed.status} ${extractErrorMessage(parsed.json, parsed.rawText.slice(0, 120))}`);
   }
-  const rawStatus = String(parsed.json?.status || "");
   return {
     taskId: extractTaskId(parsed.json) || taskId,
-    status: normalizeStatus(rawStatus),
+    status: mappedStatus,
     rawStatus,
-    videoUrl: extractVideoUrl(parsed.json),
+    videoUrl,
     coverUrl: extractCoverUrl(parsed.json),
+    duration,
     errorMessage: extractErrorMessage(parsed.json, ""),
     raw: parsed.json ?? undefined,
   };
 }
 
-export async function extendGrokVideoTask(params: { prompt: string; taskId: string; ratio: string; startTime: number; attempt?: number }) {
-  const model = getModel();
-  const payload = {
-    model,
-    prompt: params.prompt.trim(),
-    task_id: params.taskId,
-    aspect_ratio: params.ratio === "9:16" ? "9:16" : "16:9",
-    size: "720P",
-    start_time: params.startTime,
-    upscale: false,
-  };
-  log("EXTEND_REQUEST", { attempt: params.attempt ?? 1, endpoint: EXTEND_PATH, model, taskId: params.taskId, ratio: payload.aspect_ratio, startTime: payload.start_time });
-  const response = await fetch(`${getBaseUrl()}${EXTEND_PATH}`, {
-    method: "POST",
-    headers: buildHeaders(),
-    body: JSON.stringify(payload),
+export async function extendGrokVideoTask(params: { prompt: string; taskId: string; ratio: string; startTime: number; attempt?: number }): Promise<never> {
+  log("EXTEND_UNSUPPORTED", {
+    reason: YUNWU_OFFICIAL_EXTEND_UNSUPPORTED_MESSAGE,
+    targetDurationSeconds: params.startTime + GROK_UNIT_SECONDS,
+    strategy: "extend",
+    taskId: params.taskId,
   });
-  const parsed = await parseJsonResponse(response);
-  log("EXTEND_RESPONSE", { attempt: params.attempt ?? 1, status: parsed.status, ok: parsed.ok, response: safeResponsePreview(parsed.json) });
-  if (!parsed.ok) {
-    throw new Error(`Grok 扩展视频失败 status=${parsed.status} ${extractErrorMessage(parsed.json, parsed.rawText.slice(0, 120))}`);
-  }
-  const taskId = extractTaskId(parsed.json);
-  if (!taskId) throw new Error("Grok 扩展视频失败：未返回 task id");
-  return { taskId, raw: parsed.json };
+  throw new Error(YUNWU_OFFICIAL_EXTEND_UNSUPPORTED_MESSAGE);
 }
 
-async function queryGrokVideoTaskWithFetchRetry(taskId: string) {
+async function queryGrokVideoTaskWithFetchRetry(taskId: string, queryMode: YunwuQueryMode) {
   for (let attempt = 1; attempt <= QUERY_FETCH_MAX_ATTEMPTS; attempt += 1) {
     try {
-      return await queryGrokVideoTask(taskId);
+      return await queryGrokVideoTask(taskId, queryMode);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       if (!isQueryFetchRetryableError(reason) || attempt === QUERY_FETCH_MAX_ATTEMPTS) {
         throw new Error(reason);
       }
       const delayMs = QUERY_FETCH_BACKOFF_MS[attempt - 1] ?? QUERY_FETCH_BACKOFF_MS[QUERY_FETCH_BACKOFF_MS.length - 1];
-      log("QUERY_RETRY", { taskId, attempt, maxAttempts: QUERY_FETCH_MAX_ATTEMPTS, delayMs, reason });
+      log("QUERY_RETRY", { taskId, queryMode, attempt, maxAttempts: QUERY_FETCH_MAX_ATTEMPTS, delayMs, reason });
       await delay(delayMs);
     }
   }
   throw new Error(`Grok 查询任务失败，taskId=${taskId}`);
 }
 
-async function waitForGrokTask(taskId: string): Promise<GrokTaskQueryResult> {
+async function waitForGrokTask(taskId: string, queryMode: YunwuQueryMode): Promise<GrokTaskQueryResult> {
   const pollIntervalMs = Math.max(1000, Number(process.env.YUNWU_GROK_VIDEO_POLL_INTERVAL_MS || 5000));
   const maxPoll = Math.max(1, Number(process.env.YUNWU_GROK_VIDEO_POLL_MAX_ATTEMPTS || 120));
   for (let pollCount = 1; pollCount <= maxPoll; pollCount += 1) {
-    const result = await queryGrokVideoTaskWithFetchRetry(taskId);
+    const result = await queryGrokVideoTaskWithFetchRetry(taskId, queryMode);
     if (result.status === "succeeded") {
       if (result.videoUrl) return result;
       throw new Error(`Grok 任务已完成但未返回 video_url，taskId=${taskId}`);
@@ -362,7 +521,7 @@ async function waitForGrokTask(taskId: string): Promise<GrokTaskQueryResult> {
       throw new Error(result.errorMessage || `Grok 任务失败，status=${result.rawStatus || result.status}`);
     }
     if (result.status === "unknown") {
-      log("QUERY_RESPONSE", { taskId, pollCount, unknownStatus: result.rawStatus, decision: "continue_polling" });
+      log("QUERY_RESPONSE", { taskId, queryMode, pollCount, unknownStatus: result.rawStatus, decision: "continue_polling" });
     }
     await delay(pollIntervalMs);
   }
@@ -392,7 +551,7 @@ async function runStepWithRetry(params: {
               attempt,
             });
       lastTaskId = created.taskId;
-      const result = await waitForGrokTask(created.taskId);
+      const result = await waitForGrokTask(created.taskId, created.queryMode);
       return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -414,6 +573,25 @@ export async function runYunwuGrokVideoWithExtensions(params: GrokVideoWithExten
   const segmentVideoUrls: string[] = [];
   const segmentCoverUrls: string[] = [];
   let successfulUnits = 0;
+  if (params.extensionPrompts.length > 0) {
+    log("EXTEND_UNSUPPORTED", {
+      reason: YUNWU_OFFICIAL_EXTEND_UNSUPPORTED_MESSAGE,
+      targetDurationSeconds: params.targetDurationSeconds,
+      strategy: "extend",
+    });
+    return {
+      ok: false,
+      providerSource: DEFAULT_GROK_PROVIDER_SOURCE,
+      providerTaskIds,
+      segmentVideoUrls,
+      segmentCoverUrls,
+      isFinalVideoLikelyComplete: false,
+      durationSeconds: params.targetDurationSeconds,
+      successfulUnits,
+      failedUnits: Math.max(1, Math.ceil(params.targetDurationSeconds / GROK_UNIT_SECONDS)),
+      error: YUNWU_OFFICIAL_EXTEND_UNSUPPORTED_MESSAGE,
+    };
+  }
   try {
     const baseImages = await prepareGrokReferenceImages(params.referenceImages);
     const baseResult = await runStepWithRetry({
@@ -428,23 +606,7 @@ export async function runYunwuGrokVideoWithExtensions(params: GrokVideoWithExten
     if (baseResult.coverUrl) segmentCoverUrls.push(baseResult.coverUrl);
     successfulUnits += 1;
 
-    let previousTaskId = baseResult.taskId;
     let finalResult = baseResult;
-    for (let index = 0; index < params.extensionPrompts.length; index += 1) {
-      const extensionResult = await runStepWithRetry({
-        stage: "extend",
-        prompt: params.extensionPrompts[index],
-        ratio: params.ratio,
-        previousTaskId,
-        startTime: (index + 1) * GROK_UNIT_SECONDS,
-      });
-      providerTaskIds.push(extensionResult.taskId);
-      if (extensionResult.videoUrl) segmentVideoUrls.push(extensionResult.videoUrl);
-      if (extensionResult.coverUrl) segmentCoverUrls.push(extensionResult.coverUrl);
-      successfulUnits += 1;
-      previousTaskId = extensionResult.taskId;
-      finalResult = extensionResult;
-    }
 
     const finalVideoUrl = finalResult.videoUrl || segmentVideoUrls[segmentVideoUrls.length - 1] || "";
     const finalCoverUrl = finalResult.coverUrl || segmentCoverUrls[segmentCoverUrls.length - 1] || "";

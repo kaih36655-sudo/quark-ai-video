@@ -1652,7 +1652,9 @@ export default function Home() {
             : normalizeGrokProviderSource(modelConfig.normalVideo.grokProviderSource) || "yunwu"
       : undefined;
   const isJiekouGrokProvider = currentGrokProviderSource === "jiekou";
-  const effectiveMediumVideoStrategy: "extend" | "stitch" = isGrokMediumVideo && isJiekouGrokProvider ? "stitch" : mediumVideoStrategy;
+  const isYunwuGrokProvider = currentGrokProviderSource === "yunwu";
+  const isGrokProviderForcedStitch = isJiekouGrokProvider || isYunwuGrokProvider;
+  const effectiveMediumVideoStrategy: "extend" | "stitch" = isGrokMediumVideo && isGrokProviderForcedStitch ? "stitch" : mediumVideoStrategy;
   const currentVideoDurationOptions = currentVideoProvider === "grok" ? GROK_VIDEO_DURATIONS : SORA_VIDEO_DURATIONS;
   const modeLabel =
     isRemixMode
@@ -1704,10 +1706,10 @@ export default function Home() {
 
   useEffect(() => {
     if (!mounted) return;
-    if (isGrokMediumVideo && isJiekouGrokProvider && mediumVideoStrategy !== "stitch") {
+    if (isGrokMediumVideo && isGrokProviderForcedStitch && mediumVideoStrategy !== "stitch") {
       setMediumVideoStrategy("stitch");
     }
-  }, [isGrokMediumVideo, isJiekouGrokProvider, mediumVideoStrategy, mounted]);
+  }, [isGrokMediumVideo, isGrokProviderForcedStitch, mediumVideoStrategy, mounted]);
 
   const makeTaskId = (taskId: number) => `TASK-${String(taskId).padStart(3, "0")}`;
   const agentSearchKeyword = agentSearch.trim().toLowerCase();
@@ -2905,8 +2907,8 @@ export default function Home() {
                             <div className={isDark ? "mb-2 text-xs font-medium text-gray-400" : "mb-2 text-xs font-medium text-gray-500"}>Grok 生成方式</div>
                             <div className="flex flex-wrap gap-2">
                               {[
-                                { label: isJiekouGrokProvider ? "分段拼接（接口AI）" : currentGrokProviderSource === "xai" ? "分段拼接（xAI）" : "分段拼接（推荐）", value: "stitch" },
-                                ...(isJiekouGrokProvider ? [] : [{ label: "扩展视频（实验，不稳定）", value: "extend" }]),
+                                { label: isJiekouGrokProvider ? "分段拼接（接口AI）" : isYunwuGrokProvider ? "分段拼接（云雾）" : currentGrokProviderSource === "xai" ? "分段拼接（xAI）" : "分段拼接（推荐）", value: "stitch" },
+                                ...(isGrokProviderForcedStitch ? [] : [{ label: "扩展视频（实验，不稳定）", value: "extend" }]),
                               ].map((item) => (
                                 <button key={item.value} onClick={() => setMediumVideoStrategy(item.value as "extend" | "stitch")} className={`rounded-full px-4 py-2 text-sm transition ${pillClass(effectiveMediumVideoStrategy === item.value)}`}>
                                   {item.label}
@@ -2920,6 +2922,8 @@ export default function Home() {
                             ? "当前中视频模型：Sora2。Sora2 每段 12 秒，将按片段顺序生成；当前后端暂标记为实验/待恢复。"
                             : isJiekouGrokProvider
                               ? "当前中视频模型：Grok · 接口AI。接口AI 暂不支持扩展视频，自动使用分段拼接。"
+                              : isYunwuGrokProvider
+                                ? "当前中视频模型：Grok · 云雾 API。云雾官方接口暂不支持扩展视频，自动使用分段拼接。"
                               : currentGrokProviderSource === "xai"
                                 ? "当前中视频模型：Grok · xAI 官方。分段拼接可用；扩展视频为实验能力。"
                                 : "当前中视频模型：Grok。默认使用分段拼接；扩展视频为实验能力，上游负载大时可能失败。"}
