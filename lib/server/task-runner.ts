@@ -706,6 +706,8 @@ async function executeTask(taskId: string) {
   if (!running || running.status === "cancelled") return;
 
   const agent = task.agentId ? await getManagedAgentById(task.agentId) : null;
+  const hasAppliedAgent = Boolean(task.agentId || agent || (task.mode === "agent" && task.agentName) || (task.mode === "medium_video" && task.agentId));
+  const grokAgentConstraints = hasAppliedAgent ? task.promptSnapshot : undefined;
   const effectivePrompt = task.promptSnapshot || task.prompt;
   const unitPrice = task.mode === "medium_video" ? await getMediumVideoUnitPrice(10) : await getUnitPrice(task);
   let successCount = 0;
@@ -1182,11 +1184,12 @@ async function executeTask(taskId: string) {
 
       const plan = await generateGrokMediumVideoPlan({
         taskId: task.id,
-        theme: effectivePrompt,
+        theme: task.prompt,
         targetDurationSeconds,
         ratio: targetRatio,
         agentName: task.agentName,
         agentDescription: agent?.description,
+        agentConstraints: grokAgentConstraints,
       });
       mediumVideoLog("GROK_PLAN_CREATED", {
         taskId: task.id,
@@ -1736,11 +1739,12 @@ async function executeTask(taskId: string) {
         }
         const plan = await generateGrokMediumVideoPlan({
           taskId: task.id,
-          theme: effectivePrompt,
+          theme: task.prompt,
           targetDurationSeconds,
           ratio: targetRatio,
           agentName: task.agentName,
           agentDescription: agent?.description,
+          agentConstraints: grokAgentConstraints,
         });
         runnerLog("GROK_SCRIPT_READY", {
           taskId: task.id,

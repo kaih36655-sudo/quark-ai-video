@@ -50,6 +50,11 @@ const getBaseUrl = () => (process.env.YUNWU_GROK_VIDEO_BASE_URL || "https://yunw
 const getTextToVideoModel = () => process.env.YUNWU_GROK_VIDEO_MODEL || "grok-imagine-video";
 const getImageToVideoModel = () => process.env.YUNWU_GROK_IMAGE_TO_VIDEO_MODEL || "grok-imagine-video-1.5-preview";
 const getModel = (hasReferenceImage = false) => (hasReferenceImage ? getImageToVideoModel() : getTextToVideoModel());
+const getPromptMaxBytes = (mode: "text-to-video" | "image-to-video") => {
+  const configured = Number(process.env.YUNWU_GROK_PROMPT_MAX_BYTES || 0);
+  if (Number.isFinite(configured) && configured > 0) return configured;
+  return mode === "image-to-video" ? 2800 : 3500;
+};
 
 const getApiKey = () => {
   const key = process.env.YUNWU_GROK_VIDEO_API_KEY;
@@ -94,6 +99,352 @@ const buildHeaders = () => ({
   "Content-Type": "application/json",
   Accept: "application/json",
 });
+
+const truncateUtf8Text = (value: string, maxBytes: number) => {
+  let result = "";
+  let bytes = 0;
+  for (const char of Array.from(value)) {
+    const charBytes = Buffer.byteLength(char, "utf8");
+    if (bytes + charBytes > maxBytes) break;
+    result += char;
+    bytes += charBytes;
+  }
+  return result.trim();
+};
+
+const extractPromptValue = (prompt: string, label: string) => {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`${escaped}[:：]([^\\n]+)`).exec(prompt);
+  return match?.[1]?.trim() || "";
+};
+
+const findPromptLine = (lines: string[], prefix: string) => lines.find((line) => line.startsWith(`${prefix}：`) || line.startsWith(`${prefix}:`)) || "";
+
+const compactPromptLine = (lines: string[], prefix: string, maxBytes: number) => {
+  const line = findPromptLine(lines, prefix);
+  if (!line) return "";
+  return truncateUtf8Text(line, maxBytes);
+};
+
+const extractAgentConstraintsFromPrompt = (prompt: string) => {
+  const marker = /智能体约束\s*[:：]/.exec(prompt);
+  if (!marker || marker.index === undefined) return "";
+  const start = marker.index + marker[0].length;
+  const rest = prompt.slice(start);
+  const nextLabelPattern =
+    /(?:\n|\r|。|；|;)\s*(?:全片主题|用户主题|当前段|当前段任务|storyBeat|visualAction|voiceoverPart|continuityIn|continuityOut|mustNotRepeat|连续性要求|基础约束|硬性要求)\s*[:：]/;
+  const nextLabel = nextLabelPattern.exec(rest);
+  const value = rest.slice(0, nextLabel?.index ?? rest.length).replace(/\s+/g, " ").trim();
+  return value ? `智能体约束：${value}` : "";
+};
+
+const getAgentConstraintFlags = (value: string) => ({
+  hasPositiveConstraints: /正向约束\s*[:：]/.test(value),
+  hasNegativeConstraints: /负面约束\s*[:：]/.test(value),
+});
+
+const extractConstraintSection = (value: string, label: "正向约束" | "负面约束") => {
+  const otherLabel = label === "正向约束" ? "负面约束" : "正向约束";
+  const match = new RegExp(`${label}\\s*[:：]([\\s\\S]*?)(?=${otherLabel}\\s*[:：]|$)`).exec(value);
+  return match?.[1]?.replace(/\s+/g, " ").replace(/[。；;\s]+$/g, "").trim() || "";
+};
+
+const buildCompactAgentConstraintLine = (constraints: string, maxBytes: number) => {
+  if (!constraints || maxBytes < 80) return "";
+  const positive = extractConstraintSection(constraints, "正向约束");
+  const negative = extractConstraintSection(constraints, "负面约束");
+  const parts: string[] = [];
+  const halfBudget = Math.max(60, Math.floor((maxBytes - Buffer.byteLength("智能体约束：", "utf8")) / 2));
+  if (positive) parts.push(`正向约束：${truncateUtf8Text(positive, halfBudget)}`);
+  if (negative) parts.push(`负面约束：${truncateUtf8Text(negative, halfBudget)}`);
+  const line = parts.length ? `智能体约束：${parts.join("；")}` : truncateUtf8Text(constraints, maxBytes);
+  return truncateUtf8Text(line, maxBytes);
+};
+
+const validateAgentConstraintsPreservation = (before: string, afterPrompt: string) => {
+  if (!before) {
+    return {
+      preservationStatus: "none" as const,
+      hasAgentConstraintsAfterCompact: false,
+      agentConstraintsFinalBytes: 0,
+      hasPositiveConstraintsAfterCompact: false,
+      hasNegativeConstraintsAfterCompact: false,
+    };
+  }
+  const after = extractAgentConstraintsFromPrompt(afterPrompt);
+  const beforeFlags = getAgentConstraintFlags(before);
+  const afterFlags = getAgentConstraintFlags(after);
+  const hasAgentConstraintsAfterCompact = Boolean(after);
+  const lostPositive = beforeFlags.hasPositiveConstraints && !afterFlags.hasPositiveConstraints;
+  const lostNegative = beforeFlags.hasNegativeConstraints && !afterFlags.hasNegativeConstraints;
+  const preservationStatus = !hasAgentConstraintsAfterCompact ? "omitted_due_to_budget" : lostPositive || lostNegative ? "partial" : "full";
+  return {
+    preservationStatus,
+    hasAgentConstraintsAfterCompact,
+    agentConstraintsFinalBytes: Buffer.byteLength(after, "utf8"),
+    hasPositiveConstraintsAfterCompact: afterFlags.hasPositiveConstraints,
+    hasNegativeConstraintsAfterCompact: afterFlags.hasNegativeConstraints,
+  };
+};
+
+const logAgentConstraintCompaction = (result: ReturnType<typeof validateAgentConstraintsPreservation>, originalBytes: number, flags: ReturnType<typeof getAgentConstraintFlags>) => {
+  if (result.preservationStatus !== "partial" && result.preservationStatus !== "omitted_due_to_budget") return;
+  log("AGENT_CONSTRAINTS_COMPACTED", {
+    preservationStatus: result.preservationStatus,
+    originalBytes,
+    finalBytes: result.agentConstraintsFinalBytes,
+    hadPositiveConstraints: flags.hasPositiveConstraints,
+    hadNegativeConstraints: flags.hasNegativeConstraints,
+    hasPositiveConstraintsAfterCompact: result.hasPositiveConstraintsAfterCompact,
+    hasNegativeConstraintsAfterCompact: result.hasNegativeConstraintsAfterCompact,
+  });
+};
+
+type StitchContinuationSource = "硬性要求" | "连续性要求" | "continuity_fields" | "none";
+
+const TAIL_REFERENCE_PATTERN = /(上一段(?:视频)?的?最后可用非黑帧|上一段(?:视频)?的?最后一帧|上一段尾帧|上一段最后画面|上一段最后的画面|本段输入参考图|输入参考图|参考图)/;
+const TAIL_CONTINUATION_PATTERN = /(从该画面状态|从该状态|无缝继续|直接继续|立即继续|立即延续|延续上一帧|延续上一段|不要重复上一段|不要重新开头|不要重新开始|不要回到更早)/;
+
+const hasStitchContinuationInstruction = (value: string) => TAIL_REFERENCE_PATTERN.test(value) && TAIL_CONTINUATION_PATTERN.test(value);
+
+const compactStitchContinuationInstruction = (value: string) => {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  return truncateUtf8Text(
+    `连续性硬性要求：参考图是上一段最后可用非黑帧，从该画面状态立即继续，不重复上一段动作，不重新开头，不回到更早状态。${normalized.includes("0.0") ? "0.0 秒立即延续动作。" : ""}`,
+    360
+  );
+};
+
+const extractStitchContinuationInstruction = (prompt: string): { instruction: string; source: StitchContinuationSource } => {
+  const lines = prompt.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const labeledCandidates: Array<{ source: StitchContinuationSource; line: string }> = [];
+  lines.forEach((line) => {
+    if (/^硬性要求\s*[:：]/.test(line)) labeledCandidates.push({ source: "硬性要求", line });
+    if (/^连续性要求\s*[:：]/.test(line)) labeledCandidates.push({ source: "连续性要求", line });
+  });
+  for (const candidate of labeledCandidates) {
+    if (hasStitchContinuationInstruction(candidate.line)) {
+      return { instruction: compactStitchContinuationInstruction(candidate.line), source: candidate.source };
+    }
+  }
+
+  const continuityFields = lines.filter((line) => /^(continuityIn|continuityOut)\s*[:：]/i.test(line)).join("；");
+  const hardRequirement = lines.find((line) => /^硬性要求\s*[:：]/.test(line)) || "";
+  const combinedContinuity = [continuityFields, hardRequirement].filter(Boolean).join("；");
+  if (hasStitchContinuationInstruction(combinedContinuity)) {
+    return { instruction: compactStitchContinuationInstruction(combinedContinuity), source: "continuity_fields" };
+  }
+  return { instruction: "", source: "none" };
+};
+
+const getYunwuPromptCorePresence = (prompt: string) => ({
+  hasStoryBeat: /storyBeat[:：]\s*\S/.test(prompt),
+  hasVisualAction: /visualAction[:：]\s*\S/.test(prompt),
+  hasVoiceoverPart: /voiceoverPart[:：]\s*\S/.test(prompt),
+});
+
+const assertCompactedYunwuPrompt = (prompt: string) => {
+  const presence = getYunwuPromptCorePresence(prompt);
+  if (!presence.hasStoryBeat || !presence.hasVisualAction || !presence.hasVoiceoverPart) {
+    throw new Error("云雾 Grok 分段提示词压缩失败：缺少当前段核心内容");
+  }
+  return presence;
+};
+
+const compactPromptForYunwu = (prompt: string, mode: "text-to-video" | "image-to-video") => {
+  const maxBytes = getPromptMaxBytes(mode);
+  const originalBytes = Buffer.byteLength(prompt, "utf8");
+  const userTheme = extractPromptValue(prompt, "全片主题");
+  const originalCore = getYunwuPromptCorePresence(prompt);
+  const hasCompleteStructuredSegment = originalCore.hasStoryBeat && originalCore.hasVisualAction && originalCore.hasVoiceoverPart;
+  const stitchContinuation = extractStitchContinuationInstruction(prompt);
+  const stitchContinuationInstruction = stitchContinuation.instruction;
+  const stitchContinuationSource = stitchContinuation.source;
+  const hadStitchContinuationInstruction = Boolean(stitchContinuationInstruction);
+  const agentConstraints = extractAgentConstraintsFromPrompt(prompt);
+  const hadAgentConstraints = Boolean(agentConstraints);
+  const agentConstraintFlags = getAgentConstraintFlags(agentConstraints);
+  const agentConstraintsOriginalBytes = Buffer.byteLength(agentConstraints, "utf8");
+  if (originalBytes <= maxBytes) {
+    const agentConstraintResult = validateAgentConstraintsPreservation(agentConstraints, prompt);
+    logAgentConstraintCompaction(agentConstraintResult, agentConstraintsOriginalBytes, agentConstraintFlags);
+    log("PROMPT_COMPACTED", {
+      originalBytes,
+      finalBytes: originalBytes,
+      maxBytes,
+      wasCompacted: false,
+      promptShape: hasCompleteStructuredSegment ? "structured_segment" : "plain",
+      hasUserTheme: Boolean(userTheme),
+      userThemePreview: userTheme.slice(0, 120),
+      hasStoryBeat: originalCore.hasStoryBeat,
+      hasVisualAction: originalCore.hasVisualAction,
+      hasVoiceoverPart: originalCore.hasVoiceoverPart,
+      hasCompleteStructuredSegment,
+      hadStitchContinuationInstruction,
+      hasStitchContinuationInstructionAfterCompact: hadStitchContinuationInstruction ? hasStitchContinuationInstruction(prompt) : false,
+      stitchContinuationSource,
+      stitchContinuationOriginalBytes: Buffer.byteLength(stitchContinuationInstruction, "utf8"),
+      stitchContinuationFinalBytes: hadStitchContinuationInstruction ? Buffer.byteLength(stitchContinuationInstruction, "utf8") : 0,
+      hadAgentConstraints,
+      hasAgentConstraintsAfterCompact: agentConstraintResult.hasAgentConstraintsAfterCompact,
+      agentConstraintsPreservationStatus: agentConstraintResult.preservationStatus,
+      agentConstraintsOriginalBytes,
+      agentConstraintsFinalBytes: agentConstraintResult.agentConstraintsFinalBytes,
+      hadPositiveConstraints: agentConstraintFlags.hasPositiveConstraints,
+      hadNegativeConstraints: agentConstraintFlags.hasNegativeConstraints,
+      hasPositiveConstraintsAfterCompact: agentConstraintResult.hasPositiveConstraintsAfterCompact,
+      hasNegativeConstraintsAfterCompact: agentConstraintResult.hasNegativeConstraintsAfterCompact,
+      includedFullTheme: Boolean(extractPromptValue(prompt, "全片主题")),
+      includedCurrentSegmentTask: Boolean(extractPromptValue(prompt, "当前段任务")),
+    });
+    return prompt;
+  }
+
+  const lines = prompt.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (!hasCompleteStructuredSegment) {
+    const fallbackSuffix = "\n硬性限制：不要字幕、水印、Logo。";
+    const compactAgentConstraintLine = buildCompactAgentConstraintLine(agentConstraints, Math.max(180, Math.floor(maxBytes * 0.3)));
+    const suffixLines = [
+      compactAgentConstraintLine,
+      hadStitchContinuationInstruction ? truncateUtf8Text(stitchContinuationInstruction, Math.max(120, Math.floor(maxBytes * 0.3))) : "",
+      fallbackSuffix.trim(),
+    ].filter(Boolean);
+    const suffix = `\n${suffixLines.join("\n")}`;
+    const compacted = `${truncateUtf8Text(prompt, Math.max(0, maxBytes - Buffer.byteLength(suffix, "utf8")))}${suffix}`;
+    const hasStitchContinuationInstructionAfterCompact = hadStitchContinuationInstruction ? hasStitchContinuationInstruction(compacted) : false;
+    if (hadStitchContinuationInstruction && !hasStitchContinuationInstructionAfterCompact) {
+      throw new Error("云雾 Grok 分段提示词压缩失败：缺少尾帧连续性指令");
+    }
+    const agentConstraintResult = validateAgentConstraintsPreservation(agentConstraints, compacted);
+    logAgentConstraintCompaction(agentConstraintResult, agentConstraintsOriginalBytes, agentConstraintFlags);
+    log("PROMPT_COMPACTED", {
+      originalBytes,
+      finalBytes: Buffer.byteLength(compacted, "utf8"),
+      maxBytes,
+      wasCompacted: true,
+      promptShape: "plain",
+      hasUserTheme: Boolean(userTheme),
+      userThemePreview: userTheme.slice(0, 120),
+      hasStoryBeat: originalCore.hasStoryBeat,
+      hasVisualAction: originalCore.hasVisualAction,
+      hasVoiceoverPart: originalCore.hasVoiceoverPart,
+      hasCompleteStructuredSegment,
+      hadStitchContinuationInstruction,
+      hasStitchContinuationInstructionAfterCompact,
+      stitchContinuationSource,
+      stitchContinuationOriginalBytes: Buffer.byteLength(stitchContinuationInstruction, "utf8"),
+      stitchContinuationFinalBytes: hasStitchContinuationInstructionAfterCompact ? Buffer.byteLength(stitchContinuationInstruction, "utf8") : 0,
+      hadAgentConstraints,
+      hasAgentConstraintsAfterCompact: agentConstraintResult.hasAgentConstraintsAfterCompact,
+      agentConstraintsPreservationStatus: agentConstraintResult.preservationStatus,
+      agentConstraintsOriginalBytes,
+      agentConstraintsFinalBytes: agentConstraintResult.agentConstraintsFinalBytes,
+      hadPositiveConstraints: agentConstraintFlags.hasPositiveConstraints,
+      hadNegativeConstraints: agentConstraintFlags.hasNegativeConstraints,
+      hasPositiveConstraintsAfterCompact: agentConstraintResult.hasPositiveConstraintsAfterCompact,
+      hasNegativeConstraintsAfterCompact: agentConstraintResult.hasNegativeConstraintsAfterCompact,
+      includedFullTheme: Boolean(extractPromptValue(compacted, "全片主题")),
+      includedCurrentSegmentTask: Boolean(extractPromptValue(compacted, "当前段任务")),
+    });
+    return compacted;
+  }
+  const coreLines = [
+    compactPromptLine(lines, "当前段", 220),
+    stitchContinuationInstruction,
+    compactPromptLine(lines, "storyBeat", 520),
+    compactPromptLine(lines, "visualAction", 520),
+    compactPromptLine(lines, "voiceoverPart", 620),
+    compactPromptLine(lines, "continuityIn", 260),
+    compactPromptLine(lines, "continuityOut", 260),
+    compactPromptLine(lines, "mustNotRepeat", 260),
+    compactPromptLine(lines, "连续性要求", 420),
+    compactPromptLine(lines, "基础约束", 240),
+    "硬性限制：不要字幕、水印、Logo；保留当前段剧情、画面动作和口播；不要朗读内部提示字段。",
+  ].filter(Boolean);
+  const compactedAgentConstraintLine = buildCompactAgentConstraintLine(agentConstraints, 420);
+  const optionalLines = [
+    { key: "agentConstraints", line: compactedAgentConstraintLine },
+    { key: "fullTheme", line: compactPromptLine(lines, "全片主题", 260) },
+    { key: "currentSegmentTask", line: compactPromptLine(lines, "当前段任务", 120) },
+  ].filter((item) => Boolean(item.line));
+  const compactedLines = [...coreLines];
+  const omittedOptionalFields: string[] = [];
+  for (const item of optionalLines) {
+    const next = [...compactedLines, item.line].join("\n");
+    if (Buffer.byteLength(next, "utf8") <= maxBytes) {
+      compactedLines.push(item.line);
+    } else {
+      omittedOptionalFields.push(item.key);
+    }
+  }
+  let compacted = compactedLines.join("\n");
+  if (Buffer.byteLength(compacted, "utf8") > maxBytes) {
+    omittedOptionalFields.push("fullTheme", "currentSegmentTask");
+    const smallerCoreLines = [
+      compactPromptLine(lines, "当前段", 180),
+      stitchContinuationInstruction,
+      compactPromptLine(lines, "storyBeat", 360),
+      compactPromptLine(lines, "visualAction", 360),
+      compactPromptLine(lines, "voiceoverPart", 420),
+      compactPromptLine(lines, "continuityIn", 180),
+      compactPromptLine(lines, "continuityOut", 180),
+      compactPromptLine(lines, "mustNotRepeat", 180),
+      buildCompactAgentConstraintLine(agentConstraints, 320),
+      "硬性限制：不要字幕、水印、Logo；不要重复上一段；不要重新开头。",
+    ].filter(Boolean);
+    compacted = smallerCoreLines.join("\n");
+  }
+  if (Buffer.byteLength(compacted, "utf8") > maxBytes) {
+    throw new Error("云雾 Grok 分段提示词压缩失败：缺少当前段核心内容");
+  }
+  const compactedCore = assertCompactedYunwuPrompt(compacted);
+  const hasStitchContinuationInstructionAfterCompact = hadStitchContinuationInstruction ? hasStitchContinuationInstruction(compacted) : false;
+  if (hadStitchContinuationInstruction && !hasStitchContinuationInstructionAfterCompact) {
+    throw new Error("云雾 Grok 分段提示词压缩失败：缺少尾帧连续性指令");
+  }
+  const agentConstraintResult = validateAgentConstraintsPreservation(agentConstraints, compacted);
+  logAgentConstraintCompaction(agentConstraintResult, agentConstraintsOriginalBytes, agentConstraintFlags);
+  const includedFullTheme = Boolean(compactPromptLine(compacted.split(/\r?\n/).map((line) => line.trim()).filter(Boolean), "全片主题", 40));
+  const includedCurrentSegmentTask = Boolean(compactPromptLine(compacted.split(/\r?\n/).map((line) => line.trim()).filter(Boolean), "当前段任务", 40));
+  if (omittedOptionalFields.length > 0) {
+    log("OPTIONAL_PROMPT_FIELDS_OMITTED", {
+      omittedFields: Array.from(new Set(omittedOptionalFields)),
+      reason: "preserve_agent_constraints",
+      remainingBytes: Math.max(0, maxBytes - Buffer.byteLength(compacted, "utf8")),
+    });
+  }
+  log("PROMPT_COMPACTED", {
+    originalBytes,
+    finalBytes: Buffer.byteLength(compacted, "utf8"),
+    maxBytes,
+    wasCompacted: true,
+    promptShape: "structured_segment",
+    hasUserTheme: Boolean(userTheme),
+    userThemePreview: userTheme.slice(0, 120),
+    hasStoryBeat: compactedCore.hasStoryBeat,
+    hasVisualAction: compactedCore.hasVisualAction,
+    hasVoiceoverPart: compactedCore.hasVoiceoverPart,
+    hasCompleteStructuredSegment: true,
+    hadStitchContinuationInstruction,
+    hasStitchContinuationInstructionAfterCompact,
+    stitchContinuationSource,
+    stitchContinuationOriginalBytes: Buffer.byteLength(stitchContinuationInstruction, "utf8"),
+    stitchContinuationFinalBytes: hasStitchContinuationInstructionAfterCompact ? Buffer.byteLength(stitchContinuationInstruction, "utf8") : 0,
+    hadAgentConstraints,
+    hasAgentConstraintsAfterCompact: agentConstraintResult.hasAgentConstraintsAfterCompact,
+    agentConstraintsPreservationStatus: agentConstraintResult.preservationStatus,
+    agentConstraintsOriginalBytes,
+    agentConstraintsFinalBytes: agentConstraintResult.agentConstraintsFinalBytes,
+    hadPositiveConstraints: agentConstraintFlags.hasPositiveConstraints,
+    hadNegativeConstraints: agentConstraintFlags.hasNegativeConstraints,
+    hasPositiveConstraintsAfterCompact: agentConstraintResult.hasPositiveConstraintsAfterCompact,
+    hasNegativeConstraintsAfterCompact: agentConstraintResult.hasNegativeConstraintsAfterCompact,
+    includedFullTheme,
+    includedCurrentSegmentTask,
+  });
+  return compacted;
+};
 
 const normalizeStatus = (value: unknown): GrokTaskStatus => {
   const status = String(value || "").toLowerCase();
@@ -368,6 +719,7 @@ export async function createGrokVideoTask(params: { prompt: string; ratio: strin
   const image = params.images?.[0];
   const mode = image ? "image-to-video" : "text-to-video";
   const model = getModel(Boolean(image));
+  const prompt = compactPromptForYunwu(params.prompt.trim(), mode);
   const aspectRatio = params.ratio === "9:16" ? "9:16" : "16:9";
   const payload: {
     model: string;
@@ -378,7 +730,7 @@ export async function createGrokVideoTask(params: { prompt: string; ratio: strin
     image?: { url: string };
   } = {
     model,
-    prompt: params.prompt.trim(),
+    prompt,
     resolution: "720p",
     aspect_ratio: aspectRatio,
     duration: GROK_UNIT_SECONDS,
@@ -391,6 +743,7 @@ export async function createGrokVideoTask(params: { prompt: string; ratio: strin
     endpoint: `${getBaseUrl()}${CREATE_PATH}`,
     model,
     mode,
+    promptBytes: Buffer.byteLength(prompt, "utf8"),
     duration: payload.duration,
     resolution: payload.resolution,
     aspectRatio: payload.aspect_ratio,
@@ -606,7 +959,7 @@ export async function runYunwuGrokVideoWithExtensions(params: GrokVideoWithExten
     if (baseResult.coverUrl) segmentCoverUrls.push(baseResult.coverUrl);
     successfulUnits += 1;
 
-    let finalResult = baseResult;
+    const finalResult = baseResult;
 
     const finalVideoUrl = finalResult.videoUrl || segmentVideoUrls[segmentVideoUrls.length - 1] || "";
     const finalCoverUrl = finalResult.coverUrl || segmentCoverUrls[segmentCoverUrls.length - 1] || "";
