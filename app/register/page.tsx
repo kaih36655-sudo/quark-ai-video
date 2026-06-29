@@ -36,7 +36,7 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-gradient-to-b from-slate-50 via-white to-indigo-50 text-black">
+    <div className="relative flex min-h-screen flex-col overflow-hidden bg-gradient-to-b from-slate-50 via-white to-indigo-50 text-black">
       <div className="pointer-events-none absolute left-[-8rem] top-[-10rem] h-96 w-96 rounded-full bg-indigo-200/70 blur-3xl" />
       <div className="pointer-events-none absolute right-[-8rem] top-24 h-96 w-96 rounded-full bg-sky-200/70 blur-3xl" />
       <div className="relative z-10 flex items-center justify-between border-b border-white/70 bg-white/70 px-6 py-4 shadow-sm backdrop-blur-xl sm:px-8 lg:px-10">
@@ -56,7 +56,7 @@ export default function RegisterPage() {
         </Link>
       </div>
 
-      <div className="relative z-10 flex min-h-[calc(100vh-73px)] items-center justify-center px-4 py-10">
+      <div className="relative z-10 flex flex-1 items-center justify-center px-4 py-10">
         <div className="w-full max-w-md rounded-3xl border border-white/80 bg-white/82 p-6 shadow-[0_24px_80px_rgba(79,70,229,0.16)] backdrop-blur-2xl md:p-8">
           <div className="mb-6 flex items-center gap-4">
             <BrandLogo size="md" />
@@ -115,6 +115,9 @@ export default function RegisterPage() {
           </div>
         </div>
       </div>
+      <footer className="relative z-10 px-4 pb-6 pt-2 text-center text-xs text-gray-400">
+        闽ICP备2026023583号-3
+      </footer>
     </div>
   );
 }

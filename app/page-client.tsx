@@ -4505,6 +4505,9 @@ export default function Home() {
           </div>
         </div>
       </section>
+      <footer className={isDark ? "relative z-10 px-4 pb-8 pt-2 text-center text-xs text-gray-500" : "relative z-10 px-4 pb-8 pt-2 text-center text-xs text-slate-400"}>
+        闽ICP备2026023583号-3
+      </footer>
     </main>
   );
 }
