@@ -37,7 +37,9 @@ type PricingConfig = {
   video_4s: number;
   video_8s: number;
   video_12s: number;
+  grok_video_5s: number;
   grok_video_10s: number;
+  grok_video_15s: number;
   grok_video_20s: number;
   grok_video_30s: number;
   grok_video_40s: number;
@@ -412,7 +414,9 @@ export default function AdminClient() {
                   {
                     title: "Grok 视频价格",
                     items: [
+                      ["grok_video_5s", "Grok 5秒"],
                       ["grok_video_10s", "Grok 10秒"],
+                      ["grok_video_15s", "Grok 15秒"],
                       ["grok_video_20s", "Grok 20秒"],
                       ["grok_video_30s", "Grok 30秒"],
                       ["grok_video_40s", "Grok 40秒"],

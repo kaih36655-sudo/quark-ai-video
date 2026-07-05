@@ -33,9 +33,16 @@ const parseMediumVideoDuration = (value: unknown, provider?: string) => {
   return allowedSeconds.includes(seconds) ? seconds : null;
 };
 
-const parseVideoDuration = (value: unknown, provider: "sora2" | "grok") => {
+const getAllowedVideoDurationSeconds = (params: { mode: "agent" | "normal"; provider: "sora2" | "grok"; grokProviderSource?: string }) => {
+  if (params.provider === "sora2") return [4, 8, 12];
+  // Product rule: agent video + Yunwu Grok uses single-create durations 5/10/15 only.
+  // Longer stitched videos should use medium_video mode.
+  if (params.mode === "agent" && params.grokProviderSource === "yunwu") return [5, 10, 15];
+  return [10, 20, 30];
+};
+
+const parseVideoDuration = (value: unknown, allowedSeconds: number[]) => {
   const seconds = Number(String(value ?? "").replace(/[^\d]/g, ""));
-  const allowedSeconds = provider === "grok" ? [10, 20, 30] : [4, 8, 12];
   return allowedSeconds.includes(seconds) ? seconds : null;
 };
 
@@ -94,7 +101,11 @@ export async function POST(req: NextRequest) {
   const mediumVideoTargetSeconds = mode === "medium_video" ? parseMediumVideoDuration(body.duration, mediumVideoProvider) : null;
   const mediumVideoUnitSeconds = mediumVideoProvider === "sora2" ? 12 : 10;
   const mediumVideoSegments = mediumVideoTargetSeconds ? mediumVideoTargetSeconds / mediumVideoUnitSeconds : 1;
-  const videoDurationSeconds = mode !== "medium_video" && mode !== "image" && videoProvider ? parseVideoDuration(body.duration, videoProvider) : null;
+  const allowedVideoDurationSeconds =
+    mode !== "medium_video" && mode !== "image" && videoProvider
+      ? getAllowedVideoDurationSeconds({ mode: mode === "agent" ? "agent" : "normal", provider: videoProvider, grokProviderSource: configuredGrokProviderSource })
+      : [];
+  const videoDurationSeconds = mode !== "medium_video" && mode !== "image" && videoProvider ? parseVideoDuration(body.duration, allowedVideoDurationSeconds) : null;
   const duration = mode === "medium_video" ? `${mediumVideoTargetSeconds ?? 10}s` : mode !== "image" ? `${videoDurationSeconds ?? (videoProvider === "grok" ? 10 : 12)}s` : body.duration ?? "12s";
   const ratio = body.ratio ?? "16:9";
   const imageSize = body.imageSize === "1K" || body.imageSize === "4K" ? body.imageSize : "2K";
@@ -125,6 +136,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json<ApiResponse<null>>({ success: false, message: "当前视频模型配置不可用，请联系管理员。" }, { status: 400 });
   }
   if (mode !== "medium_video" && mode !== "image" && !videoDurationSeconds) {
+    if (mode === "agent" && videoProvider === "grok" && configuredGrokProviderSource === "yunwu") {
+      return NextResponse.json<ApiResponse<null>>(
+        { success: false, message: "当前【智能体批量视频 + 云雾 Grok】仅支持 5秒、10秒、15秒；如需生成 20秒以上拼接视频，请使用【中视频】模式。" },
+        { status: 400 },
+      );
+    }
+    if (mode === "agent") {
+      return NextResponse.json<ApiResponse<null>>({ success: false, message: "当前模型接口不支持该视频时长，请刷新页面后重新选择。" }, { status: 400 });
+    }
     const allowedText = videoProvider === "grok" ? "10/20/30" : "4/8/12";
     return NextResponse.json<ApiResponse<null>>({ success: false, message: `当前视频模型仅支持 ${allowedText} 秒` }, { status: 400 });
   }

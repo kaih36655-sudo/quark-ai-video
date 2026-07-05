@@ -715,12 +715,16 @@ async function prepareGrokReferenceImages(images?: string[]): Promise<PreparedGr
   return prepared;
 }
 
-export async function createGrokVideoTask(params: { prompt: string; ratio: string; images?: PreparedGrokImage[]; attempt?: number }) {
+export async function createGrokVideoTask(params: { prompt: string; ratio: string; images?: PreparedGrokImage[]; attempt?: number; durationSeconds?: number }) {
   const image = params.images?.[0];
   const mode = image ? "image-to-video" : "text-to-video";
   const model = getModel(Boolean(image));
   const prompt = compactPromptForYunwu(params.prompt.trim(), mode);
   const aspectRatio = params.ratio === "9:16" ? "9:16" : "16:9";
+  const requestedDuration = Number(params.durationSeconds);
+  const duration = Number.isFinite(requestedDuration) && requestedDuration >= 1 && requestedDuration <= 15
+    ? Math.floor(requestedDuration)
+    : GROK_UNIT_SECONDS;
   const payload: {
     model: string;
     prompt: string;
@@ -733,14 +737,15 @@ export async function createGrokVideoTask(params: { prompt: string; ratio: strin
     prompt,
     resolution: "720p",
     aspect_ratio: aspectRatio,
-    duration: GROK_UNIT_SECONDS,
+    duration,
   };
   if (image) {
     payload.image = { url: image.url };
   }
   log("CREATE_REQUEST", {
     attempt: params.attempt ?? 1,
-    endpoint: `${getBaseUrl()}${CREATE_PATH}`,
+    endpoint: CREATE_PATH,
+    baseUrl: getBaseUrl(),
     model,
     mode,
     promptBytes: Buffer.byteLength(prompt, "utf8"),
@@ -888,6 +893,7 @@ async function runStepWithRetry(params: {
   previousTaskId?: string;
   startTime: number;
   images?: PreparedGrokImage[];
+  durationSeconds?: number;
 }) {
   let lastTaskId = "";
   let lastError = "";
@@ -895,7 +901,7 @@ async function runStepWithRetry(params: {
     try {
       const created =
         params.stage === "create"
-          ? await createGrokVideoTask({ prompt: params.prompt, ratio: params.ratio, images: params.images, attempt })
+          ? await createGrokVideoTask({ prompt: params.prompt, ratio: params.ratio, images: params.images, attempt, durationSeconds: params.durationSeconds })
           : await extendGrokVideoTask({
               prompt: params.prompt,
               ratio: params.ratio,
@@ -947,12 +953,17 @@ export async function runYunwuGrokVideoWithExtensions(params: GrokVideoWithExten
   }
   try {
     const baseImages = await prepareGrokReferenceImages(params.referenceImages);
+    const createDurationSeconds =
+      params.extensionPrompts.length === 0 && params.targetDurationSeconds >= 1 && params.targetDurationSeconds <= 15
+        ? params.targetDurationSeconds
+        : GROK_UNIT_SECONDS;
     const baseResult = await runStepWithRetry({
       stage: "create",
       prompt: params.basePrompt,
       ratio: params.ratio,
       images: baseImages,
       startTime: 0,
+      durationSeconds: createDurationSeconds,
     });
     providerTaskIds.push(baseResult.taskId);
     if (baseResult.videoUrl) segmentVideoUrls.push(baseResult.videoUrl);
@@ -985,7 +996,7 @@ export async function runYunwuGrokVideoWithExtensions(params: GrokVideoWithExten
       isFinalVideoLikelyComplete,
       durationSeconds: params.targetDurationSeconds,
       successfulUnits,
-      failedUnits: Math.max(0, Math.ceil(params.targetDurationSeconds / GROK_UNIT_SECONDS) - successfulUnits),
+      failedUnits: Math.max(0, (params.extensionPrompts.length === 0 ? 1 : Math.ceil(params.targetDurationSeconds / GROK_UNIT_SECONDS)) - successfulUnits),
       error: finalVideoUrl ? undefined : "Grok 任务完成但没有可用视频地址",
     };
   } catch (error) {
@@ -1012,7 +1023,7 @@ export async function runYunwuGrokVideoWithExtensions(params: GrokVideoWithExten
       isFinalVideoLikelyComplete: false,
       durationSeconds: params.targetDurationSeconds,
       successfulUnits,
-      failedUnits: Math.max(1, Math.ceil(params.targetDurationSeconds / GROK_UNIT_SECONDS) - successfulUnits),
+      failedUnits: Math.max(1, (params.extensionPrompts.length === 0 ? 1 : Math.ceil(params.targetDurationSeconds / GROK_UNIT_SECONDS)) - successfulUnits),
       error: message,
     };
   }

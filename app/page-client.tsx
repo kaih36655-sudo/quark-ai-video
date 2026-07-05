@@ -112,7 +112,9 @@ type PricingConfig = {
   video_4s: number;
   video_8s: number;
   video_12s: number;
+  grok_video_5s: number;
   grok_video_10s: number;
+  grok_video_15s: number;
   grok_video_20s: number;
   grok_video_30s: number;
   grok_video_40s: number;
@@ -148,7 +150,9 @@ const DEFAULT_PRICING: PricingConfig = {
   video_4s: 0.8,
   video_8s: 1.6,
   video_12s: 2.4,
+  grok_video_5s: 1.2,
   grok_video_10s: 2.4,
+  grok_video_15s: 3.6,
   grok_video_20s: 4.8,
   grok_video_30s: 7.2,
   grok_video_40s: 9.6,
@@ -176,13 +180,16 @@ const IMAGE_MODEL_OPTIONS = [
 ] as const;
 const SORA_VIDEO_DURATIONS = ["4s", "8s", "12s"] as const;
 const GROK_VIDEO_DURATIONS = ["10s", "20s", "30s"] as const;
+const YUNWU_AGENT_GROK_VIDEO_DURATIONS = ["5s", "10s", "15s"] as const;
 
 const RESULT_PAGE_SIZE = 30;
 const PAGE_SIZE = 50;
 const formatMoney = (value: unknown) => Number(value || 0).toFixed(2);
 const getGrokPriceByDuration = (pricing: PricingConfig, durationValue: string) => {
   const seconds = Number(durationValue.replace(/[^\d]/g, ""));
+  if (seconds <= 5) return pricing.grok_video_5s;
   if (seconds <= 10) return pricing.grok_video_10s;
+  if (seconds <= 15) return pricing.grok_video_15s;
   if (seconds <= 20) return pricing.grok_video_20s;
   if (seconds <= 30) return pricing.grok_video_30s;
   if (seconds <= 40) return pricing.grok_video_40s;
@@ -531,7 +538,9 @@ export default function Home() {
         video_4s: Number(next.video_4s ?? DEFAULT_PRICING.video_4s),
         video_8s: Number(next.video_8s ?? DEFAULT_PRICING.video_8s),
         video_12s: Number(next.video_12s ?? DEFAULT_PRICING.video_12s),
+        grok_video_5s: Number(next.grok_video_5s ?? (Number(next.grok_video_10s ?? next.video_12s ?? DEFAULT_PRICING.grok_video_10s) * 0.5)),
         grok_video_10s: Number(next.grok_video_10s ?? next.video_12s ?? DEFAULT_PRICING.grok_video_10s),
+        grok_video_15s: Number(next.grok_video_15s ?? (Number(next.grok_video_10s ?? next.video_12s ?? DEFAULT_PRICING.grok_video_10s) * 1.5)),
         grok_video_20s: Number(next.grok_video_20s ?? (Number(next.video_12s ?? DEFAULT_PRICING.video_12s) * 2)),
         grok_video_30s: Number(next.grok_video_30s ?? (Number(next.video_12s ?? DEFAULT_PRICING.video_12s) * 3)),
         grok_video_40s: Number(next.grok_video_40s ?? (Number(next.video_12s ?? DEFAULT_PRICING.video_12s) * 4)),
@@ -1655,7 +1664,14 @@ export default function Home() {
   const isYunwuGrokProvider = currentGrokProviderSource === "yunwu";
   const isGrokProviderForcedStitch = isJiekouGrokProvider || isYunwuGrokProvider;
   const effectiveMediumVideoStrategy: "extend" | "stitch" = isGrokMediumVideo && isGrokProviderForcedStitch ? "stitch" : mediumVideoStrategy;
-  const currentVideoDurationOptions = currentVideoProvider === "grok" ? GROK_VIDEO_DURATIONS : SORA_VIDEO_DURATIONS;
+  // Product rule: agent video + Yunwu Grok uses single-create durations 5/10/15 only.
+  // Longer stitched videos should use medium_video mode.
+  const currentVideoDurationOptions =
+    mode === "agent" && currentVideoProvider === "grok" && currentGrokProviderSource === "yunwu"
+      ? YUNWU_AGENT_GROK_VIDEO_DURATIONS
+      : currentVideoProvider === "grok"
+        ? GROK_VIDEO_DURATIONS
+        : SORA_VIDEO_DURATIONS;
   const modeLabel =
     isRemixMode
       ? "爆款视频复刻"
