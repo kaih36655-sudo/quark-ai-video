@@ -65,6 +65,12 @@ const createGrokProviderMetadata = (source: GrokProviderSource) => ({
   providerSourceLabel: getGrokProviderSourceLabel(source),
 });
 
+const isLegacyYunwuGrokModel = (value: string) => /^grok-video-3(?:-|$)/i.test(value) || value === "grok-video-3-10s";
+const getYunwuGrokRecordModel = (configured: string | undefined, fallback: string) => {
+  const value = (configured || "").trim();
+  return value && !isLegacyYunwuGrokModel(value) ? value : fallback;
+};
+
 const getGrokApiModelForRecord = (source?: GrokProviderSource, hasReferenceImage = false) =>
   source === "xai"
     ? hasReferenceImage
@@ -73,8 +79,8 @@ const getGrokApiModelForRecord = (source?: GrokProviderSource, hasReferenceImage
     : source === "jiekou"
       ? "grok-imagine-video"
       : hasReferenceImage
-        ? process.env.YUNWU_GROK_IMAGE_TO_VIDEO_MODEL || "grok-imagine-video-1.5-preview"
-        : process.env.YUNWU_GROK_VIDEO_MODEL || "grok-imagine-video";
+        ? getYunwuGrokRecordModel(process.env.YUNWU_GROK_IMAGE_TO_VIDEO_MODEL, "grok-imagine-video-1.5-preview")
+        : getYunwuGrokRecordModel(process.env.YUNWU_GROK_VIDEO_MODEL, "grok-imagine-video");
 
 const isSupportedGrokProviderSource = (source: unknown): source is GrokProviderSource => source === "yunwu" || source === "jiekou" || source === "xai";
 

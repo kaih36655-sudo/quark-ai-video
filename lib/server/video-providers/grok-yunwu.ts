@@ -34,6 +34,8 @@ const RETRY_BACKOFF_MS = [5000, 15000, 30000, 60000];
 const QUERY_FETCH_MAX_ATTEMPTS = 3;
 const QUERY_FETCH_BACKOFF_MS = [3000, 5000];
 const YUNWU_OFFICIAL_EXTEND_UNSUPPORTED_MESSAGE = "云雾 Grok 官方接口暂未接入扩展视频，请切换为分段拼接。";
+const DEFAULT_TEXT_TO_VIDEO_MODEL = "grok-imagine-video";
+const DEFAULT_IMAGE_TO_VIDEO_MODEL = "grok-imagine-video-1.5-preview";
 
 type PreparedGrokImage = {
   url: string;
@@ -51,8 +53,23 @@ const log = (stage: string, payload: Record<string, unknown>) => {
 };
 
 const getBaseUrl = () => (process.env.YUNWU_GROK_VIDEO_BASE_URL || "https://yunwu.ai").replace(/\/$/, "");
-const getTextToVideoModel = () => process.env.YUNWU_GROK_VIDEO_MODEL || "grok-imagine-video";
-const getImageToVideoModel = () => process.env.YUNWU_GROK_IMAGE_TO_VIDEO_MODEL || "grok-imagine-video-1.5-preview";
+const legacyModelWarningCache = new Set<string>();
+const isLegacyYunwuGrokModel = (value: string) => /^grok-video-3(?:-|$)/i.test(value) || value === "grok-video-3-10s";
+const getConfiguredYunwuGrokModel = (envName: "YUNWU_GROK_VIDEO_MODEL" | "YUNWU_GROK_IMAGE_TO_VIDEO_MODEL", fallback: string) => {
+  const configured = (process.env[envName] || "").trim();
+  if (!configured) return fallback;
+  if (isLegacyYunwuGrokModel(configured)) {
+    const cacheKey = `${envName}:${configured}`;
+    if (!legacyModelWarningCache.has(cacheKey)) {
+      legacyModelWarningCache.add(cacheKey);
+      log("LEGACY_MODEL_IGNORED", { envName, configuredModel: configured, fallbackModel: fallback });
+    }
+    return fallback;
+  }
+  return configured;
+};
+const getTextToVideoModel = () => getConfiguredYunwuGrokModel("YUNWU_GROK_VIDEO_MODEL", DEFAULT_TEXT_TO_VIDEO_MODEL);
+const getImageToVideoModel = () => getConfiguredYunwuGrokModel("YUNWU_GROK_IMAGE_TO_VIDEO_MODEL", DEFAULT_IMAGE_TO_VIDEO_MODEL);
 const getModel = (hasReferenceImage = false) => (hasReferenceImage ? getImageToVideoModel() : getTextToVideoModel());
 const getPromptMaxBytes = (mode: "text-to-video" | "image-to-video") => {
   const configured = Number(process.env.YUNWU_GROK_PROMPT_MAX_BYTES || 0);
@@ -532,12 +549,119 @@ const extractVideoDuration = (json: Record<string, unknown> | null) => {
 };
 
 const extractErrorMessage = (json: Record<string, unknown> | null, fallback = "") => {
-  const value = responseRecords(json).flatMap((record) => [record.error, record.message, record.reason]).find((item) => typeof item === "string" && item.length > 0) || fallback;
-  return typeof value === "string" ? value : fallback;
+  const value = responseRecords(json)
+    .flatMap((record) => {
+      const error = asRecord(record.error);
+      return [
+        record.code,
+        record.error_code,
+        record.message,
+        record.reason,
+        typeof record.error === "string" ? record.error : undefined,
+        error?.code,
+        error?.type,
+        error?.message,
+      ];
+    })
+    .filter((item): item is string => typeof item === "string" && item.length > 0)
+    .join(" ");
+  return value || fallback;
+};
+
+const extractHttpStatusFromMessage = (message: string) => {
+  const match = /(?:status=|status:\s*)(\d{3})/i.exec(message);
+  return match ? Number(match[1]) : undefined;
+};
+
+const isYunwuRequestSizeLimitError = (message: string, status = extractHttpStatusFromMessage(message), code = "") => {
+  const text = `${message} ${code}`.toLowerCase();
+  return (
+    status === 413 ||
+    text.includes("status=413") ||
+    text.includes("413 payload too large") ||
+    text.includes("request body size") ||
+    text.includes("request body too large") ||
+    text.includes("request body exceeds") ||
+    text.includes("request body limit") ||
+    text.includes("payload size") ||
+    text.includes("payload too large") ||
+    text.includes("payload exceeds") ||
+    text.includes("request entity too large") ||
+    text.includes("entity too large") ||
+    text.includes("content length") ||
+    text.includes("body size exceeds") ||
+    text.includes("maximum allowed request body") ||
+    text.includes("maximum allowed payload") ||
+    text.includes("image too large") ||
+    text.includes("base64 too large") ||
+    text.includes("file too large")
+  );
+};
+
+const isYunwuCapacityOrRateLimitError = (message: string, code = "") => {
+  const text = `${message} ${code}`.toLowerCase();
+  return (
+    text.includes("maximum allowed requests") ||
+    text.includes("maximum allowed concurrent") ||
+    text.includes("maximum allowed concurrency") ||
+    text.includes("maximum allowed jobs") ||
+    text.includes("maximum allowed tasks") ||
+    text.includes("maximum allowed queue") ||
+    text.includes("too many requests") ||
+    text.includes("rate limit") ||
+    text.includes("rate-limit") ||
+    text.includes("throttled") ||
+    text.includes("throttling") ||
+    text.includes("capacity") ||
+    text.includes("overload") ||
+    text.includes("service unavailable") ||
+    text.includes("服务暂时不可用") ||
+    text.includes("上游繁忙") ||
+    text.includes("上游负载") ||
+    text.includes("当前分组上游负载已饱和")
+  );
+};
+
+const isYunwuParameterLimitError = (message: string, code = "") => {
+  const text = `${message} ${code}`.toLowerCase();
+  return (
+    text.includes("unsupported duration") ||
+    text.includes("invalid duration") ||
+    /duration[\s\S]{0,120}(?:exceeds|maximum allowed)/.test(text) ||
+    /maximum allowed[\s\S]{0,80}duration/.test(text) ||
+    /prompt[\s\S]{0,120}(?:exceeds|too long|maximum allowed)/.test(text) ||
+    /maximum allowed[\s\S]{0,80}prompt/.test(text) ||
+    /input[\s\S]{0,120}(?:exceeds|too long|maximum allowed)/.test(text) ||
+    /maximum allowed[\s\S]{0,80}input/.test(text) ||
+    /context[\s\S]{0,80}(?:length exceeded|maximum allowed)/.test(text) ||
+    /token[\s\S]{0,80}maximum allowed/.test(text) ||
+    /length[\s\S]{0,80}maximum allowed/.test(text) ||
+    /reference-to-video[\s\S]{0,120}maximum allowed/.test(text) ||
+    text.includes("prompt too long") ||
+    text.includes("input too long") ||
+    text.includes("context length exceeded") ||
+    text.includes("参数错误")
+  );
+};
+
+const isYunwuInvalidRequestCodeError = (message: string, code = "") => {
+  const text = `${message} ${code}`.toLowerCase();
+  return (
+    text.includes("invalid-argument") ||
+    text.includes("invalid_argument") ||
+    text.includes("bad_request") ||
+    text.includes("invalid_request_error")
+  );
 };
 
 const isNonRetryableError = (message: string) => {
   const text = message.toLowerCase();
+  const status = extractHttpStatusFromMessage(message);
+  if (isYunwuRequestSizeLimitError(message, status)) return true;
+  if (isYunwuCapacityOrRateLimitError(message)) return false;
+  if (status === 429 && !isYunwuParameterLimitError(message)) return false;
+  if (isYunwuParameterLimitError(message)) return true;
+  if (isYunwuInvalidRequestCodeError(message)) return true;
   return (
     text.includes("yunwu_grok_video_api_key") ||
     text.includes("api key") ||
@@ -547,7 +671,6 @@ const isNonRetryableError = (message: string) => {
     text.includes("unauthorized") ||
     text.includes("forbidden") ||
     text.includes("invalid parameter") ||
-    text.includes("参数错误") ||
     text.includes("参数无效") ||
     text.includes("参考图读取失败") ||
     text.includes("failed to decode base64 image") ||
@@ -728,15 +851,17 @@ const getReferenceOnlyMode = (image?: PreparedGrokImage) =>
 
 export async function createGrokVideoTask(params: { prompt: string; ratio: string; images?: PreparedGrokImage[]; referenceImageRole?: GrokReferenceImageRole; attempt?: number; durationSeconds?: number }) {
   const image = params.images?.[0];
+  const hasReferenceImage = Boolean(image);
   const referenceImageRole: GrokReferenceImageRole = image ? params.referenceImageRole || "first_frame" : "reference_only";
   const useFirstFrameImage = Boolean(image && referenceImageRole === "first_frame");
-  const mode = useFirstFrameImage ? "image-to-video" : "text-to-video";
-  const model = getModel(useFirstFrameImage);
+  const mode = useFirstFrameImage ? "image-to-video" : hasReferenceImage ? "reference-to-video" : "text-to-video";
+  const promptMode = hasReferenceImage ? "image-to-video" : "text-to-video";
+  const model = getModel(hasReferenceImage);
   const rawPrompt =
     image && referenceImageRole === "reference_only" && !params.prompt.includes(REFERENCE_ONLY_PROMPT_INSTRUCTION)
       ? `${params.prompt.trim()}\n${REFERENCE_ONLY_PROMPT_INSTRUCTION}`
       : params.prompt.trim();
-  const prompt = compactPromptForYunwu(rawPrompt, mode);
+  const prompt = compactPromptForYunwu(rawPrompt, promptMode);
   const aspectRatio = params.ratio === "9:16" ? "9:16" : "16:9";
   const requestedDuration = Number(params.durationSeconds);
   const duration = Number.isFinite(requestedDuration) && requestedDuration >= 1 && requestedDuration <= 15
@@ -773,7 +898,7 @@ export async function createGrokVideoTask(params: { prompt: string; ratio: strin
     duration: payload.duration,
     resolution: payload.resolution,
     aspectRatio: payload.aspect_ratio,
-    hasReferenceImage: Boolean(image),
+    hasReferenceImage,
     referenceImageRole: image ? referenceImageRole : "none",
     referenceImageMode,
     imageUrlPreview: image?.mode === "image.url.public_url" ? image.url.slice(0, 140) : "",
@@ -938,12 +1063,29 @@ async function runStepWithRetry(params: {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       lastError = message;
-      if (isNonRetryableError(message) || !isRetryableError(message) || attempt === MAX_ATTEMPTS) {
-        log("FINAL_FAILED", { stage: params.stage, attempts: attempt, finalReason: message, lastTaskId });
+      const nonRetryable = isNonRetryableError(message);
+      if (nonRetryable || !isRetryableError(message) || attempt === MAX_ATTEMPTS) {
+        log("FINAL_FAILED", {
+          stage: params.stage,
+          attempts: attempt,
+          finalReason: message,
+          lastTaskId,
+          retryable: false,
+          nonRetryableReason: nonRetryable ? "invalid_or_unsupported_request" : attempt === MAX_ATTEMPTS ? "max_attempts_reached" : "not_retryable",
+        });
         throw new Error(message);
       }
       const delayMs = RETRY_BACKOFF_MS[attempt - 1] ?? RETRY_BACKOFF_MS[RETRY_BACKOFF_MS.length - 1];
-      log("RETRY", { stage: params.stage, attempt, maxAttempts: MAX_ATTEMPTS, delayMs, reason: message, taskId: lastTaskId, retryable: true });
+      log("RETRY", {
+        stage: params.stage,
+        attempt,
+        maxAttempts: MAX_ATTEMPTS,
+        delayMs,
+        reason: message,
+        taskId: lastTaskId,
+        retryable: true,
+        retryReason: isYunwuCapacityOrRateLimitError(message) || extractHttpStatusFromMessage(message) === 429 ? "capacity_or_rate_limit" : "transient_or_unknown",
+      });
       await delay(delayMs);
     }
   }
@@ -1025,6 +1167,7 @@ export async function runYunwuGrokVideoWithExtensions(params: GrokVideoWithExten
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const nonRetryable = isNonRetryableError(message);
     log("FINAL_FAILED", {
       stage: "run",
       attempts: 1,
@@ -1034,6 +1177,8 @@ export async function runYunwuGrokVideoWithExtensions(params: GrokVideoWithExten
       segmentVideoUrlsCount: segmentVideoUrls.length,
       targetDurationSeconds: params.targetDurationSeconds,
       successfulUnits,
+      retryable: !nonRetryable,
+      nonRetryableReason: nonRetryable ? "invalid_or_unsupported_request" : undefined,
     });
     return {
       ok: false,
@@ -1121,6 +1266,7 @@ export async function runYunwuGrokVideoSegments(params: GrokVideoSegmentsInput):
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const nonRetryable = isNonRetryableError(message);
     log("FINAL_FAILED", {
       stage: "stitch",
       attempts: 1,
@@ -1130,6 +1276,8 @@ export async function runYunwuGrokVideoSegments(params: GrokVideoSegmentsInput):
       segmentVideoUrlsCount: segmentVideoUrls.length,
       targetDurationSeconds: params.targetDurationSeconds,
       successfulUnits,
+      retryable: !nonRetryable,
+      nonRetryableReason: nonRetryable ? "invalid_or_unsupported_request" : undefined,
     });
     return {
       ok: false,
