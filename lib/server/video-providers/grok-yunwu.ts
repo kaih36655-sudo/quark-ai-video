@@ -4,6 +4,7 @@ import { resolveLocalUploadsSource } from "../local-uploads";
 import { extractTailReferenceFrameForContinuation } from "../medium-video-frame";
 import {
   DEFAULT_GROK_PROVIDER_SOURCE,
+  GrokReferenceImageRole,
   GrokVideoResult,
   GrokVideoSegmentsInput,
   GrokVideoWithExtensionsInput,
@@ -39,6 +40,9 @@ type PreparedGrokImage = {
   mimeType: string;
   mode: "image.url.public_url" | "image.url.data_url";
 };
+
+const REFERENCE_ONLY_PROMPT_INSTRUCTION =
+  "参考图仅作为风格、主体、构图或品牌参考，不要直接把参考图作为视频开场首帧，除非用户明确要求。";
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -715,11 +719,24 @@ async function prepareGrokReferenceImages(images?: string[]): Promise<PreparedGr
   return prepared;
 }
 
-export async function createGrokVideoTask(params: { prompt: string; ratio: string; images?: PreparedGrokImage[]; attempt?: number; durationSeconds?: number }) {
+const getReferenceOnlyMode = (image?: PreparedGrokImage) =>
+  image?.mode === "image.url.public_url"
+    ? "reference_images.public_url"
+    : image?.mode === "image.url.data_url"
+      ? "reference_images.data_url"
+      : "none";
+
+export async function createGrokVideoTask(params: { prompt: string; ratio: string; images?: PreparedGrokImage[]; referenceImageRole?: GrokReferenceImageRole; attempt?: number; durationSeconds?: number }) {
   const image = params.images?.[0];
-  const mode = image ? "image-to-video" : "text-to-video";
-  const model = getModel(Boolean(image));
-  const prompt = compactPromptForYunwu(params.prompt.trim(), mode);
+  const referenceImageRole: GrokReferenceImageRole = image ? params.referenceImageRole || "first_frame" : "reference_only";
+  const useFirstFrameImage = Boolean(image && referenceImageRole === "first_frame");
+  const mode = useFirstFrameImage ? "image-to-video" : "text-to-video";
+  const model = getModel(useFirstFrameImage);
+  const rawPrompt =
+    image && referenceImageRole === "reference_only" && !params.prompt.includes(REFERENCE_ONLY_PROMPT_INSTRUCTION)
+      ? `${params.prompt.trim()}\n${REFERENCE_ONLY_PROMPT_INSTRUCTION}`
+      : params.prompt.trim();
+  const prompt = compactPromptForYunwu(rawPrompt, mode);
   const aspectRatio = params.ratio === "9:16" ? "9:16" : "16:9";
   const requestedDuration = Number(params.durationSeconds);
   const duration = Number.isFinite(requestedDuration) && requestedDuration >= 1 && requestedDuration <= 15
@@ -732,6 +749,7 @@ export async function createGrokVideoTask(params: { prompt: string; ratio: strin
     aspect_ratio: string;
     duration: number;
     image?: { url: string };
+    reference_images?: Array<{ url: string }>;
   } = {
     model,
     prompt,
@@ -739,9 +757,12 @@ export async function createGrokVideoTask(params: { prompt: string; ratio: strin
     aspect_ratio: aspectRatio,
     duration,
   };
-  if (image) {
+  if (image && useFirstFrameImage) {
     payload.image = { url: image.url };
+  } else if (image) {
+    payload.reference_images = params.images?.map((item) => ({ url: item.url }));
   }
+  const referenceImageMode = useFirstFrameImage ? image?.mode || "none" : getReferenceOnlyMode(image);
   log("CREATE_REQUEST", {
     attempt: params.attempt ?? 1,
     endpoint: CREATE_PATH,
@@ -753,7 +774,8 @@ export async function createGrokVideoTask(params: { prompt: string; ratio: strin
     resolution: payload.resolution,
     aspectRatio: payload.aspect_ratio,
     hasReferenceImage: Boolean(image),
-    referenceImageMode: image?.mode || "none",
+    referenceImageRole: image ? referenceImageRole : "none",
+    referenceImageMode,
     imageUrlPreview: image?.mode === "image.url.public_url" ? image.url.slice(0, 140) : "",
     imagePayloadPreviewLength: image?.mode === "image.url.data_url" ? image.url.length : 0,
     mimeType: image?.mimeType || "",
@@ -893,6 +915,7 @@ async function runStepWithRetry(params: {
   previousTaskId?: string;
   startTime: number;
   images?: PreparedGrokImage[];
+  referenceImageRole?: GrokReferenceImageRole;
   durationSeconds?: number;
 }) {
   let lastTaskId = "";
@@ -901,7 +924,7 @@ async function runStepWithRetry(params: {
     try {
       const created =
         params.stage === "create"
-          ? await createGrokVideoTask({ prompt: params.prompt, ratio: params.ratio, images: params.images, attempt, durationSeconds: params.durationSeconds })
+          ? await createGrokVideoTask({ prompt: params.prompt, ratio: params.ratio, images: params.images, referenceImageRole: params.referenceImageRole, attempt, durationSeconds: params.durationSeconds })
           : await extendGrokVideoTask({
               prompt: params.prompt,
               ratio: params.ratio,
@@ -962,6 +985,7 @@ export async function runYunwuGrokVideoWithExtensions(params: GrokVideoWithExten
       prompt: params.basePrompt,
       ratio: params.ratio,
       images: baseImages,
+      referenceImageRole: params.referenceImageRole,
       startTime: 0,
       durationSeconds: createDurationSeconds,
     });
@@ -1059,6 +1083,7 @@ export async function runYunwuGrokVideoSegments(params: GrokVideoSegmentsInput):
         prompt: params.prompts[index],
         ratio: params.ratio,
         images,
+        referenceImageRole: "first_frame",
         startTime: 0,
       });
       providerTaskIds.push(result.taskId);

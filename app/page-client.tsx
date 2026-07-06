@@ -181,6 +181,29 @@ const IMAGE_MODEL_OPTIONS = [
 const SORA_VIDEO_DURATIONS = ["4s", "8s", "12s"] as const;
 const GROK_VIDEO_DURATIONS = ["10s", "20s", "30s"] as const;
 const YUNWU_AGENT_GROK_VIDEO_DURATIONS = ["5s", "10s", "15s"] as const;
+const GENERATION_PREFERENCES_KEY = "quark-ai:generation-preferences:v2";
+
+type VideoPreferenceScope = "normal" | "agent" | "video_remix" | "medium_video";
+type ImagePreferenceScope = "plain" | "agent";
+type VideoGenerationPreference = {
+  duration?: string;
+  ratio?: "9:16" | "16:9";
+  count?: number;
+  mediumVideoSegments?: number;
+  strategy?: "extend" | "stitch";
+};
+type ImageGenerationPreference = {
+  model?: "image2" | "banana2";
+  ratio?: "1:1" | "9:16" | "16:9";
+  resolution?: "1K" | "2K" | "4K";
+  count?: number;
+};
+type GenerationPreferencesV2 = {
+  mode?: string;
+  showPreferences?: boolean;
+  video?: Partial<Record<VideoPreferenceScope, Partial<Record<"sora2" | "grok", Record<string, VideoGenerationPreference>>>>>;
+  image?: Partial<Record<ImagePreferenceScope, ImageGenerationPreference>>;
+};
 
 const RESULT_PAGE_SIZE = 30;
 const PAGE_SIZE = 50;
@@ -203,6 +226,29 @@ const getSoraPriceByDuration = (pricing: PricingConfig, durationValue: string) =
 };
 const normalizeGrokProviderSource = (value: unknown): GrokProviderSource | undefined =>
   value === "yunwu" || value === "jiekou" || value === "xai" ? value : undefined;
+const isValidDurationValue = (value: unknown): value is string => typeof value === "string" && /^\d+s$/.test(value);
+const isValidVideoRatio = (value: unknown): value is "9:16" | "16:9" => value === "9:16" || value === "16:9";
+const isValidMediaRatio = (value: unknown): value is "1:1" | "9:16" | "16:9" => value === "1:1" || value === "9:16" || value === "16:9";
+const isValidImageSize = (value: unknown): value is "1K" | "2K" | "4K" => value === "1K" || value === "2K" || value === "4K";
+const parseDurationSecondsValue = (value?: string) => Number(String(value || "").replace(/[^\d]/g, ""));
+const readGenerationPreferences = (): GenerationPreferencesV2 => {
+  if (!isClient) return {};
+  try {
+    const raw = localStorage.getItem(GENERATION_PREFERENCES_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed as GenerationPreferencesV2 : {};
+  } catch {
+    return {};
+  }
+};
+const writeGenerationPreferences = (next: GenerationPreferencesV2) => {
+  if (!isClient) return;
+  localStorage.setItem(GENERATION_PREFERENCES_KEY, JSON.stringify(next));
+};
+const updateGenerationPreferences = (updater: (draft: GenerationPreferencesV2) => GenerationPreferencesV2) => {
+  writeGenerationPreferences(updater(readGenerationPreferences()));
+};
 const getGrokProviderSourceLabel = (value?: GrokProviderSource) =>
   value === "jiekou" ? "接口AI" : value === "xai" ? "xAI 官方" : value === "yunwu" ? "云雾 API" : "";
 const formatImageModelLabel = (video?: { mediaType?: "video" | "image"; imageModelLabel?: string; imageModel?: "image2" | "banana2"; displayModel?: string; apiModel?: string }) => {
@@ -334,6 +380,8 @@ export default function Home() {
   const [agentProfiles, setAgentProfiles] = useState<AgentProfile[]>(AGENT_PROFILES);
   const [pricing, setPricing] = useState<PricingConfig>(DEFAULT_PRICING);
   const [modelConfig, setModelConfig] = useState<ModelConfig>(DEFAULT_MODEL_CONFIG);
+  const [modelConfigLoaded, setModelConfigLoaded] = useState(false);
+  const [hydratedGenerationPreferenceKey, setHydratedGenerationPreferenceKey] = useState("");
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [duration, setDuration] = useState("12s");
   const [ratio, setRatio] = useState("16:9");
@@ -398,7 +446,8 @@ export default function Home() {
     const savedFavorites = localStorage.getItem("quark_favorites");
     const savedPrompt = localStorage.getItem("quark_prompt");
     const savedGenerateCount = localStorage.getItem("quark_generate_count");
-    const savedMode = localStorage.getItem("quark_mode");
+    const savedGenerationPreferences = readGenerationPreferences();
+    const savedMode = savedGenerationPreferences.mode || localStorage.getItem("quark_mode");
     const savedAgentId = localStorage.getItem("quark_selected_agent_id");
     const savedDuration = localStorage.getItem("quark_duration");
     const savedRatio = localStorage.getItem("quark_ratio");
@@ -439,6 +488,9 @@ export default function Home() {
 
     if (savedMode) {
       setMode(savedMode);
+    }
+    if (typeof savedGenerationPreferences.showPreferences === "boolean") {
+      setShowPreferences(savedGenerationPreferences.showPreferences);
     }
     if (savedAgentId) {
       setSelectedAgentId(savedAgentId);
@@ -567,6 +619,8 @@ export default function Home() {
       }
     } catch {
       setModelConfig(DEFAULT_MODEL_CONFIG);
+    } finally {
+      setModelConfigLoaded(true);
     }
   };
 
@@ -1672,6 +1726,13 @@ export default function Home() {
       : currentVideoProvider === "grok"
         ? GROK_VIDEO_DURATIONS
         : SORA_VIDEO_DURATIONS;
+  const videoPreferenceScope: VideoPreferenceScope = isMediumVideoMode ? "medium_video" : isRemixMode ? "video_remix" : mode === "agent" ? "agent" : "normal";
+  const videoPreferenceModel: "sora2" | "grok" = isMediumVideoMode ? mediumVideoActiveModel : currentVideoProvider;
+  const videoPreferenceProviderKey = videoPreferenceModel === "grok" ? currentGrokProviderSource || "yunwu" : "default";
+  const imagePreferenceScope: ImagePreferenceScope = mode === "agent_image" ? "agent" : "plain";
+  const generationPreferenceKey = isImageMode
+    ? `image:${imagePreferenceScope}`
+    : `video:${videoPreferenceScope}:${videoPreferenceModel}:${videoPreferenceProviderKey}`;
   const modeLabel =
     isRemixMode
       ? "爆款视频复刻"
@@ -1714,11 +1775,82 @@ export default function Home() {
         : "";
 
   useEffect(() => {
-    if (!mounted || isImageMode || isMediumVideoMode) return;
+    if (!mounted || !modelConfigLoaded) return;
+    const preferences = readGenerationPreferences();
+    if (isImageMode) {
+      const imagePreference = preferences.image?.[imagePreferenceScope];
+      if (imagePreference?.model === "image2" || imagePreference?.model === "banana2") {
+        setImageModel(imagePreference.model);
+      }
+      if (isValidMediaRatio(imagePreference?.ratio)) {
+        setRatio(imagePreference.ratio);
+      }
+      if (isValidImageSize(imagePreference?.resolution)) {
+        setImageSize(imagePreference.resolution);
+      }
+      if (typeof imagePreference?.count === "number" && imagePreference.count >= 1 && imagePreference.count <= 10) {
+        setGenerateCount(Math.floor(imagePreference.count));
+      }
+      setHydratedGenerationPreferenceKey(generationPreferenceKey);
+      return;
+    }
+
+    const videoPreference = preferences.video?.[videoPreferenceScope]?.[videoPreferenceModel]?.[videoPreferenceProviderKey];
+    if (isMediumVideoMode) {
+      const unitSeconds = videoPreferenceModel === "sora2" ? 12 : 10;
+      const maxSegments = videoPreferenceModel === "sora2" ? 5 : 6;
+      const durationSeconds = parseDurationSecondsValue(videoPreference?.duration);
+      const durationSegments = durationSeconds > 0 ? durationSeconds / unitSeconds : 0;
+      const nextSegments =
+        typeof videoPreference?.mediumVideoSegments === "number"
+          ? videoPreference.mediumVideoSegments
+          : Number.isInteger(durationSegments)
+            ? durationSegments
+            : 0;
+      if (Number.isInteger(nextSegments) && nextSegments >= 1 && nextSegments <= maxSegments) {
+        setMediumVideoSegments(nextSegments);
+        setDuration(`${nextSegments * unitSeconds}s`);
+      }
+      if (videoPreference?.strategy === "extend" || videoPreference?.strategy === "stitch") {
+        setMediumVideoStrategy(videoPreference.strategy);
+      }
+      if (isValidVideoRatio(videoPreference?.ratio)) {
+        setRatio(videoPreference.ratio);
+      }
+      setHydratedGenerationPreferenceKey(generationPreferenceKey);
+      return;
+    }
+
+    if (isValidDurationValue(videoPreference?.duration) && (currentVideoDurationOptions as readonly string[]).includes(videoPreference.duration)) {
+      setDuration(videoPreference.duration);
+    }
+    if (isValidVideoRatio(videoPreference?.ratio)) {
+      setRatio(videoPreference.ratio);
+    }
+    if (typeof videoPreference?.count === "number" && videoPreference.count >= 1 && videoPreference.count <= 10) {
+      setGenerateCount(Math.floor(videoPreference.count));
+    }
+    setHydratedGenerationPreferenceKey(generationPreferenceKey);
+  }, [
+    currentVideoDurationOptions,
+    generationPreferenceKey,
+    imagePreferenceScope,
+    isImageMode,
+    isMediumVideoMode,
+    mediumVideoActiveModel,
+    modelConfigLoaded,
+    mounted,
+    videoPreferenceModel,
+    videoPreferenceProviderKey,
+    videoPreferenceScope,
+  ]);
+
+  useEffect(() => {
+    if (!mounted || !modelConfigLoaded || hydratedGenerationPreferenceKey !== generationPreferenceKey || isImageMode || isMediumVideoMode) return;
     if (!(currentVideoDurationOptions as readonly string[]).includes(duration)) {
       setDuration(currentVideoProvider === "grok" ? "10s" : "12s");
     }
-  }, [currentVideoProvider, currentVideoDurationOptions, duration, isImageMode, isMediumVideoMode, mounted]);
+  }, [currentVideoProvider, currentVideoDurationOptions, duration, generationPreferenceKey, hydratedGenerationPreferenceKey, isImageMode, isMediumVideoMode, modelConfigLoaded, mounted]);
 
   useEffect(() => {
     if (!mounted) return;
@@ -2163,6 +2295,74 @@ export default function Home() {
     if (!mounted) return;
     localStorage.setItem("quark_image_model", imageModel);
   }, [imageModel, mounted]);
+
+  useEffect(() => {
+    if (!mounted || !modelConfigLoaded || hydratedGenerationPreferenceKey !== generationPreferenceKey) return;
+    updateGenerationPreferences((previous) => {
+      const next: GenerationPreferencesV2 = {
+        ...previous,
+        mode,
+        showPreferences,
+        video: { ...(previous.video || {}) },
+        image: { ...(previous.image || {}) },
+      };
+      if (isImageMode) {
+        next.image = {
+          ...(next.image || {}),
+          [imagePreferenceScope]: {
+            model: imageModel,
+            ratio: isValidMediaRatio(ratio) ? ratio : "1:1",
+            resolution: imageSize,
+            count: generateCount,
+          },
+        };
+        return next;
+      }
+
+      const currentScopePreferences = { ...(next.video?.[videoPreferenceScope] || {}) };
+      const currentModelPreferences = { ...(currentScopePreferences[videoPreferenceModel] || {}) };
+      const unitSeconds = videoPreferenceModel === "sora2" ? 12 : 10;
+      currentModelPreferences[videoPreferenceProviderKey] = isMediumVideoMode
+        ? {
+            duration: `${mediumVideoSegments * unitSeconds}s`,
+            ratio: isValidVideoRatio(ratio) ? ratio : "9:16",
+            count: generateCount,
+            mediumVideoSegments,
+            strategy: effectiveMediumVideoStrategy,
+          }
+        : {
+            duration,
+            ratio: isValidVideoRatio(ratio) ? ratio : "9:16",
+            count: generateCount,
+          };
+      currentScopePreferences[videoPreferenceModel] = currentModelPreferences;
+      next.video = {
+        ...(next.video || {}),
+        [videoPreferenceScope]: currentScopePreferences,
+      };
+      return next;
+    });
+  }, [
+    duration,
+    effectiveMediumVideoStrategy,
+    generateCount,
+    generationPreferenceKey,
+    hydratedGenerationPreferenceKey,
+    imageModel,
+    imagePreferenceScope,
+    imageSize,
+    isImageMode,
+    isMediumVideoMode,
+    mediumVideoSegments,
+    mode,
+    modelConfigLoaded,
+    mounted,
+    ratio,
+    showPreferences,
+    videoPreferenceModel,
+    videoPreferenceProviderKey,
+    videoPreferenceScope,
+  ]);
 
   useEffect(() => {
     if (!mounted) return;

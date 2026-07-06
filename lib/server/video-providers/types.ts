@@ -40,6 +40,8 @@ export type GrokVideoResult = {
   error?: string;
 };
 
+export type GrokReferenceImageRole = "first_frame" | "reference_only";
+
 export type GrokVideoWithExtensionsInput = {
   providerSource?: GrokProviderSource;
   taskId?: string;
@@ -49,6 +51,7 @@ export type GrokVideoWithExtensionsInput = {
   ratio: string;
   targetDurationSeconds: number;
   referenceImages?: string[];
+  referenceImageRole?: GrokReferenceImageRole;
 };
 
 export type GrokVideoSegmentsInput = {

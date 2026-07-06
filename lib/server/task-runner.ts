@@ -12,7 +12,7 @@ import { concatMediumVideoSegments, extractTailReferenceFrameForContinuation } f
 import { adjustUserBalance } from "./auth-store";
 import { getMediumVideoUnitPrice, getUnitPrice } from "./pricing";
 import { getManagedAgentById } from "./agent-store";
-import { DEFAULT_GROK_PROVIDER_SOURCE, getGrokProviderSourceLabel, GrokProviderSource } from "./video-providers/types";
+import { DEFAULT_GROK_PROVIDER_SOURCE, getGrokProviderSourceLabel, GrokProviderSource, GrokReferenceImageRole } from "./video-providers/types";
 import {
   PIPELINE_RETRY_BACKOFF_MS,
   PIPELINE_RETRY_MAX_ATTEMPTS,
@@ -85,6 +85,27 @@ const appendGrokStitchContinuationInstruction = (promptText: string, segmentInde
   segmentIndex === 0
     ? `${promptText}\n\n硬性要求：这是 ${providerLabel} 分段拼接模式第 ${segmentIndex + 1}/${totalSegments} 段；每段约 10 秒；建立开场画面和动作起点；不要字幕、水印、Logo。`
     : `${promptText}\n\n硬性要求：这是 ${providerLabel} 分段拼接模式第 ${segmentIndex + 1}/${totalSegments} 段；每段约 10 秒；本段输入参考图是上一段视频的最后可用非黑帧，请从该画面状态无缝继续；0.0 秒立即延续上一帧动作；不要重复上一段已经完成的动作；不要重新开始同一动作；不要回到更早的画面状态；不要重新介绍；主体、场景、动作、情绪连续；如果是口播，继续上一段未完成的句意或进入下一句，不要重复上一段开头；不要字幕、水印、Logo。`;
+
+const FIRST_FRAME_REFERENCE_PATTERN =
+  /(参考图作为首帧|以参考图为第一帧|首帧使用参考图|保持参考图开场|从参考图开始|first frame|use reference as first frame|start from the reference image|image-to-video first frame)/i;
+const REFERENCE_ONLY_PATTERN =
+  /(不要把参考图当作首帧|参考图不要作为开场画面|不要直接展示参考图|不要直接把参考图作为视频开场首帧)/i;
+
+function resolveGrokReferenceImageRole(params: {
+  hasReferenceImage: boolean;
+  mode: Task["mode"];
+  providerSource?: GrokProviderSource;
+  isStitchContinuation?: boolean;
+  prompt: string;
+  agentConstraints?: string;
+}): GrokReferenceImageRole | undefined {
+  if (!params.hasReferenceImage || params.providerSource !== "yunwu") return undefined;
+  if (params.isStitchContinuation) return "first_frame";
+  const text = `${params.prompt}\n${params.agentConstraints || ""}`;
+  if (REFERENCE_ONLY_PATTERN.test(text)) return "reference_only";
+  if (FIRST_FRAME_REFERENCE_PATTERN.test(text)) return "first_frame";
+  return params.mode === "medium_video" ? "first_frame" : "reference_only";
+}
 
 const logYunwuOfficialStrategyNormalized = (params: { requestedStrategy: "extend" | "stitch"; targetDurationSeconds: number }) => {
   console.log("[YUNWU_GROK][STRATEGY_NORMALIZED]", JSON.stringify({
@@ -1862,6 +1883,12 @@ async function executeTask(taskId: string) {
             ratio: targetRatio,
             targetDurationSeconds,
             referenceImages: task.referenceImageUrl ? [task.referenceImageUrl] : [],
+            referenceImageRole: resolveGrokReferenceImageRole({
+              hasReferenceImage: Boolean(task.referenceImageUrl),
+              mode: task.mode,
+              providerSource: grokProviderSource,
+              prompt: `${task.prompt}\n${plan.basePrompt}`,
+            }),
           });
         } else {
           logGrokSegmentPromptsReady({
@@ -1878,6 +1905,12 @@ async function executeTask(taskId: string) {
             ratio: targetRatio,
             targetDurationSeconds,
             referenceImages: task.referenceImageUrl ? [task.referenceImageUrl] : [],
+            referenceImageRole: resolveGrokReferenceImageRole({
+              hasReferenceImage: Boolean(task.referenceImageUrl),
+              mode: task.mode,
+              providerSource: grokProviderSource,
+              prompt: `${task.prompt}\n${plan.basePrompt}\n${plan.extensionPrompts.join("\n")}`,
+            }),
           });
         }
         if (!grokResult.ok || !grokResult.finalVideoUrl) {
