@@ -889,21 +889,23 @@ export async function createGrokVideoTask(params: { prompt: string; ratio: strin
   const image = params.images?.[0];
   const hasReferenceImage = Boolean(image);
   const referenceImageRole: GrokReferenceImageRole = image ? params.referenceImageRole || "first_frame" : "reference_only";
+  const requestedDuration = Number(params.durationSeconds);
+  const duration = Number.isFinite(requestedDuration) && requestedDuration >= 1 && requestedDuration <= 15
+    ? Math.floor(requestedDuration)
+    : GROK_UNIT_SECONDS;
   const usesFirstFrameImage = Boolean(image && referenceImageRole === "first_frame");
-  const usesReferenceImages = Boolean(image && !usesFirstFrameImage);
-  const mode = usesFirstFrameImage ? "image-to-video" : usesReferenceImages ? "reference-to-video" : "text-to-video";
-  const promptMode = usesFirstFrameImage ? "image-to-video" : "text-to-video";
-  const model = getModel(usesFirstFrameImage ? "first_frame" : usesReferenceImages ? "reference_images" : "text");
+  const usesSingleImageForReferenceOnly = Boolean(image && referenceImageRole === "reference_only" && duration > GROK_UNIT_SECONDS);
+  const usesImagePayload = usesFirstFrameImage || usesSingleImageForReferenceOnly;
+  const usesReferenceImages = Boolean(image && !usesImagePayload);
+  const mode = usesImagePayload ? "image-to-video" : usesReferenceImages ? "reference-to-video" : "text-to-video";
+  const promptMode = usesImagePayload ? "image-to-video" : "text-to-video";
+  const model = getModel(usesImagePayload ? "first_frame" : usesReferenceImages ? "reference_images" : "text");
   const rawPrompt =
     image && referenceImageRole === "reference_only" && !params.prompt.includes(REFERENCE_ONLY_PROMPT_INSTRUCTION)
       ? `${params.prompt.trim()}\n${REFERENCE_ONLY_PROMPT_INSTRUCTION}`
       : params.prompt.trim();
   const prompt = compactPromptForYunwu(rawPrompt, promptMode);
   const aspectRatio = params.ratio === "9:16" ? "9:16" : "16:9";
-  const requestedDuration = Number(params.durationSeconds);
-  const duration = Number.isFinite(requestedDuration) && requestedDuration >= 1 && requestedDuration <= 15
-    ? Math.floor(requestedDuration)
-    : GROK_UNIT_SECONDS;
   const payload: {
     model: string;
     prompt: string;
@@ -919,12 +921,12 @@ export async function createGrokVideoTask(params: { prompt: string; ratio: strin
     aspect_ratio: aspectRatio,
     duration,
   };
-  if (image && usesFirstFrameImage) {
+  if (image && usesImagePayload) {
     payload.image = { url: image.url };
   } else if (image && usesReferenceImages) {
     payload.reference_images = params.images?.map((item) => ({ url: item.url }));
   }
-  const referenceImageMode = usesFirstFrameImage ? image?.mode || "none" : getReferenceOnlyMode(image);
+  const referenceImageMode = usesImagePayload ? image?.mode || "none" : getReferenceOnlyMode(image);
   log("CREATE_REQUEST", {
     attempt: params.attempt ?? 1,
     endpoint: CREATE_PATH,
@@ -938,6 +940,7 @@ export async function createGrokVideoTask(params: { prompt: string; ratio: strin
     hasReferenceImage,
     referenceImageRole: image ? referenceImageRole : "none",
     referenceImageMode,
+    referenceImageCompatibilityMode: usesSingleImageForReferenceOnly ? "single_image_required_for_15s_reference" : "none",
     imageUrlPreview: image?.mode === "image.url.public_url" ? image.url.slice(0, 140) : "",
     imagePayloadPreviewLength: image?.mode === "image.url.data_url" ? image.url.length : 0,
     mimeType: image?.mimeType || "",
