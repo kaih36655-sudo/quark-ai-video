@@ -44,7 +44,7 @@ type PreparedGrokImage = {
 };
 
 const REFERENCE_ONLY_PROMPT_INSTRUCTION =
-  "参考图仅作为风格、主体、构图或品牌参考，不要直接把参考图作为视频开场首帧，除非用户明确要求。";
+  "参考图仅作为视觉参考、主体参考、构图参考或品牌参考；不要静态展示参考图；0.0 秒立即开始动作；不要把参考图长时间作为静态开场。";
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -55,7 +55,7 @@ const log = (stage: string, payload: Record<string, unknown>) => {
 const getBaseUrl = () => (process.env.YUNWU_GROK_VIDEO_BASE_URL || "https://yunwu.ai").replace(/\/$/, "");
 const legacyModelWarningCache = new Set<string>();
 const isLegacyYunwuGrokModel = (value: string) => /^grok-video-3(?:-|$)/i.test(value) || value === "grok-video-3-10s";
-const getConfiguredYunwuGrokModel = (envName: "YUNWU_GROK_VIDEO_MODEL" | "YUNWU_GROK_IMAGE_TO_VIDEO_MODEL", fallback: string) => {
+const getConfiguredYunwuGrokModel = (envName: "YUNWU_GROK_VIDEO_MODEL" | "YUNWU_GROK_IMAGE_TO_VIDEO_MODEL" | "YUNWU_GROK_REFERENCE_IMAGES_MODEL", fallback: string) => {
   const configured = (process.env[envName] || "").trim();
   if (!configured) return fallback;
   if (isLegacyYunwuGrokModel(configured)) {
@@ -70,7 +70,9 @@ const getConfiguredYunwuGrokModel = (envName: "YUNWU_GROK_VIDEO_MODEL" | "YUNWU_
 };
 const getTextToVideoModel = () => getConfiguredYunwuGrokModel("YUNWU_GROK_VIDEO_MODEL", DEFAULT_TEXT_TO_VIDEO_MODEL);
 const getImageToVideoModel = () => getConfiguredYunwuGrokModel("YUNWU_GROK_IMAGE_TO_VIDEO_MODEL", DEFAULT_IMAGE_TO_VIDEO_MODEL);
-const getModel = (hasReferenceImage = false) => (hasReferenceImage ? getImageToVideoModel() : getTextToVideoModel());
+const getReferenceImagesModel = () => getConfiguredYunwuGrokModel("YUNWU_GROK_REFERENCE_IMAGES_MODEL", DEFAULT_TEXT_TO_VIDEO_MODEL);
+const getModel = (role: "text" | "first_frame" | "reference_images") =>
+  role === "first_frame" ? getImageToVideoModel() : role === "reference_images" ? getReferenceImagesModel() : getTextToVideoModel();
 const getPromptMaxBytes = (mode: "text-to-video" | "image-to-video") => {
   const configured = Number(process.env.YUNWU_GROK_PROMPT_MAX_BYTES || 0);
   if (Number.isFinite(configured) && configured > 0) return configured;
@@ -639,8 +641,37 @@ const isYunwuParameterLimitError = (message: string, code = "") => {
     /reference-to-video[\s\S]{0,120}maximum allowed/.test(text) ||
     text.includes("prompt too long") ||
     text.includes("input too long") ||
-    text.includes("context length exceeded") ||
-    text.includes("参数错误")
+    text.includes("context length exceeded")
+  );
+};
+
+const isYunwuRequiredImageError = (message: string, code = "") => {
+  const text = `${message} ${code}`.toLowerCase();
+  return (
+    text.includes("image is required") ||
+    text.includes("missing image") ||
+    text.includes("required image") ||
+    text.includes("only supports image-to-video")
+  );
+};
+
+const isYunwuInvalidImageError = (message: string, code = "") => {
+  const text = `${message} ${code}`.toLowerCase();
+  return (
+    text.includes("invalid image") ||
+    text.includes("invalid base64") ||
+    text.includes("invalid reference image")
+  );
+};
+
+const isYunwuExplicitParameterError = (message: string, code = "") => {
+  const text = `${message} ${code}`.toLowerCase();
+  return (
+    text.includes("参数错误") ||
+    text.includes("参数无效") ||
+    text.includes("invalid parameter") ||
+    text.includes("invalid params") ||
+    text.includes("bad parameter")
   );
 };
 
@@ -649,8 +680,12 @@ const isYunwuInvalidRequestCodeError = (message: string, code = "") => {
   return (
     text.includes("invalid-argument") ||
     text.includes("invalid_argument") ||
+    text.includes("invalid_request") ||
+    text.includes("invalid request") ||
     text.includes("bad_request") ||
-    text.includes("invalid_request_error")
+    text.includes("invalid_request_error") ||
+    isYunwuRequiredImageError(message, code) ||
+    isYunwuInvalidImageError(message, code)
   );
 };
 
@@ -659,9 +694,12 @@ const isNonRetryableError = (message: string) => {
   const status = extractHttpStatusFromMessage(message);
   if (isYunwuRequestSizeLimitError(message, status)) return true;
   if (isYunwuCapacityOrRateLimitError(message)) return false;
-  if (status === 429 && !isYunwuParameterLimitError(message)) return false;
+  if (status === 429) {
+    return isYunwuParameterLimitError(message) || isYunwuRequiredImageError(message) || isYunwuInvalidImageError(message) || isYunwuExplicitParameterError(message);
+  }
   if (isYunwuParameterLimitError(message)) return true;
   if (isYunwuInvalidRequestCodeError(message)) return true;
+  if (isYunwuExplicitParameterError(message)) return true;
   return (
     text.includes("yunwu_grok_video_api_key") ||
     text.includes("api key") ||
@@ -670,8 +708,6 @@ const isNonRetryableError = (message: string) => {
     text.includes("status=400") ||
     text.includes("unauthorized") ||
     text.includes("forbidden") ||
-    text.includes("invalid parameter") ||
-    text.includes("参数无效") ||
     text.includes("参考图读取失败") ||
     text.includes("failed to decode base64 image") ||
     text.includes("illegal base64 data") ||
@@ -853,10 +889,11 @@ export async function createGrokVideoTask(params: { prompt: string; ratio: strin
   const image = params.images?.[0];
   const hasReferenceImage = Boolean(image);
   const referenceImageRole: GrokReferenceImageRole = image ? params.referenceImageRole || "first_frame" : "reference_only";
-  const useFirstFrameImage = Boolean(image && referenceImageRole === "first_frame");
-  const mode = useFirstFrameImage ? "image-to-video" : hasReferenceImage ? "reference-to-video" : "text-to-video";
-  const promptMode = hasReferenceImage ? "image-to-video" : "text-to-video";
-  const model = getModel(hasReferenceImage);
+  const usesFirstFrameImage = Boolean(image && referenceImageRole === "first_frame");
+  const usesReferenceImages = Boolean(image && !usesFirstFrameImage);
+  const mode = usesFirstFrameImage ? "image-to-video" : usesReferenceImages ? "reference-to-video" : "text-to-video";
+  const promptMode = usesFirstFrameImage ? "image-to-video" : "text-to-video";
+  const model = getModel(usesFirstFrameImage ? "first_frame" : usesReferenceImages ? "reference_images" : "text");
   const rawPrompt =
     image && referenceImageRole === "reference_only" && !params.prompt.includes(REFERENCE_ONLY_PROMPT_INSTRUCTION)
       ? `${params.prompt.trim()}\n${REFERENCE_ONLY_PROMPT_INSTRUCTION}`
@@ -882,12 +919,12 @@ export async function createGrokVideoTask(params: { prompt: string; ratio: strin
     aspect_ratio: aspectRatio,
     duration,
   };
-  if (image && useFirstFrameImage) {
+  if (image && usesFirstFrameImage) {
     payload.image = { url: image.url };
-  } else if (image) {
+  } else if (image && usesReferenceImages) {
     payload.reference_images = params.images?.map((item) => ({ url: item.url }));
   }
-  const referenceImageMode = useFirstFrameImage ? image?.mode || "none" : getReferenceOnlyMode(image);
+  const referenceImageMode = usesFirstFrameImage ? image?.mode || "none" : getReferenceOnlyMode(image);
   log("CREATE_REQUEST", {
     attempt: params.attempt ?? 1,
     endpoint: CREATE_PATH,
