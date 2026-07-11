@@ -37,6 +37,10 @@ export type GrokVideoResult = {
   failedUnits: number;
   stitchConcatFailed?: boolean;
   stitchConcatError?: string;
+  apiModel?: string;
+  actualModel?: string;
+  modelRole?: "primary" | "fallback";
+  usedFallback?: boolean;
   error?: string;
 };
 

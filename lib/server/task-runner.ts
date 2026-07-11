@@ -70,6 +70,8 @@ const getYunwuGrokRecordModel = (configured: string | undefined, fallback: strin
   const value = (configured || "").trim();
   return value && !isLegacyYunwuGrokModel(value) ? value : fallback;
 };
+const getYunwuGrokPrimaryRecordModel = () =>
+  getYunwuGrokRecordModel(process.env.YUNWU_GROK_PRIMARY_MODEL || process.env.YUNWU_GROK_VIDEO_MODEL, "grok-imagine-video");
 
 const getGrokApiModelForRecord = (source?: GrokProviderSource, hasReferenceImage = false) =>
   source === "xai"
@@ -78,9 +80,7 @@ const getGrokApiModelForRecord = (source?: GrokProviderSource, hasReferenceImage
       : process.env.XAI_GROK_VIDEO_MODEL || "grok-imagine-video"
     : source === "jiekou"
       ? "grok-imagine-video"
-      : hasReferenceImage
-        ? getYunwuGrokRecordModel(process.env.YUNWU_GROK_IMAGE_TO_VIDEO_MODEL, "grok-imagine-video-1.5-preview")
-        : getYunwuGrokRecordModel(process.env.YUNWU_GROK_VIDEO_MODEL, "grok-imagine-video");
+      : getYunwuGrokPrimaryRecordModel();
 
 const isSupportedGrokProviderSource = (source: unknown): source is GrokProviderSource => source === "yunwu" || source === "jiekou" || source === "xai";
 
@@ -1312,6 +1312,7 @@ async function executeTask(taskId: string) {
           return;
         }
 
+        const stitchApiModel = grokResult.apiModel || getGrokApiModelForRecord(grokProviderSource, Boolean(task.referenceImageUrl));
         const createdRecords = finalVideoUrl
           ? videosRepository.createMany([
               {
@@ -1343,7 +1344,7 @@ async function executeTask(taskId: string) {
                 ratio: targetRatio,
                 size: targetSize,
                 displayModel: "Grok",
-                apiModel: getGrokApiModelForRecord(grokProviderSource, Boolean(task.referenceImageUrl)),
+                apiModel: stitchApiModel,
                 mediumVideo: true,
                 mediumVideoTaskId: task.id,
                 chainId,
@@ -1390,7 +1391,7 @@ async function executeTask(taskId: string) {
                   ratio: targetRatio,
                   size: targetSize,
                   displayModel: "Grok",
-                  apiModel: getGrokApiModelForRecord(grokProviderSource),
+                  apiModel: stitchApiModel,
                   mediumVideo: true,
                   mediumVideoTaskId: task.id,
                   chainId,
@@ -1447,6 +1448,7 @@ async function executeTask(taskId: string) {
         referenceImages,
       });
       successCount = grokResult.successfulUnits;
+      const extendApiModel = grokResult.apiModel || getGrokApiModelForRecord(grokProviderSource, Boolean(referenceImages.length));
 
       if (!grokResult.ok || !grokResult.finalVideoUrl) {
         failedCount = Math.max(1, totalUnits - successCount);
@@ -1471,7 +1473,7 @@ async function executeTask(taskId: string) {
               taskId: task.id,
               providerTaskId: grokResult.finalTaskId || grokResult.providerTaskIds.join(","),
               title: `中视频部分完成：${successCount * 10}秒 - ${plan.title}`,
-              content: `中视频部分完成：目标 ${targetDurationSeconds} 秒，已成功 ${successCount * 10} 秒｜模型：${getGrokApiModelForRecord(grokProviderSource, Boolean(referenceImages.length))}｜providerTaskIds：${grokResult.providerTaskIds.join(", ")}｜是否疑似完整视频：未知｜${task.agentName ? `智能体：${task.agentName}｜` : ""}${errorMessage}`,
+              content: `中视频部分完成：目标 ${targetDurationSeconds} 秒，已成功 ${successCount * 10} 秒｜模型：${extendApiModel}｜providerTaskIds：${grokResult.providerTaskIds.join(", ")}｜是否疑似完整视频：未知｜${task.agentName ? `智能体：${task.agentName}｜` : ""}${errorMessage}`,
               script: plan.outline.map((item) => `${item.start}-${item.end}s：${item.summary}`),
               prompt: [plan.basePrompt, ...plan.extensionPrompts].join("\n\n--- EXTEND ---\n\n"),
               sourcePrompt: task.prompt,
@@ -1496,7 +1498,7 @@ async function executeTask(taskId: string) {
               ratio: targetRatio,
               size: targetSize,
               displayModel: "Grok",
-              apiModel: getGrokApiModelForRecord(grokProviderSource, Boolean(referenceImages.length)),
+              apiModel: extendApiModel,
               mediumVideo: true,
               mediumVideoTaskId: task.id,
               chainId,
@@ -1542,7 +1544,7 @@ async function executeTask(taskId: string) {
           taskId: task.id,
           providerTaskId: grokResult.finalTaskId || grokResult.providerTaskIds.join(","),
           title: `中视频：${targetDurationSeconds}秒 - ${plan.title}`,
-          content: `中视频：${targetDurationSeconds}秒｜模型：${getGrokApiModelForRecord(grokProviderSource, Boolean(referenceImages.length))}｜目标时长：${targetDurationSeconds}秒｜扩展次数：${extendCount}｜providerTaskIds：${grokResult.providerTaskIds.join(", ")}｜是否疑似完整视频：${grokResult.isFinalVideoLikelyComplete === true ? "是" : "未知"}｜片段/阶段URL数：${grokResult.segmentVideoUrls?.length ?? 0}${task.agentName ? `｜智能体：${task.agentName}` : ""}`,
+          content: `中视频：${targetDurationSeconds}秒｜模型：${extendApiModel}｜目标时长：${targetDurationSeconds}秒｜扩展次数：${extendCount}｜providerTaskIds：${grokResult.providerTaskIds.join(", ")}｜是否疑似完整视频：${grokResult.isFinalVideoLikelyComplete === true ? "是" : "未知"}｜片段/阶段URL数：${grokResult.segmentVideoUrls?.length ?? 0}${task.agentName ? `｜智能体：${task.agentName}` : ""}`,
           script: plan.outline.map((item) => `${item.start}-${item.end}s：${item.summary}`),
           prompt: [plan.basePrompt, ...plan.extensionPrompts].join("\n\n--- EXTEND ---\n\n"),
           sourcePrompt: task.prompt,
@@ -1567,7 +1569,7 @@ async function executeTask(taskId: string) {
           ratio: targetRatio,
           size: targetSize,
           displayModel: "Grok",
-          apiModel: getGrokApiModelForRecord(grokProviderSource, Boolean(referenceImages.length)),
+          apiModel: extendApiModel,
           mediumVideo: true,
           mediumVideoTaskId: task.id,
           chainId,
@@ -1919,6 +1921,7 @@ async function executeTask(taskId: string) {
             }),
           });
         }
+        const resultApiModel = grokResult.apiModel || getGrokApiModelForRecord(grokProviderSource, Boolean(task.referenceImageUrl));
         if (!grokResult.ok || !grokResult.finalVideoUrl) {
           failedCount += 1;
           const rawError = grokResult.error || "Grok 视频生成失败";
@@ -1953,7 +1956,7 @@ async function executeTask(taskId: string) {
               ratio: targetRatio,
               size: targetSize,
               displayModel: "Grok",
-              apiModel: getGrokApiModelForRecord(grokProviderSource, Boolean(task.referenceImageUrl)),
+              apiModel: resultApiModel,
               sourceMode: task.sourceMode,
               videoProvider: "grok",
               videoModelLabel: "Grok",
@@ -2000,7 +2003,7 @@ async function executeTask(taskId: string) {
             ratio: targetRatio,
             size: targetSize,
             displayModel: "Grok",
-            apiModel: getGrokApiModelForRecord(grokProviderSource, Boolean(task.referenceImageUrl)),
+            apiModel: resultApiModel,
             sourceMode: task.sourceMode,
             videoProvider: "grok",
             videoModelLabel: "Grok",

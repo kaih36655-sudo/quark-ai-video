@@ -21,10 +21,15 @@ type GrokTaskQueryResult = {
   duration?: number;
   errorMessage?: string;
   raw?: Record<string, unknown>;
+  apiModel?: string;
+  actualModel?: string;
+  modelRole?: "primary" | "fallback";
+  usedFallback?: boolean;
 };
 
 type YunwuQueryMode = "official_videos" | "legacy_video_query";
-type YunwuResponseShape = "top_level" | "data" | "result" | "unknown";
+type YunwuResponseShape = "top_level" | "data" | "result" | "task" | "response" | "unknown";
+type YunwuCreateUncertainReason = "parse_failed" | "task_id_missing" | "network_state_uncertain";
 
 const CREATE_PATH = "/v1/videos/generations";
 const QUERY_PATH = "/v1/video/query";
@@ -36,6 +41,9 @@ const QUERY_FETCH_BACKOFF_MS = [3000, 5000];
 const YUNWU_OFFICIAL_EXTEND_UNSUPPORTED_MESSAGE = "云雾 Grok 官方接口暂未接入扩展视频，请切换为分段拼接。";
 const DEFAULT_TEXT_TO_VIDEO_MODEL = "grok-imagine-video";
 const DEFAULT_IMAGE_TO_VIDEO_MODEL = "grok-imagine-video-1.5-preview";
+const PRIMARY_CREATE_BACKOFF_MS = 5000;
+const FALLBACK_CREATE_BACKOFF_MS = 10000;
+const CREATE_MAX_ATTEMPTS_LIMIT = 3;
 
 type PreparedGrokImage = {
   url: string;
@@ -52,11 +60,32 @@ const log = (stage: string, payload: Record<string, unknown>) => {
   console.log(`[YUNWU_GROK][${stage}]`, JSON.stringify({ providerSource: DEFAULT_GROK_PROVIDER_SOURCE, ...payload }));
 };
 
+class YunwuCreateUncertainError extends Error {
+  readonly reason: YunwuCreateUncertainReason;
+  readonly httpStatus?: number;
+  readonly responseShape?: YunwuResponseShape;
+  readonly rawPreview?: unknown;
+
+  constructor(params: { message: string; reason: YunwuCreateUncertainReason; httpStatus?: number; responseShape?: YunwuResponseShape; rawPreview?: unknown }) {
+    super(params.message);
+    this.name = "YunwuCreateUncertainError";
+    this.reason = params.reason;
+    this.httpStatus = params.httpStatus;
+    this.responseShape = params.responseShape;
+    this.rawPreview = params.rawPreview;
+  }
+}
+
 const getBaseUrl = () => (process.env.YUNWU_GROK_VIDEO_BASE_URL || "https://yunwu.ai").replace(/\/$/, "");
 const legacyModelWarningCache = new Set<string>();
 const isLegacyYunwuGrokModel = (value: string) => /^grok-video-3(?:-|$)/i.test(value) || value === "grok-video-3-10s";
-const getConfiguredYunwuGrokModel = (envName: "YUNWU_GROK_VIDEO_MODEL" | "YUNWU_GROK_IMAGE_TO_VIDEO_MODEL" | "YUNWU_GROK_REFERENCE_IMAGES_MODEL", fallback: string) => {
-  const configured = (process.env[envName] || "").trim();
+type YunwuGrokModelEnvName =
+  | "YUNWU_GROK_PRIMARY_MODEL"
+  | "YUNWU_GROK_FALLBACK_MODEL"
+  | "YUNWU_GROK_VIDEO_MODEL"
+  | "YUNWU_GROK_IMAGE_TO_VIDEO_MODEL"
+  | "YUNWU_GROK_REFERENCE_IMAGES_MODEL";
+const sanitizeConfiguredYunwuGrokModel = (envName: YunwuGrokModelEnvName, configured: string, fallback: string) => {
   if (!configured) return fallback;
   if (isLegacyYunwuGrokModel(configured)) {
     const cacheKey = `${envName}:${configured}`;
@@ -68,11 +97,25 @@ const getConfiguredYunwuGrokModel = (envName: "YUNWU_GROK_VIDEO_MODEL" | "YUNWU_
   }
   return configured;
 };
-const getTextToVideoModel = () => getConfiguredYunwuGrokModel("YUNWU_GROK_VIDEO_MODEL", DEFAULT_TEXT_TO_VIDEO_MODEL);
-const getImageToVideoModel = () => getConfiguredYunwuGrokModel("YUNWU_GROK_IMAGE_TO_VIDEO_MODEL", DEFAULT_IMAGE_TO_VIDEO_MODEL);
-const getReferenceImagesModel = () => getConfiguredYunwuGrokModel("YUNWU_GROK_REFERENCE_IMAGES_MODEL", DEFAULT_TEXT_TO_VIDEO_MODEL);
-const getModel = (role: "text" | "first_frame" | "reference_images") =>
-  role === "first_frame" ? getImageToVideoModel() : role === "reference_images" ? getReferenceImagesModel() : getTextToVideoModel();
+const getConfiguredYunwuGrokModel = (envName: YunwuGrokModelEnvName, fallback: string) =>
+  sanitizeConfiguredYunwuGrokModel(envName, (process.env[envName] || "").trim(), fallback);
+const getPrimaryModel = () => {
+  const primary = (process.env.YUNWU_GROK_PRIMARY_MODEL || "").trim();
+  if (primary) return sanitizeConfiguredYunwuGrokModel("YUNWU_GROK_PRIMARY_MODEL", primary, DEFAULT_TEXT_TO_VIDEO_MODEL);
+  return getConfiguredYunwuGrokModel("YUNWU_GROK_VIDEO_MODEL", DEFAULT_TEXT_TO_VIDEO_MODEL);
+};
+const getFallbackModel = () => {
+  const fallback = (process.env.YUNWU_GROK_FALLBACK_MODEL || "").trim();
+  if (fallback) return sanitizeConfiguredYunwuGrokModel("YUNWU_GROK_FALLBACK_MODEL", fallback, DEFAULT_IMAGE_TO_VIDEO_MODEL);
+  return getConfiguredYunwuGrokModel("YUNWU_GROK_IMAGE_TO_VIDEO_MODEL", DEFAULT_IMAGE_TO_VIDEO_MODEL);
+};
+const parseClampedAttemptCount = (value: string | undefined, fallback: number) => {
+  const parsed = Number(value || 0);
+  const effective = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+  return Math.min(CREATE_MAX_ATTEMPTS_LIMIT, Math.max(1, effective));
+};
+const getCreateMaxAttempts = (envName: "YUNWU_GROK_PRIMARY_MAX_ATTEMPTS" | "YUNWU_GROK_FALLBACK_MAX_ATTEMPTS", fallback: number) =>
+  parseClampedAttemptCount(process.env[envName], fallback);
 const getPromptMaxBytes = (mode: "text-to-video" | "image-to-video") => {
   const configured = Number(process.env.YUNWU_GROK_PROMPT_MAX_BYTES || 0);
   if (Number.isFinite(configured) && configured > 0) return configured;
@@ -113,6 +156,25 @@ const parseJsonResponse = async (response: Response) => {
     json = rawText ? (JSON.parse(rawText) as Record<string, unknown>) : null;
   } catch {
     json = null;
+  }
+  return { ok: response.ok, status: response.status, rawText, json };
+};
+
+const parseCreateJsonResponse = async (response: Response) => {
+  const rawText = await response.text();
+  let json: Record<string, unknown> | null = null;
+  try {
+    json = rawText ? (JSON.parse(rawText) as Record<string, unknown>) : null;
+  } catch {
+    if (response.ok) {
+      throw new YunwuCreateUncertainError({
+        message: "云雾任务可能已创建，但响应解析失败，为避免重复生成，已停止自动重试。",
+        reason: "parse_failed",
+        httpStatus: response.status,
+        responseShape: "unknown",
+        rawPreview: rawText.slice(0, 500),
+      });
+    }
   }
   return { ok: response.ok, status: response.status, rawText, json };
 };
@@ -486,14 +548,20 @@ const responseRecords = (json: Record<string, unknown> | null) => {
   const top = json ?? undefined;
   const data = asRecord(json?.data);
   const result = asRecord(json?.result);
-  return [top, data, result].filter(Boolean) as Record<string, unknown>[];
+  const task = asRecord(json?.task);
+  const response = asRecord(json?.response);
+  return [top, data, result, task, response].filter(Boolean) as Record<string, unknown>[];
 };
 
 const responseShape = (json: Record<string, unknown> | null): YunwuResponseShape => {
   const data = asRecord(json?.data);
   const result = asRecord(json?.result);
+  const task = asRecord(json?.task);
+  const response = asRecord(json?.response);
   if (data && (data.status || data.video || data.video_url || data.url || data.output)) return "data";
   if (result && (result.status || result.video || result.video_url || result.url || result.output)) return "result";
+  if (task && (task.request_id || task.requestId || task.task_id || task.taskId || task.id || task.status)) return "task";
+  if (response && (response.request_id || response.task_id || response.id || response.status)) return "response";
   if (json) return "top_level";
   return "unknown";
 };
@@ -504,11 +572,9 @@ const extractRawStatus = (json: Record<string, unknown> | null) => {
 };
 
 const extractTaskId = (json: Record<string, unknown> | null) => {
-  const data = json?.data as Record<string, unknown> | undefined;
-  const result = json?.result as Record<string, unknown> | undefined;
-  const candidates = [json?.request_id, json?.task_id, json?.taskId, json?.id, data?.request_id, data?.task_id, data?.taskId, data?.id, result?.request_id, result?.task_id, result?.taskId, result?.id];
-  const found = candidates.find((value) => typeof value === "string" && value.trim().length > 0);
-  return typeof found === "string" ? found : "";
+  const candidates = responseRecords(json).flatMap((record) => [record.request_id, record.requestId, record.task_id, record.taskId, record.id]);
+  const found = candidates.find((value) => (typeof value === "string" && value.trim().length > 0) || (typeof value === "number" && Number.isFinite(value)));
+  return typeof found === "string" ? found.trim() : typeof found === "number" ? String(found) : "";
 };
 
 const extractVideoUrl = (json: Record<string, unknown> | null) => {
@@ -575,6 +641,43 @@ const extractHttpStatusFromMessage = (message: string) => {
   return match ? Number(match[1]) : undefined;
 };
 
+const extractErrorCodeFromMessage = (message: string) => {
+  const text = message.toLowerCase();
+  const knownCodes = ["invalid-argument", "invalid_argument", "invalid_request_error", "invalid_request", "bad_request"];
+  return knownCodes.find((code) => text.includes(code)) || "";
+};
+
+const stringifyNetworkError = (error: unknown) => {
+  if (!(error instanceof Error)) return String(error);
+  const cause = error.cause && typeof error.cause === "object" ? (error.cause as Record<string, unknown>) : undefined;
+  return [
+    error.name,
+    error.message,
+    typeof cause?.code === "string" ? cause.code : "",
+    typeof cause?.message === "string" ? cause.message : "",
+    typeof cause?.name === "string" ? cause.name : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+};
+
+const isClearlyBeforeResponseNetworkError = (error: unknown) => {
+  const text = stringifyNetworkError(error).toLowerCase();
+  return (
+    text.includes("enotfound") ||
+    text.includes("eai_again") ||
+    text.includes("dns") ||
+    text.includes("econnrefused") ||
+    text.includes("connection refused") ||
+    text.includes("invalid url") ||
+    text.includes("err_invalid_url") ||
+    text.includes("certificate") ||
+    text.includes("tls") ||
+    text.includes("ssl") ||
+    text.includes("handshake")
+  );
+};
+
 const isYunwuRequestSizeLimitError = (message: string, status = extractHttpStatusFromMessage(message), code = "") => {
   const text = `${message} ${code}`.toLowerCase();
   return (
@@ -617,6 +720,12 @@ const isYunwuCapacityOrRateLimitError = (message: string, code = "") => {
     text.includes("capacity") ||
     text.includes("overload") ||
     text.includes("service unavailable") ||
+    text.includes("model unavailable") ||
+    text.includes("model temporarily unavailable") ||
+    text.includes("no available channel") ||
+    text.includes("no distributor") ||
+    text.includes("无可用渠道") ||
+    text.includes("模型无可用渠道") ||
     text.includes("服务暂时不可用") ||
     text.includes("上游繁忙") ||
     text.includes("上游负载") ||
@@ -703,6 +812,8 @@ const isNonRetryableError = (message: string) => {
   return (
     text.includes("yunwu_grok_video_api_key") ||
     text.includes("api key") ||
+    text.includes("为避免重复生成") ||
+    text.includes("提交状态不确定") ||
     text.includes("401") ||
     text.includes("403") ||
     text.includes("status=400") ||
@@ -717,6 +828,28 @@ const isNonRetryableError = (message: string) => {
 };
 
 const isRetryableError = (message: string) => !isNonRetryableError(message);
+
+const isYunwuModelFallbackEligibleError = (message: string) => {
+  const text = message.toLowerCase();
+  const status = extractHttpStatusFromMessage(message);
+  if (isNonRetryableError(message)) return false;
+  return (
+    isYunwuCapacityOrRateLimitError(message) ||
+    status === 429 ||
+    status === 502 ||
+    status === 503 ||
+    status === 504 ||
+    text.includes("model unavailable") ||
+    text.includes("model temporarily unavailable") ||
+    text.includes("no available channel") ||
+    text.includes("no distributor") ||
+    text.includes("无可用渠道") ||
+    text.includes("模型无可用渠道") ||
+    text.includes("timeout") ||
+    text.includes("network timeout") ||
+    text.includes("fetch failed")
+  );
+};
 
 const isQueryFetchRetryableError = (message: string) => {
   const text = message.toLowerCase();
@@ -899,7 +1032,6 @@ export async function createGrokVideoTask(params: { prompt: string; ratio: strin
   const usesReferenceImages = Boolean(image && !usesImagePayload);
   const mode = usesImagePayload ? "image-to-video" : usesReferenceImages ? "reference-to-video" : "text-to-video";
   const promptMode = usesImagePayload ? "image-to-video" : "text-to-video";
-  const model = getModel(usesImagePayload ? "first_frame" : usesReferenceImages ? "reference_images" : "text");
   const rawPrompt =
     image && referenceImageRole === "reference_only" && !params.prompt.includes(REFERENCE_ONLY_PROMPT_INSTRUCTION)
       ? `${params.prompt.trim()}\n${REFERENCE_ONLY_PROMPT_INSTRUCTION}`
@@ -915,7 +1047,7 @@ export async function createGrokVideoTask(params: { prompt: string; ratio: strin
     image?: { url: string };
     reference_images?: Array<{ url: string }>;
   } = {
-    model,
+    model: "",
     prompt,
     resolution: "720p",
     aspect_ratio: aspectRatio,
@@ -927,47 +1059,227 @@ export async function createGrokVideoTask(params: { prompt: string; ratio: strin
     payload.reference_images = params.images?.map((item) => ({ url: item.url }));
   }
   const referenceImageMode = usesImagePayload ? image?.mode || "none" : getReferenceOnlyMode(image);
-  log("CREATE_REQUEST", {
-    attempt: params.attempt ?? 1,
-    endpoint: CREATE_PATH,
-    baseUrl: getBaseUrl(),
-    model,
-    mode,
-    promptBytes: Buffer.byteLength(prompt, "utf8"),
-    duration: payload.duration,
-    resolution: payload.resolution,
-    aspectRatio: payload.aspect_ratio,
-    hasReferenceImage,
-    referenceImageRole: image ? referenceImageRole : "none",
-    referenceImageMode,
-    referenceImageCompatibilityMode: usesSingleImageForReferenceOnly ? "single_image_required_for_15s_reference" : "none",
-    imageUrlPreview: image?.mode === "image.url.public_url" ? image.url.slice(0, 140) : "",
-    imagePayloadPreviewLength: image?.mode === "image.url.data_url" ? image.url.length : 0,
-    mimeType: image?.mimeType || "",
-  });
-  const response = await fetch(`${getBaseUrl()}${CREATE_PATH}`, {
-    method: "POST",
-    headers: buildHeaders(),
-    body: JSON.stringify(payload),
-  });
-  const parsed = await parseJsonResponse(response);
-  const taskId = extractTaskId(parsed.json);
-  log("CREATE_RESPONSE", {
-    attempt: params.attempt ?? 1,
-    status: parsed.status,
-    ok: parsed.ok,
-    taskId,
-    requestId: typeof parsed.json?.request_id === "string" ? parsed.json.request_id : "",
-    id: typeof parsed.json?.id === "string" ? parsed.json.id : "",
-    apiModel: model,
-    actualModel: model,
-    rawPreview: safeResponsePreview(parsed.json),
-  });
-  if (!parsed.ok) {
-    throw new Error(`Grok 创建视频失败 status=${parsed.status} ${extractErrorMessage(parsed.json, parsed.rawText.slice(0, 120))}`);
+  const primaryModel = getPrimaryModel();
+  const fallbackCandidate = getFallbackModel();
+  const fallbackModel = fallbackCandidate && fallbackCandidate !== primaryModel ? fallbackCandidate : "";
+  const primaryMaxAttempts = getCreateMaxAttempts("YUNWU_GROK_PRIMARY_MAX_ATTEMPTS", 2);
+  const fallbackMaxAttempts = getCreateMaxAttempts("YUNWU_GROK_FALLBACK_MAX_ATTEMPTS", 2);
+  const modelPlan: Array<{ role: "primary" | "fallback"; model: string; maxAttempts: number; backoffMs: number }> = [
+    { role: "primary", model: primaryModel, maxAttempts: primaryMaxAttempts, backoffMs: PRIMARY_CREATE_BACKOFF_MS },
+    ...(fallbackModel ? [{ role: "fallback" as const, model: fallbackModel, maxAttempts: fallbackMaxAttempts, backoffMs: FALLBACK_CREATE_BACKOFF_MS }] : []),
+  ];
+  let totalAttempt = 0;
+  let primaryFailureReason = "";
+
+  for (const plan of modelPlan) {
+    if (plan.role === "primary") {
+      log("PRIMARY_MODEL_START", {
+        model: plan.model,
+        duration,
+        mode,
+        hasReferenceImage,
+        referenceImageRole: image ? referenceImageRole : "none",
+        referenceImageMode,
+        maxAttempts: plan.maxAttempts,
+      });
+    } else {
+      log("FALLBACK_MODEL_START", {
+        primaryModel,
+        fallbackModel: plan.model,
+        primaryFailureReason,
+        duration,
+        mode,
+        referenceImageRole: image ? referenceImageRole : "none",
+        referenceImageMode,
+        maxAttempts: plan.maxAttempts,
+      });
+    }
+
+    let lastReason = "";
+    for (let modelAttempt = 1; modelAttempt <= plan.maxAttempts; modelAttempt += 1) {
+      totalAttempt += 1;
+      const requestPayload = { ...payload, model: plan.model };
+      try {
+        log("CREATE_REQUEST", {
+          attempt: totalAttempt,
+          modelRole: plan.role,
+          modelAttempt,
+          totalAttempt,
+          endpoint: CREATE_PATH,
+          baseUrl: getBaseUrl(),
+          model: plan.model,
+          mode,
+          promptBytes: Buffer.byteLength(prompt, "utf8"),
+          duration: requestPayload.duration,
+          resolution: requestPayload.resolution,
+          aspectRatio: requestPayload.aspect_ratio,
+          hasReferenceImage,
+          referenceImageRole: image ? referenceImageRole : "none",
+          referenceImageMode,
+          referenceImageCompatibilityMode: usesSingleImageForReferenceOnly ? "single_image_required_for_15s_reference" : "none",
+          imageUrlPreview: image?.mode === "image.url.public_url" ? image.url.slice(0, 140) : "",
+          imagePayloadPreviewLength: image?.mode === "image.url.data_url" ? image.url.length : 0,
+          mimeType: image?.mimeType || "",
+        });
+        let response: Response;
+        try {
+          response = await fetch(`${getBaseUrl()}${CREATE_PATH}`, {
+            method: "POST",
+            headers: buildHeaders(),
+            body: JSON.stringify(requestPayload),
+          });
+        } catch (fetchError) {
+          if (!isClearlyBeforeResponseNetworkError(fetchError)) {
+            throw new YunwuCreateUncertainError({
+              message: "云雾任务提交状态不确定，为避免重复生成，已停止自动重试。",
+              reason: "network_state_uncertain",
+              rawPreview: stringifyNetworkError(fetchError).slice(0, 500),
+            });
+          }
+          throw new Error(stringifyNetworkError(fetchError));
+        }
+        const parsed = await parseCreateJsonResponse(response);
+        const taskId = extractTaskId(parsed.json);
+        log("CREATE_RESPONSE", {
+          attempt: totalAttempt,
+          modelRole: plan.role,
+          modelAttempt,
+          totalAttempt,
+          status: parsed.status,
+          ok: parsed.ok,
+          taskId,
+          requestId: typeof parsed.json?.request_id === "string" ? parsed.json.request_id : "",
+          id: typeof parsed.json?.id === "string" ? parsed.json.id : "",
+          apiModel: plan.model,
+          actualModel: plan.model,
+          rawPreview: safeResponsePreview(parsed.json),
+        });
+        if (!parsed.ok) {
+          throw new Error(`Grok 创建视频失败 status=${parsed.status} ${extractErrorMessage(parsed.json, parsed.rawText.slice(0, 120))}`);
+        }
+        if (!taskId) {
+          const shape = responseShape(parsed.json);
+          const rawPreview = parsed.json ? safeResponsePreview(parsed.json) : parsed.rawText.slice(0, 500);
+          log("CREATE_RESPONSE_UNCERTAIN", {
+            model: plan.model,
+            modelRole: plan.role,
+            modelAttempt,
+            totalAttempt,
+            httpStatus: parsed.status,
+            responseShape: shape,
+            reason: "task_id_missing",
+            retryable: false,
+            fallbackEligible: false,
+            rawPreview,
+          });
+          throw new YunwuCreateUncertainError({
+            message: "云雾任务可能已创建，但响应未返回可识别的任务ID，为避免重复生成，已停止自动重试。",
+            reason: "task_id_missing",
+            httpStatus: parsed.status,
+            responseShape: shape,
+            rawPreview,
+          });
+        }
+        if (plan.role === "fallback") {
+          log("FALLBACK_MODEL_SUCCESS", { primaryModel, fallbackModel: plan.model, taskId, requestId: typeof parsed.json?.request_id === "string" ? parsed.json.request_id : "", attempts: modelAttempt });
+        }
+        return {
+          taskId,
+          queryMode: "official_videos" as const,
+          raw: parsed.json,
+          apiModel: plan.model,
+          actualModel: plan.model,
+          modelRole: plan.role,
+          usedFallback: plan.role === "fallback",
+        };
+      } catch (error) {
+        if (error instanceof YunwuCreateUncertainError) {
+          if (error.reason !== "task_id_missing") {
+            log("CREATE_RESPONSE_UNCERTAIN", {
+              model: plan.model,
+              modelRole: plan.role,
+              modelAttempt,
+              totalAttempt,
+              httpStatus: error.httpStatus ?? "",
+              responseShape: error.responseShape || "unknown",
+              reason: error.reason,
+              retryable: false,
+              fallbackEligible: false,
+              rawPreview: error.rawPreview || "",
+            });
+          }
+          log("AUTO_RETRY_STOPPED", {
+            model: plan.model,
+            modelRole: plan.role,
+            reason: "avoid_duplicate_create",
+            attemptsUsed: modelAttempt,
+          });
+          throw new Error(error.message);
+        }
+        const reason = error instanceof Error ? error.message : String(error);
+        lastReason = reason;
+        const retryable = isRetryableError(reason);
+        const status = extractHttpStatusFromMessage(reason);
+        const code = extractErrorCodeFromMessage(reason);
+        const canRetryModel = retryable && modelAttempt < plan.maxAttempts;
+        if (canRetryModel) {
+          log("RETRY", {
+            stage: "create",
+            model: plan.model,
+            modelRole: plan.role,
+            modelAttempt,
+            maxAttempts: plan.maxAttempts,
+            totalAttempt,
+            delayMs: plan.backoffMs,
+            reason,
+            retryable: true,
+            retryReason: isYunwuCapacityOrRateLimitError(reason) || status === 429 ? "capacity_or_rate_limit" : "transient_or_unknown",
+          });
+          await delay(plan.backoffMs);
+          continue;
+        }
+        if (plan.role === "primary") {
+          primaryFailureReason = reason;
+          const fallbackEligible = Boolean(fallbackModel) && isYunwuModelFallbackEligibleError(reason);
+          log("PRIMARY_MODEL_FAILED", {
+            model: plan.model,
+            attempts: modelAttempt,
+            reason,
+            retryable,
+            fallbackEligible,
+            status,
+            code,
+          });
+          if (fallbackEligible) break;
+          throw new Error(reason);
+        }
+        log("FALLBACK_MODEL_FAILED", {
+          primaryModel,
+          fallbackModel: plan.model,
+          attempts: modelAttempt,
+          reason,
+          retryable,
+          status,
+          code,
+        });
+        throw new Error(primaryFailureReason ? `云雾 Grok 当前主模型与备用模型均不可用，请稍后重试。主模型失败：${primaryFailureReason}；备用模型失败：${reason}` : reason);
+      }
+    }
+
+    if (plan.role === "fallback") {
+      log("FALLBACK_MODEL_FAILED", {
+        primaryModel,
+        fallbackModel: plan.model,
+        attempts: plan.maxAttempts,
+        reason: lastReason,
+        retryable: isRetryableError(lastReason),
+        status: extractHttpStatusFromMessage(lastReason),
+        code: extractErrorCodeFromMessage(lastReason),
+      });
+      throw new Error(primaryFailureReason ? `云雾 Grok 当前主模型与备用模型均不可用，请稍后重试。主模型失败：${primaryFailureReason}；备用模型失败：${lastReason}` : lastReason);
+    }
   }
-  if (!taskId) throw new Error("Grok 创建视频失败：未返回 task id");
-  return { taskId, queryMode: "official_videos" as const, raw: parsed.json };
+  throw new Error(primaryFailureReason || "Grok 创建视频失败");
 }
 
 export async function queryGrokVideoTask(taskId: string, queryMode: YunwuQueryMode = "official_videos"): Promise<GrokTaskQueryResult> {
@@ -1026,7 +1338,7 @@ export async function queryGrokVideoTask(taskId: string, queryMode: YunwuQueryMo
   };
 }
 
-export async function extendGrokVideoTask(params: { prompt: string; taskId: string; ratio: string; startTime: number; attempt?: number }): Promise<never> {
+export async function extendGrokVideoTask(params: { prompt: string; taskId: string; ratio: string; startTime: number; attempt?: number }): Promise<{ taskId: string; queryMode: YunwuQueryMode; raw?: Record<string, unknown> }> {
   log("EXTEND_UNSUPPORTED", {
     reason: YUNWU_OFFICIAL_EXTEND_UNSUPPORTED_MESSAGE,
     targetDurationSeconds: params.startTime + GROK_UNIT_SECONDS,
@@ -1083,20 +1395,28 @@ async function runStepWithRetry(params: {
   referenceImageRole?: GrokReferenceImageRole;
   durationSeconds?: number;
 }) {
+  if (params.stage === "create") {
+    const created = await createGrokVideoTask({ prompt: params.prompt, ratio: params.ratio, images: params.images, referenceImageRole: params.referenceImageRole, durationSeconds: params.durationSeconds });
+    const result = await waitForGrokTask(created.taskId, created.queryMode);
+    return {
+      ...result,
+      apiModel: created.apiModel,
+      actualModel: created.actualModel,
+      modelRole: created.modelRole,
+      usedFallback: created.usedFallback,
+    };
+  }
   let lastTaskId = "";
   let lastError = "";
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     try {
-      const created =
-        params.stage === "create"
-          ? await createGrokVideoTask({ prompt: params.prompt, ratio: params.ratio, images: params.images, referenceImageRole: params.referenceImageRole, attempt, durationSeconds: params.durationSeconds })
-          : await extendGrokVideoTask({
-              prompt: params.prompt,
-              ratio: params.ratio,
-              taskId: params.previousTaskId || "",
-              startTime: params.startTime,
-              attempt,
-            });
+      const created = await extendGrokVideoTask({
+        prompt: params.prompt,
+        ratio: params.ratio,
+        taskId: params.previousTaskId || "",
+        startTime: params.startTime,
+        attempt,
+      });
       lastTaskId = created.taskId;
       const result = await waitForGrokTask(created.taskId, created.queryMode);
       return result;
@@ -1203,6 +1523,10 @@ export async function runYunwuGrokVideoWithExtensions(params: GrokVideoWithExten
       durationSeconds: params.targetDurationSeconds,
       successfulUnits,
       failedUnits: Math.max(0, (params.extensionPrompts.length === 0 ? 1 : Math.ceil(params.targetDurationSeconds / GROK_UNIT_SECONDS)) - successfulUnits),
+      apiModel: finalResult.apiModel,
+      actualModel: finalResult.actualModel,
+      modelRole: finalResult.modelRole,
+      usedFallback: finalResult.usedFallback,
       error: finalVideoUrl ? undefined : "Grok 任务完成但没有可用视频地址",
     };
   } catch (error) {
@@ -1243,6 +1567,10 @@ export async function runYunwuGrokVideoSegments(params: GrokVideoSegmentsInput):
   const segmentVideoUrls: string[] = [];
   const segmentCoverUrls: string[] = [];
   let successfulUnits = 0;
+  let apiModel = "";
+  let actualModel = "";
+  let modelRole: "primary" | "fallback" | undefined;
+  let usedFallback = false;
   try {
     let previousVideoUrl = "";
     for (let index = 0; index < params.prompts.length; index += 1) {
@@ -1274,6 +1602,10 @@ export async function runYunwuGrokVideoSegments(params: GrokVideoSegmentsInput):
       providerTaskIds.push(result.taskId);
       if (result.videoUrl) segmentVideoUrls.push(result.videoUrl);
       if (result.videoUrl) segmentCoverUrls.push(result.coverUrl || "");
+      apiModel = result.apiModel || apiModel;
+      actualModel = result.actualModel || actualModel;
+      modelRole = result.modelRole || modelRole;
+      usedFallback = Boolean(usedFallback || result.usedFallback);
       previousVideoUrl = result.videoUrl || "";
       successfulUnits += 1;
       log("STITCH_SEGMENT_SUCCESS", { segmentIndex, taskId: result.taskId, hasVideoUrl: Boolean(result.videoUrl), imagesCount: images.length });
@@ -1302,6 +1634,10 @@ export async function runYunwuGrokVideoSegments(params: GrokVideoSegmentsInput):
       durationSeconds: params.targetDurationSeconds,
       successfulUnits,
       failedUnits: Math.max(0, params.prompts.length - successfulUnits),
+      apiModel,
+      actualModel,
+      modelRole,
+      usedFallback,
       error: finalVideoUrl ? undefined : "Grok 分段生成完成但没有可用视频地址",
     };
   } catch (error) {
