@@ -142,7 +142,9 @@ type ModelConfig = {
   agentImage: ModelConfigSection;
   videoRemixAnalysis: ModelConfigSection;
   videoRemixGeneration: GrokProviderModelConfigSection;
+  videoModeVisibleConfig: VideoModeVisibleConfig;
 };
+type VideoModeVisibleConfig = { hotVideo: boolean; middleVideo: boolean; agentVideo: boolean; generalVideo: boolean; agentImage: boolean; generalImage: boolean };
 
 const DEFAULT_PRICING: PricingConfig = {
   video_enabled: true,
@@ -173,13 +175,14 @@ const DEFAULT_MODEL_CONFIG: ModelConfig = {
   agentImage: { activeModel: "user_select", availableModels: ["image2", "banana2"] },
   videoRemixAnalysis: { activeModel: "gemini-3.1-pro-preview", availableModels: ["gemini-3.1-pro-preview"] },
   videoRemixGeneration: { activeModel: "sora2", availableModels: ["sora2", "grok"], grokProviderSource: "yunwu", availableGrokProviderSources: ["yunwu", "jiekou", "xai"] },
+  videoModeVisibleConfig: { hotVideo: true, middleVideo: true, agentVideo: true, generalVideo: true, agentImage: true, generalImage: true },
 };
 const IMAGE_MODEL_OPTIONS = [
   { label: "image2", value: "image2" },
   { label: "Nano Banana2", value: "banana2" },
 ] as const;
 const SORA_VIDEO_DURATIONS = ["4s", "8s", "12s"] as const;
-const GROK_VIDEO_DURATIONS = ["10s", "20s", "30s"] as const;
+const GROK_VIDEO_DURATIONS = ["5s", "10s", "15s"] as const;
 const YUNWU_AGENT_GROK_VIDEO_DURATIONS = ["5s", "10s", "15s"] as const;
 const GENERATION_PREFERENCES_KEY = "quark-ai:generation-preferences:v2";
 
@@ -1701,9 +1704,7 @@ export default function Home() {
       ? mediumVideoActiveModel
       : isRemixMode
         ? modelConfig.videoRemixGeneration.activeModel === "grok" ? "grok" : "sora2"
-        : mode === "agent"
-          ? modelConfig.agentVideo.activeModel === "grok" ? "grok" : "sora2"
-          : modelConfig.normalVideo.activeModel === "grok" ? "grok" : "sora2";
+        : "grok";
   const currentGrokProviderSource: GrokProviderSource | undefined =
     currentVideoProvider === "grok"
       ? isMediumVideoMode
@@ -1718,10 +1719,11 @@ export default function Home() {
   const isYunwuGrokProvider = currentGrokProviderSource === "yunwu";
   const isGrokProviderForcedStitch = isJiekouGrokProvider || isYunwuGrokProvider;
   const effectiveMediumVideoStrategy: "extend" | "stitch" = isGrokMediumVideo && isGrokProviderForcedStitch ? "stitch" : mediumVideoStrategy;
-  // Product rule: agent video + Yunwu Grok uses single-create durations 5/10/15 only.
-  // Longer stitched videos should use medium_video mode.
+  // Agent/general OpenLux tasks use a single 5/10/15-second request.
   const currentVideoDurationOptions =
-    mode === "agent" && currentVideoProvider === "grok" && currentGrokProviderSource === "yunwu"
+    mode === "normal"
+      ? GROK_VIDEO_DURATIONS
+      : mode === "agent" && currentVideoProvider === "grok" && currentGrokProviderSource === "yunwu"
       ? YUNWU_AGENT_GROK_VIDEO_DURATIONS
       : currentVideoProvider === "grok"
         ? GROK_VIDEO_DURATIONS
@@ -2677,7 +2679,7 @@ export default function Home() {
             )}
 
             <div className={isDark ? "order-2 flex flex-wrap items-center gap-2 rounded-[24px] border border-white/10 bg-white/[0.045] p-1.5 shadow-inner shadow-black/20" : "order-2 flex flex-wrap items-center gap-1.5 rounded-[24px] border border-white/80 bg-slate-100/80 p-1.5 shadow-inner shadow-white/90"}>
-              <button
+              {modelConfig.videoModeVisibleConfig.hotVideo && <button
                 onClick={() => {
                   setMode("remix");
                   setSelectedAgentId(null);
@@ -2691,9 +2693,9 @@ export default function Home() {
                 className={modeTabClass(mode === "remix")}
               >
                 <span className="mr-1 text-xs">✨</span>爆款视频复刻
-              </button>
+              </button>}
 
-              <button
+              {modelConfig.videoModeVisibleConfig.middleVideo && <button
                 onClick={() => {
                   setMode("medium_video");
                   setDuration(`${mediumVideoSegments * (mediumVideoActiveModel === "sora2" ? 12 : 10)}s`);
@@ -2702,9 +2704,9 @@ export default function Home() {
                 className={modeTabClass(mode === "medium_video")}
               >
                 <span className="mr-1 text-xs">🎬</span>中视频
-              </button>
+              </button>}
 
-              <button
+              {modelConfig.videoModeVisibleConfig.agentVideo && <button
                 onClick={() => {
                   setMode("agent");
                   setSelectedAgentId(null);
@@ -2713,9 +2715,9 @@ export default function Home() {
                 className={modeTabClass(mode === "agent")}
               >
                 <span className="mr-1 text-xs">🤖</span>智能体批量视频
-              </button>
+              </button>}
 
-              <button
+              {modelConfig.videoModeVisibleConfig.generalVideo && <button
                 onClick={() => {
                   setMode("normal");
                   setSelectedAgentId(null);
@@ -2724,9 +2726,9 @@ export default function Home() {
                 className={modeTabClass(mode === "normal")}
               >
                 <span className="mr-1 text-xs">🎞️</span>通用视频
-              </button>
+              </button>}
 
-              <button
+              {modelConfig.videoModeVisibleConfig.agentImage && <button
                 onClick={() => {
                   setMode("agent_image");
                   setSelectedAgentId(null);
@@ -2734,9 +2736,9 @@ export default function Home() {
                 className={modeTabClass(mode === "agent_image")}
               >
                 <span className="mr-1 text-xs">🧠</span>智能体批量图片
-              </button>
+              </button>}
 
-              <button
+              {modelConfig.videoModeVisibleConfig.generalImage && <button
                 onClick={() => {
                   setMode("image");
                   setSelectedAgentId(null);
@@ -2744,7 +2746,7 @@ export default function Home() {
                 className={modeTabClass(mode === "image")}
               >
                 <span className="mr-1 text-xs">🖼️</span>通用图片
-              </button>
+              </button>}
             </div>
 
             {isRemixMode && (

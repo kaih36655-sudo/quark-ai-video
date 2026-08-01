@@ -33,12 +33,12 @@ const parseMediumVideoDuration = (value: unknown, provider?: string) => {
   return allowedSeconds.includes(seconds) ? seconds : null;
 };
 
-const getAllowedVideoDurationSeconds = (params: { mode: "agent" | "normal"; provider: "sora2" | "grok"; grokProviderSource?: string }) => {
+const getAllowedVideoDurationSeconds = (params: { mode: "agent" | "normal"; provider: "sora2" | "grok"; grokProviderSource?: string; isVideoRemix?: boolean }) => {
+  if (params.mode === "normal" && !params.isVideoRemix) return [5, 10, 15];
   if (params.provider === "sora2") return [4, 8, 12];
-  // Product rule: agent video + Yunwu Grok uses single-create durations 5/10/15 only.
-  // Longer stitched videos should use medium_video mode.
+  // Agent/general OpenLux tasks are generated in one 5/10/15-second request.
   if (params.mode === "agent" && params.grokProviderSource === "yunwu") return [5, 10, 15];
-  return [10, 20, 30];
+  return [5, 10, 15];
 };
 
 const parseVideoDuration = (value: unknown, allowedSeconds: number[]) => {
@@ -83,8 +83,8 @@ export async function POST(req: NextRequest) {
       ? undefined
       : sourceMode === "video_remix"
         ? modelConfig.videoRemixGeneration.activeModel
-        : mode === "agent"
-          ? modelConfig.agentVideo.activeModel
+        : mode === "agent" || mode === "normal"
+          ? "grok"
           : modelConfig.normalVideo.activeModel;
   const videoProvider = configuredVideoProvider === "sora2" || configuredVideoProvider === "grok" ? configuredVideoProvider : undefined;
   const configuredGrokProviderSource: string | undefined =
@@ -103,7 +103,7 @@ export async function POST(req: NextRequest) {
   const mediumVideoSegments = mediumVideoTargetSeconds ? mediumVideoTargetSeconds / mediumVideoUnitSeconds : 1;
   const allowedVideoDurationSeconds =
     mode !== "medium_video" && mode !== "image" && videoProvider
-      ? getAllowedVideoDurationSeconds({ mode: mode === "agent" ? "agent" : "normal", provider: videoProvider, grokProviderSource: configuredGrokProviderSource })
+      ? getAllowedVideoDurationSeconds({ mode: mode === "agent" ? "agent" : "normal", provider: videoProvider, grokProviderSource: configuredGrokProviderSource, isVideoRemix: sourceMode === "video_remix" })
       : [];
   const videoDurationSeconds = mode !== "medium_video" && mode !== "image" && videoProvider ? parseVideoDuration(body.duration, allowedVideoDurationSeconds) : null;
   const duration = mode === "medium_video" ? `${mediumVideoTargetSeconds ?? 10}s` : mode !== "image" ? `${videoDurationSeconds ?? (videoProvider === "grok" ? 10 : 12)}s` : body.duration ?? "12s";
@@ -145,7 +145,7 @@ export async function POST(req: NextRequest) {
     if (mode === "agent") {
       return NextResponse.json<ApiResponse<null>>({ success: false, message: "当前模型接口不支持该视频时长，请刷新页面后重新选择。" }, { status: 400 });
     }
-    const allowedText = videoProvider === "grok" ? "10/20/30" : "4/8/12";
+    const allowedText = (mode === "normal" && sourceMode !== "video_remix") || videoProvider === "grok" ? "5/10/15" : "4/8/12";
     return NextResponse.json<ApiResponse<null>>({ success: false, message: `当前视频模型仅支持 ${allowedText} 秒` }, { status: 400 });
   }
   if (mode === "image") {

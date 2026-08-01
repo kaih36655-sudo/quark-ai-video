@@ -4,6 +4,7 @@ import { Task, Video } from "./types";
 import { generateGrokMediumVideoPlan, generateVideoScript } from "./gpt";
 import { createSora2Task, downloadSora2Video, querySora2Task } from "./sora2";
 import { runGrokVideoSegments, runGrokVideoWithExtensions } from "./grok-video";
+import { runOpenLuxGrokVideo } from "./video-providers/grok-openlux";
 import { isRunningHubOomError, runRunningHubUpscaleWithPolling } from "./runninghub";
 import { generateYunwuImage } from "./yunwu-image";
 import { enqueueUpscaleJob } from "./upscale-queue";
@@ -263,8 +264,9 @@ function resolveSoraSeconds(duration: string): number {
   return 4;
 }
 
-function resolveGrokVideoSeconds(duration: string, mode: Task["mode"], providerSource?: GrokProviderSource): number {
+function resolveGrokVideoSeconds(duration: string, mode: Task["mode"], providerSource?: GrokProviderSource, sourceMode?: Task["sourceMode"]): number {
   const numeric = Number(String(duration).replace(/[^\d]/g, ""));
+  if (sourceMode !== "video_remix" && (mode === "agent" || mode === "normal") && [5, 10, 15].includes(numeric)) return numeric;
   if (mode === "agent" && providerSource === "yunwu" && [5, 10, 15].includes(numeric)) return numeric;
   return [10, 20, 30].includes(numeric) ? numeric : 10;
 }
@@ -1760,20 +1762,18 @@ async function executeTask(taskId: string) {
     if (taskVideoProvider === "grok") {
       const rawGrokProviderSource = task.grokProviderSource || DEFAULT_GROK_PROVIDER_SOURCE;
       const grokProviderSource = isSupportedGrokProviderSource(rawGrokProviderSource) ? rawGrokProviderSource : undefined;
-      const grokProviderMetadata = grokProviderSource ? createGrokProviderMetadata(grokProviderSource) : {};
-      const targetDurationSeconds = resolveGrokVideoSeconds(task.duration, task.mode, grokProviderSource);
-      const shouldUseYunwuAgentSingleCreate =
-        task.mode === "agent" &&
-        grokProviderSource === "yunwu" &&
+      const usesOpenLuxMode = task.sourceMode !== "video_remix" && (task.mode === "agent" || task.mode === "normal");
+      const grokProviderMetadata = usesOpenLuxMode ? { providerSourceLabel: "OpenLux" } : grokProviderSource ? createGrokProviderMetadata(grokProviderSource) : {};
+      const targetDurationSeconds = resolveGrokVideoSeconds(task.duration, task.mode, grokProviderSource, task.sourceMode);
+      const shouldUseOpenLuxSingleCreate =
+        usesOpenLuxMode &&
         [5, 10, 15].includes(targetDurationSeconds);
       try {
         if (!grokProviderSource) {
           throw new Error(formatUnsupportedGrokProviderSourceError(rawGrokProviderSource));
         }
-        // Product rule: agent video + Yunwu Grok uses single-create durations 5/10/15 only.
-        // Longer stitched videos should use medium_video mode.
-        if (task.mode === "agent" && grokProviderSource === "yunwu" && ![5, 10, 15].includes(targetDurationSeconds)) {
-          throw new Error("当前【智能体批量视频 + 云雾 Grok】仅支持 5秒、10秒、15秒；如需生成 20秒以上拼接视频，请使用【中视频】模式。");
+        if (task.sourceMode !== "video_remix" && (task.mode === "agent" || task.mode === "normal") && ![5, 10, 15].includes(targetDurationSeconds)) {
+          throw new Error("当前 OpenLux Grok 仅支持 5秒、10秒、15秒单次生成。");
         }
         const plan = await generateGrokMediumVideoPlan({
           taskId: task.id,
@@ -1783,7 +1783,7 @@ async function executeTask(taskId: string) {
           agentName: task.agentName,
           agentDescription: agent?.description,
           agentConstraints: grokAgentConstraints,
-          allowFlexibleSingleDuration: shouldUseYunwuAgentSingleCreate,
+          allowFlexibleSingleDuration: shouldUseOpenLuxSingleCreate,
         });
         runnerLog("GROK_SCRIPT_READY", {
           taskId: task.id,
@@ -1807,10 +1807,10 @@ async function executeTask(taskId: string) {
         let grokResult;
         let providerStitchConcatError = "";
         const shouldUseProviderStitchForLongVideo =
-          !shouldUseYunwuAgentSingleCreate &&
+          !shouldUseOpenLuxSingleCreate &&
           targetDurationSeconds > 10 &&
           (grokProviderSource === "yunwu" || grokProviderSource === "jiekou" || grokProviderSource === "xai");
-        if (!shouldUseYunwuAgentSingleCreate && grokProviderSource === "yunwu" && targetDurationSeconds > 10) {
+        if (!shouldUseOpenLuxSingleCreate && grokProviderSource === "yunwu" && targetDurationSeconds > 10) {
           logYunwuOfficialStrategyNormalized({ requestedStrategy: "extend", targetDurationSeconds });
         }
         if (shouldUseProviderStitchForLongVideo) {
@@ -1870,20 +1870,19 @@ async function executeTask(taskId: string) {
               console.log(`[${providerLogPrefix}][STITCH_CONCAT_FAILED]`, JSON.stringify({ taskId: task.id, providerSource: grokProviderSource, reason: providerStitchConcatError }));
             }
           }
-        } else if (shouldUseYunwuAgentSingleCreate) {
+        } else if (shouldUseOpenLuxSingleCreate) {
           console.log("[GROK_VIDEO][SINGLE_CREATE_DURATION]", JSON.stringify({
-            mode: "agent",
-            providerSource: "yunwu",
+            mode: task.mode,
+            providerSource: "openlux",
             durationSeconds: targetDurationSeconds,
-            reason: "yunwu_official_supports_1_to_15_seconds",
+            reason: "openlux_direct_duration",
           }));
           logGrokSegmentPromptsReady({
             providerSource: grokProviderSource,
             prompts: [plan.basePrompt],
             segmentPlan: plan.segmentPlan,
           });
-          grokResult = await runGrokVideoWithExtensions({
-            providerSource: grokProviderSource,
+          grokResult = await runOpenLuxGrokVideo({
             taskId: task.id,
             sourcePrompt: task.prompt,
             basePrompt: plan.basePrompt,

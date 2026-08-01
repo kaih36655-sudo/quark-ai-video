@@ -18,6 +18,17 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
+## OpenLux Video Generation
+
+智能体批量视频和通用视频使用 OpenLux（服务端配置，不要使用 `NEXT_PUBLIC_` 前缀）：
+
+```bash
+OPENLUX_API_BASE=https://api.openlux.ai
+OPENLUX_API_KEY=your_openlux_api_key
+```
+
+可选轮询配置：`OPENLUX_VIDEO_POLL_INTERVAL_MS`、`OPENLUX_VIDEO_POLL_MAX_ATTEMPTS`。
+
 ## Image Generation
 
 Text-to-image and image-to-image generation use Yunwu-compatible server APIs. Configure the API key only on the server:

@@ -70,7 +70,9 @@ type ModelConfig = {
   agentImage: ModelConfigSection;
   videoRemixAnalysis: ModelConfigSection;
   videoRemixGeneration: GrokProviderModelConfigSection;
+  videoModeVisibleConfig: VideoModeVisibleConfig;
 };
+type VideoModeVisibleConfig = { hotVideo: boolean; middleVideo: boolean; agentVideo: boolean; generalVideo: boolean; agentImage: boolean; generalImage: boolean };
 
 type VideoRecord = {
   id: string;
@@ -328,6 +330,9 @@ export default function AdminClient() {
   const renderGrokProviderSourceControl = (key: "normalVideo" | "agentVideo" | "mediumVideo" | "videoRemixGeneration", label: string) => {
     const section = modelConfig?.[key];
     if (!section) return null;
+    if (key === "normalVideo" || key === "agentVideo") {
+      return <div key={key} className="rounded-2xl border border-blue-100 bg-blue-50 p-3 text-xs text-blue-700"><div className="mb-1 font-medium">{label} · 视频接口</div><div>OpenLux（固定）</div></div>;
+    }
     if (section.activeModel !== "grok") {
       return (
         <div key={key} className="rounded-2xl border border-gray-100 bg-gray-50 p-3 text-xs text-gray-500">
@@ -383,6 +388,7 @@ export default function AdminClient() {
           <a href="#agents" className="rounded-full border border-violet-100 bg-violet-50 px-4 py-2 font-medium text-violet-700 transition hover:bg-violet-100">智能体管理</a>
           <a href="#pricing" className="rounded-full border border-sky-100 bg-sky-50 px-4 py-2 font-medium text-sky-700 transition hover:bg-sky-100">价格配置</a>
           <a href="#model-config" className="rounded-full border border-emerald-100 bg-emerald-50 px-4 py-2 font-medium text-emerald-700 transition hover:bg-emerald-100">模型管理</a>
+          <a href="#video-mode-management" className="rounded-full border border-amber-100 bg-amber-50 px-4 py-2 font-medium text-amber-700 transition hover:bg-amber-100">视频模式管理</a>
           <a href="#video-records" className="rounded-full border border-slate-200 bg-white px-4 py-2 font-medium text-slate-700 transition hover:bg-slate-50">视频任务历史记录</a>
         </div>
         {message && <div className="rounded-2xl border border-gray-200 bg-white/95 px-4 py-3 text-sm text-gray-700 shadow-sm">{message}</div>}
@@ -457,6 +463,27 @@ export default function AdminClient() {
                 ))}
                 <button onClick={() => void savePricing()} className="rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-sky-500 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-200/70 transition hover:-translate-y-0.5 hover:brightness-105">保存价格</button>
               </div>
+            </div>
+          )}
+        </section>
+
+        <section id="video-mode-management" className="rounded-3xl border border-gray-200 bg-white/95 p-6 shadow-md shadow-gray-200/70">
+          <h2 className="mb-2 text-lg font-semibold">视频模式管理</h2>
+          <p className="mb-4 text-sm text-gray-500">仅控制用户端入口展示，不影响已有任务、数据记录和后台功能。</p>
+          {modelConfig && (
+            <div className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {([
+                  ["hotVideo", "爆款视频复刻"], ["middleVideo", "中视频模式"], ["agentVideo", "智能体批量视频"],
+                  ["generalVideo", "通用视频"], ["agentImage", "智能批量图片"], ["generalImage", "通用图片"],
+                ] as const).map(([key, label]) => (
+                  <label key={key} className="flex items-center justify-between rounded-2xl border border-gray-100 bg-gray-50 p-4 text-sm text-gray-700">
+                    <span>{label}</span>
+                    <input type="checkbox" checked={modelConfig.videoModeVisibleConfig[key]} onChange={(event) => setModelConfig((prev) => prev ? { ...prev, videoModeVisibleConfig: { ...prev.videoModeVisibleConfig, [key]: event.target.checked } } : prev)} />
+                  </label>
+                ))}
+              </div>
+              <button onClick={() => void saveModelConfig()} className="rounded-full bg-gradient-to-r from-amber-500 to-orange-500 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-amber-200/70 transition hover:-translate-y-0.5 hover:brightness-105">保存模式展示配置</button>
             </div>
           )}
         </section>

@@ -21,6 +21,25 @@ export type ModelConfig = {
   agentImage: ModelConfigSection;
   videoRemixAnalysis: ModelConfigSection;
   videoRemixGeneration: GrokProviderModelConfigSection;
+  videoModeVisibleConfig: VideoModeVisibleConfig;
+};
+
+export type VideoModeVisibleConfig = {
+  hotVideo: boolean;
+  middleVideo: boolean;
+  agentVideo: boolean;
+  generalVideo: boolean;
+  agentImage: boolean;
+  generalImage: boolean;
+};
+
+export const DEFAULT_VIDEO_MODE_VISIBLE_CONFIG: VideoModeVisibleConfig = {
+  hotVideo: true,
+  middleVideo: true,
+  agentVideo: true,
+  generalVideo: true,
+  agentImage: true,
+  generalImage: true,
 };
 
 const DATA_DIR = path.join(process.cwd(), "data");
@@ -34,9 +53,10 @@ export const DEFAULT_MODEL_CONFIG: ModelConfig = {
   agentImage: { activeModel: "user_select", availableModels: ["image2", "banana2"] },
   videoRemixAnalysis: { activeModel: "gemini-3.1-pro-preview", availableModels: ["gemini-3.1-pro-preview"] },
   videoRemixGeneration: { activeModel: "sora2", availableModels: ["sora2", "grok"], grokProviderSource: "yunwu", availableGrokProviderSources: ["yunwu", "jiekou", "xai"] },
+  videoModeVisibleConfig: DEFAULT_VIDEO_MODE_VISIBLE_CONFIG,
 };
 
-const allowed: Record<keyof ModelConfig, ModelKey[]> = {
+const allowed: Record<Exclude<keyof ModelConfig, "videoModeVisibleConfig">, ModelKey[]> = {
   normalVideo: ["sora2", "grok"],
   agentVideo: ["sora2", "grok"],
   mediumVideo: ["grok", "sora2"],
@@ -46,10 +66,11 @@ const allowed: Record<keyof ModelConfig, ModelKey[]> = {
   videoRemixGeneration: ["sora2", "grok"],
 };
 
-const grokProviderConfigKeys: Array<keyof ModelConfig> = ["normalVideo", "agentVideo", "mediumVideo", "videoRemixGeneration"];
-const isGrokProviderConfigKey = (key: keyof ModelConfig) => grokProviderConfigKeys.includes(key);
+type ModelSectionKey = Exclude<keyof ModelConfig, "videoModeVisibleConfig">;
+const grokProviderConfigKeys: ModelSectionKey[] = ["normalVideo", "agentVideo", "mediumVideo", "videoRemixGeneration"];
+const isGrokProviderConfigKey = (key: ModelSectionKey) => grokProviderConfigKeys.includes(key);
 
-const normalizeSection = <K extends keyof ModelConfig>(key: K, value: unknown): ModelConfig[K] => {
+const normalizeSection = <K extends ModelSectionKey>(key: K, value: unknown): ModelConfig[K] => {
   const fallback = DEFAULT_MODEL_CONFIG[key];
   const input: Partial<ModelConfig[K]> = value && typeof value === "object" ? (value as Partial<ModelConfig[K]>) : {};
   const configuredAvailable = Array.isArray(input.availableModels)
@@ -79,6 +100,11 @@ const normalizeSection = <K extends keyof ModelConfig>(key: K, value: unknown): 
   } as ModelConfig[K];
 };
 
+const normalizeVisibleConfig = (value: unknown): VideoModeVisibleConfig => {
+  const input = value && typeof value === "object" ? value as Partial<VideoModeVisibleConfig> : {};
+  return Object.fromEntries(Object.entries(DEFAULT_VIDEO_MODE_VISIBLE_CONFIG).map(([key, fallback]) => [key, typeof input[key as keyof VideoModeVisibleConfig] === "boolean" ? input[key as keyof VideoModeVisibleConfig] : fallback])) as unknown as VideoModeVisibleConfig;
+};
+
 async function writeModelConfig(config: ModelConfig) {
   await mkdir(DATA_DIR, { recursive: true });
   await writeFile(MODEL_CONFIG_FILE, JSON.stringify(config, null, 2), "utf-8");
@@ -97,6 +123,7 @@ export async function getModelConfig() {
       agentImage: normalizeSection("agentImage", parsed.agentImage),
       videoRemixAnalysis: normalizeSection("videoRemixAnalysis", parsed.videoRemixAnalysis ?? parsed.videoRemix),
       videoRemixGeneration: normalizeSection("videoRemixGeneration", parsed.videoRemixGeneration),
+      videoModeVisibleConfig: normalizeVisibleConfig(parsed.videoModeVisibleConfig),
     };
   } catch {
     await writeModelConfig(DEFAULT_MODEL_CONFIG);
@@ -114,6 +141,7 @@ export async function updateModelConfig(patch: Partial<ModelConfig>) {
     agentImage: normalizeSection("agentImage", patch.agentImage ?? current.agentImage),
     videoRemixAnalysis: normalizeSection("videoRemixAnalysis", patch.videoRemixAnalysis ?? current.videoRemixAnalysis),
     videoRemixGeneration: normalizeSection("videoRemixGeneration", patch.videoRemixGeneration ?? current.videoRemixGeneration),
+    videoModeVisibleConfig: normalizeVisibleConfig(patch.videoModeVisibleConfig ?? current.videoModeVisibleConfig),
   };
   await writeModelConfig(next);
   return next;
