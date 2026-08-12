@@ -371,8 +371,8 @@ export async function createRunningHubUpscaleTask(videoInput: string, options?: 
   const body = {
     nodeInfoList: [
       {
-        nodeId: "23",
-        fieldName: "video",
+        nodeId: "27",
+        fieldName: "file",
         fieldValue: videoInput,
         description: "上传视频",
       },
