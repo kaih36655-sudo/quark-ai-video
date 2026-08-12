@@ -403,7 +403,18 @@ export async function createRunningHubUpscaleTask(videoInput: string, options?: 
     },
     body: JSON.stringify(body),
   });
-  const json = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+  const rawResponseText = await response.text();
+  log("RAW_RESPONSE", {
+    statusCode: response.status,
+    body: rawResponseText,
+  });
+  const json = (() => {
+    try {
+      return JSON.parse(rawResponseText) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  })();
   const taskId =
     pickString(json?.taskId) ||
     pickString(asObject(json?.data)?.taskId) ||
