@@ -805,7 +805,13 @@ export default function AdminClient() {
         </section>
       </div>
       <footer className="mx-auto max-w-7xl px-4 pb-2 pt-8 text-center text-xs text-gray-400">
-        闽ICP备2026023583号-3
+        <a
+          href="https://beian.miit.gov.cn/"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          闽ICP备2026023583号-3
+        </a>
       </footer>
       {grantUser && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={() => setGrantUser(null)}>

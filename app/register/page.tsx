@@ -116,7 +116,13 @@ export default function RegisterPage() {
         </div>
       </div>
       <footer className="relative z-10 px-4 pb-6 pt-2 text-center text-xs text-gray-400">
-        闽ICP备2026023583号-3
+        <a
+          href="https://beian.miit.gov.cn/"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          闽ICP备2026023583号-3
+        </a>
       </footer>
     </div>
   );
